@@ -31,6 +31,27 @@
   #nameBox .panel { position: static; text-align: center; padding: 20px 24px; }
   #nameBox h2 { margin: 0 0 12px; font-weight: normal; }
   #nameBox button { margin: 0 0 0 6px; }
+  #phoneBar { display: none; }
+
+  /* ---------- Phones and narrow screens ---------- */
+  @media (max-width: 700px) {
+    #ui { top: 8px; text-align: left; left: 12px; }
+    #ui h1 { font-size: 18px; }
+    #hint { display: none; }
+    #phoneBar { display: flex; gap: 6px; position: fixed; top: 8px; right: 8px; }
+    #phoneBar button { position: relative; font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 14px; background: rgba(30,20,12,0.85); color: #f3e6cf; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+    #newDot { display: none; position: absolute; top: 2px; right: 2px; width: 9px; height: 9px; border-radius: 50%; background: #ff3b2f; }
+    #who, #chat { display: none; left: 8px; right: 8px; top: 48px; bottom: auto; width: auto; max-width: none; }
+    body.whoOpen #who { display: block; }
+    body.chatOpen #chat { display: block; }
+    #msgs { height: 110px; }
+    #game { left: 8px; right: 8px; bottom: 8px; max-width: none; padding: 8px 10px; }
+    #status { font-size: 14px; }
+    #players { font-size: 12px; margin-bottom: 6px; }
+    #game br { display: none; }
+    .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
+    #stand { top: 48px; bottom: auto; font-size: 14px; padding: 6px 16px; }
+  }
 </style>
 </head>
 <body>
@@ -54,6 +75,9 @@
 <div id="chat" class="panel">
   <div id="msgs"></div>
   <div id="chatRow"><input id="chatInput" maxlength="200" placeholder="Say something…"><button id="send">Send</button></div>
+</div>
+<div id="phoneBar">
+  <button id="chatBtn">💬 Chat<span id="newDot"></span></button><button id="whoBtn">👥 0</button>
 </div>
 <div id="nameBox">
   <div class="panel">
@@ -90,7 +114,8 @@ const db = getDatabase(initializeApp(firebaseConfig));
 const gameRef = ref(db, 'room/game');
 const myId = 'u' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);  // a new id for each tab
 let myName = '';
-let presence = {};   // everyone in the room: id -> { name, seat, c }
+let myHue = -1;      // my rainbow color, picked once when I enter
+let presence = {};   // everyone in the room: id -> { name, seat }
 let game = null;     // the shared game state
 
 // ---------- Settings ----------
@@ -752,7 +777,7 @@ function updateCounters(dt) {
   }
 }
 
-// ---------- Other people: a simple figure in their chair with a name tag ----------
+// ---------- Other people: a snowman in their chair with a name tag ----------
 const avatars = {};   // id -> { g, name, c }
 // ROY G BIV: each person gets the first rainbow color nobody in the room is using
 const RAINBOW = [0xe53935, 0xfb8c00, 0xfdd835, 0x43a047, 0x1e88e5, 0x3949ab, 0x8e24aa];
@@ -777,15 +802,27 @@ function makeLabel(text) {
 }
 function makeAvatar(name, c) {
   const g = new THREE.Group();
-  const mat = std(nameColor(c), 0.7);
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.16, 0.3, 4, 12), mat);
-  body.position.y = 0.86;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 16), mat);
-  head.position.y = 1.24;
-  body.castShadow = head.castShadow = true;
+  const mat = std(nameColor(c), 0.75);
+  // Three stacked snowballs: big bottom, middle, small head
+  const balls = [[0.2, 0.72], [0.15, 1.02], [0.11, 1.25]];
+  for (const [r, y] of balls) {
+    const b = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat);
+    b.position.y = y;
+    b.castShadow = true;
+    g.add(b);
+  }
+  // Simple stick arms angled up and out from the middle ball
+  const stick = std(0x4a2f1d, 0.9);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.32, 8), stick);
+    arm.position.set(side * 0.27, 1.08, 0);
+    arm.rotation.z = side * -1.0;
+    arm.castShadow = true;
+    g.add(arm);
+  }
   const label = makeLabel(name);
-  label.position.y = 1.52;
-  g.add(body, head, label);
+  label.position.y = 1.56;
+  g.add(label);
   scene.add(g);
   return { g, name, c };
 }
@@ -802,6 +839,7 @@ function refreshAvatars() {
     if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const a = seatAngle(p.seat);
     avatars[id].g.position.set(Math.sin(a) * (CHAIR_R + 0.03), 0, Math.cos(a) * (CHAIR_R + 0.03));
+    avatars[id].g.rotation.y = a;   // arms point left and right, not at the table
   }
 }
 function seatTakenByOther(s) {
@@ -815,6 +853,7 @@ function refreshWho() {
   whoList.textContent = '';
   const people = Object.entries(presence);
   document.querySelector('#who h2').textContent = `In the room (${people.length})`;
+  whoBtn.textContent = `👥 ${people.length}`;
   for (const [id, p] of people) {
     const div = document.createElement('div');
     const dot = document.createElement('span');
@@ -836,23 +875,39 @@ function refreshAll() {
 // ---------- Chat ----------
 const msgs = document.getElementById('msgs');
 const chatInput = document.getElementById('chatInput');
-function addMsg(name, text, mine) {
+const newDot = document.getElementById('newDot');
+function addMsg(name, text, mine, c) {
   const div = document.createElement('div');
   const b = document.createElement('b');
   b.textContent = (mine ? 'You' : name) + ': ';
+  if (Number.isInteger(c) && c >= 0 && c < 7) b.style.color = RAINBOW_CSS[c];   // name in their rainbow color
   div.appendChild(b);
   div.appendChild(document.createTextNode(text));
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
+  if (!mine && !document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
 }
 function sendChat() {
   const text = chatInput.value.trim();
   if (!text || !myName) return;
-  push(ref(db, 'room/chat'), { name: myName, text: text.slice(0, 200), t: Date.now(), id: myId });
+  push(ref(db, 'room/chat'), { name: myName, text: text.slice(0, 200), t: Date.now(), id: myId, c: myHue });
   chatInput.value = '';
 }
 document.getElementById('send').addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+// Phone buttons: open and close chat and the room list
+const whoBtn = document.getElementById('whoBtn');
+document.getElementById('chatBtn').addEventListener('click', () => {
+  document.body.classList.toggle('chatOpen');
+  document.body.classList.remove('whoOpen');
+  newDot.style.display = 'none';
+  msgs.scrollTop = msgs.scrollHeight;
+});
+whoBtn.addEventListener('click', () => {
+  document.body.classList.toggle('whoOpen');
+  document.body.classList.remove('chatOpen');
+});
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
@@ -869,7 +924,6 @@ function enterRoom() {
 
   // Say we're here, and have the room remove us automatically if we close the tab or lose connection
   const meRef = ref(db, 'room/presence/' + myId);
-  let myHue = -1;   // my rainbow color, picked once
   onValue(ref(db, '.info/connected'), s => {
     if (s.val() === true) {
       onDisconnect(meRef).remove();
@@ -899,7 +953,7 @@ function enterRoom() {
   const joinTime = Date.now() - 60000;
   onChildAdded(query(ref(db, 'room/chat'), orderByChild('t'), startAt(joinTime)), s => {
     const m = s.val();
-    if (m && m.name && m.text) addMsg(m.name, m.text, m.id === myId);
+    if (m && m.name && m.text) addMsg(m.name, m.text, m.id === myId, m.c);
   });
   get(query(ref(db, 'room/chat'), orderByChild('t'), endAt(Date.now() - 3600000))).then(s => {
     s.forEach(ch => { remove(ch.ref); });
@@ -1049,12 +1103,30 @@ function setHover(chair) {
   if (hovered) hovered.userData.mats.forEach(m => m.emissive.setHex(0x3a2a10));
 }
 
+// Two-finger pinch zooms while seated or in board view (phones)
+const touchPts = new Map();
+let pinchDist = 0;
+function pinchSpread() {
+  const [a, b] = [...touchPts.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
 canvas.addEventListener('pointerdown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
+  touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
   down = { x: e.clientX, y: e.clientY };
   lastX = e.clientX; lastY = e.clientY;
 });
+function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
+window.addEventListener('pointercancel', endTouch);
 window.addEventListener('pointermove', e => {
+  if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touchPts.size === 2 && pinchDist > 0) {
+    const d = pinchSpread();
+    if ((seated >= 0 || boardView) && d > 0) setFov(camera.fov * pinchDist / d);
+    pinchDist = d;
+    return;
+  }
   if (down && seated >= 0 && !boardView && !anim) {
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
     yaw += (e.clientX - lastX) * k;
@@ -1079,6 +1151,7 @@ window.addEventListener('pointerup', e => {
     else if (p && p.chair && p.chair.userData.seat !== seated) { setHover(null); sit(p.chair.userData.seat); }
   }
   down = null;
+  endTouch(e);
 });
 
 // ---------- Window resize ----------
