@@ -21,6 +21,9 @@
   #tStatus { font-size: 16px; margin-bottom: 4px; }
   #tPlayers { font-size: 13px; margin-bottom: 4px; }
   #tInfo { font-size: 12px; opacity: 0.7; font-style: italic; margin-bottom: 8px; }
+  #tNote { font-size: 12px; color: #ffd88a; margin-bottom: 4px; white-space: pre-line; }
+  .tLabel { font-size: 12px; opacity: 0.8; margin-bottom: 4px; }
+  #tJobBtns button { font-size: 13px; padding: 4px 8px; margin: 0 4px 4px 0; }
   #msgs .sys { font-style: italic; opacity: 0.75; font-size: 13px; }
   .panel button { font-family: inherit; font-size: 14px; padding: 6px 12px; margin: 0 6px 6px 0; border: none; border-radius: 14px; background: #e9c98f; color: #2a1c10; cursor: pointer; }
   .panel button:disabled { opacity: 0.5; cursor: default; }
@@ -81,8 +84,10 @@
   <div id="trailUI" style="display:none">
     <div id="tStatus">Connecting…</div>
     <div id="tPlayers"></div>
+    <div id="tNote"></div>
     <div id="tInfo">Point at a trail stone to see what it is</div>
-    <button id="tJoin" style="display:none">Join game</button><button id="tRoll" style="display:none">🎲 Roll</button><button id="tStart" style="display:none">Start</button><button id="tEnd" style="display:none">End game</button>
+    <div id="tJobs" style="display:none"><div class="tLabel">Pick your job to join:</div><div id="tJobBtns"></div></div>
+    <button id="tRoll" style="display:none">🎲 Roll</button><button id="tBuy" style="display:none">Buy</button><button id="tPass" style="display:none">Pass</button><button id="tStart" style="display:none">Start</button><button id="tLeave" style="display:none">Leave game</button><button id="tEnd" style="display:none">End game</button>
   </div>
   <button id="boardView">Board view</button>
 </div>
@@ -1039,6 +1044,7 @@ let trail = null;            // the shared LittleTrail state
 let activeGame = 'othello';  // which game is on the table
 let trailBusy = false;       // dice or pawns are moving
 const SPOTS = 32, START_COINS = 1500, LAP_PAY = 200, GOAL = 10000, MAX_TRAIL = 6;
+const RANGER = 8, HOT_SPRING = 16, ROCKSLIDE = 24, HOT_SPRING_PAY = 50, ROCKSLIDE_FEE = 50;
 
 // Areas climb the mountain: 3 stalls each, prices go up as you climb
 const AREAS = [
@@ -1052,19 +1058,19 @@ const AREAS = [
   { name: 'Summit',         color: '#e0b23a', buy: 600, up: 300, rent: [60, 250, 700, 1500] }
 ];
 const SPECIALS = {
-  0:  { name: 'Trailhead',      color: '#f5e6b8', desc: 'Start · +200 every lap' },
-  4:  { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
+  0:  { name: 'Trailhead',      color: '#f5e6b8', desc: 'Start · +200 every time you pass' },
+  4:  { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
   8:  { name: 'Ranger Station', color: '#4b6b45', desc: 'Just visiting' },
-  12: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
-  16: { name: 'Hot Spring',     color: '#ff8a65', desc: 'Free rest' },
-  20: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
-  24: { name: 'Rockslide',      color: '#77736d', desc: 'Off to the Ranger Station (coming soon)' },
-  28: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' }
+  12: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
+  16: { name: 'Hot Spring',     color: '#ff8a65', desc: 'Rest and collect +50' },
+  20: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
+  24: { name: 'Rockslide',      color: '#77736d', desc: 'Slide down to the Ranger Station · pay 50' },
+  28: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true }
 };
 function spotInfo(k) {
   if (SPECIALS[k]) return { ...SPECIALS[k], special: true };
   const a = AREAS[Math.floor(k / 4)];
-  return { name: a.name, color: a.color, desc: `Buy ${a.buy} · rent from ${a.rent[0]}` };
+  return { name: a.name, color: a.color, desc: `Stall · buy ${a.buy} · rent from ${a.rent[0]}` };
 }
 
 // ---------- The mountain ----------
@@ -1220,70 +1226,361 @@ function updateLift(dt) {
   }
 }
 
-// ---------- Pawns ----------
-const pawns = {};   // id -> { g, c, anim }
-function makePawn(c) {
+// ---------- Jobs: each player's game piece is a tiny model of their trade ----------
+const JOBS = [
+  { id: 'icecream',  name: 'Ice Cream', icon: '🍦' },
+  { id: 'coffee',    name: 'Coffee',    icon: '☕' },
+  { id: 'grill',     name: 'Grill',     icon: '🍔' },
+  { id: 'bar',       name: 'Bar',       icon: '🍺' },
+  { id: 'wine',      name: 'Wine',      icon: '🍷' },
+  { id: 'toys',      name: 'Toys',      icon: '🦆' },
+  { id: 'bakery',    name: 'Bakery',    icon: '🧁' },
+  { id: 'outfitter', name: 'Outfitter', icon: '🏮' }
+];
+function jobInfo(id) { return JOBS.find(j => j.id === id) || JOBS[0]; }
+const LEVELS = ['Cart', 'Stand', 'Shop', 'Lodge'];
+
+// A little model about 1 unit tall, standing on y = 0, in its natural colors
+function makeJobModel(job) {
   const g = new THREE.Group();
-  const mat = std(new THREE.Color(RAINBOW[c]), 0.5);
-  const body = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.05, 16), mat);
-  body.position.y = 0.025;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.013, 16, 12), mat);
-  head.position.y = 0.056;
-  body.castShadow = head.castShadow = true;
-  g.add(body, head);
+  const add = (geo, color, x, y, z, rough = 0.6, extra = {}) => {
+    const m = new THREE.Mesh(geo, std(color, rough, extra));
+    m.position.set(x, y, z);
+    m.castShadow = true;
+    g.add(m);
+    return m;
+  };
+  switch (job) {
+    case 'coffee':
+      add(new THREE.CylinderGeometry(0.3, 0.26, 0.6, 20), 0xf4f1ea, 0, 0.3, 0, 0.4);
+      add(new THREE.CylinderGeometry(0.27, 0.27, 0.02, 20), 0x4a2a14, 0, 0.6, 0);
+      add(new THREE.TorusGeometry(0.14, 0.05, 8, 16), 0xf4f1ea, 0.3, 0.32, 0, 0.4);
+      add(new THREE.SphereGeometry(0.09, 8, 6), 0xffffff, -0.05, 0.78, 0, 1, { transparent: true, opacity: 0.6 });
+      add(new THREE.SphereGeometry(0.07, 8, 6), 0xffffff, 0.06, 0.92, 0, 1, { transparent: true, opacity: 0.45 });
+      break;
+    case 'grill': {
+      add(new THREE.CylinderGeometry(0.35, 0.33, 0.15, 20), 0xd9a25b, 0, 0.075, 0);
+      add(new THREE.CylinderGeometry(0.37, 0.37, 0.12, 20), 0x5a3218, 0, 0.21, 0, 0.9);
+      const cheese = add(new THREE.BoxGeometry(0.62, 0.04, 0.62), 0xf4c430, 0, 0.29, 0);
+      cheese.rotation.y = Math.PI / 4;
+      add(new THREE.CylinderGeometry(0.38, 0.38, 0.03, 20), 0x5aa83a, 0, 0.32, 0);
+      const bun = add(new THREE.SphereGeometry(0.35, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), 0xd9a25b, 0, 0.33, 0);
+      bun.scale.y = 0.8;
+      break;
+    }
+    case 'bar':
+      add(new THREE.CylinderGeometry(0.28, 0.28, 0.6, 20), 0xe0a020, 0, 0.3, 0, 0.3);
+      add(new THREE.CylinderGeometry(0.3, 0.3, 0.12, 20), 0xfffaf0, 0, 0.64, 0, 0.9);
+      add(new THREE.SphereGeometry(0.17, 12, 8), 0xfffaf0, 0.08, 0.72, 0, 0.9);
+      add(new THREE.TorusGeometry(0.15, 0.05, 8, 16), 0xe0a020, 0.3, 0.3, 0, 0.3);
+      break;
+    case 'wine':
+      add(new THREE.CylinderGeometry(0.2, 0.2, 0.6, 20), 0x1f4d2b, 0, 0.3, 0, 0.3);
+      add(new THREE.CylinderGeometry(0.205, 0.205, 0.25, 20), 0xf1e6c8, 0, 0.3, 0, 0.8);
+      add(new THREE.SphereGeometry(0.2, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), 0x1f4d2b, 0, 0.6, 0, 0.3);
+      add(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 12), 0x1f4d2b, 0, 0.82, 0, 0.3);
+      add(new THREE.CylinderGeometry(0.078, 0.078, 0.1, 12), 0x8e1b2b, 0, 0.97, 0);
+      break;
+    case 'toys': {
+      const body = add(new THREE.SphereGeometry(0.33, 16, 12), 0xffd23a, 0, 0.32, -0.04, 0.4);
+      body.scale.set(1.15, 0.85, 1.25);
+      add(new THREE.SphereGeometry(0.2, 16, 12), 0xffd23a, 0, 0.72, 0.14, 0.4);
+      const beak = add(new THREE.ConeGeometry(0.08, 0.2, 10), 0xff8c1a, 0, 0.7, 0.4, 0.5);
+      beak.rotation.x = Math.PI / 2;
+      add(new THREE.SphereGeometry(0.035, 8, 6), 0x111111, 0.1, 0.8, 0.28, 0.3);
+      add(new THREE.SphereGeometry(0.035, 8, 6), 0x111111, -0.1, 0.8, 0.28, 0.3);
+      break;
+    }
+    case 'bakery': {
+      add(new THREE.CylinderGeometry(0.3, 0.22, 0.4, 16), 0x7fc8e8, 0, 0.2, 0);
+      const frost = add(new THREE.SphereGeometry(0.32, 16, 12), 0xf6c1d9, 0, 0.5, 0, 0.7);
+      frost.scale.y = 0.8;
+      add(new THREE.ConeGeometry(0.18, 0.25, 16), 0xf6c1d9, 0, 0.8, 0, 0.7);
+      add(new THREE.SphereGeometry(0.08, 10, 8), 0xc0392b, 0, 0.96, 0, 0.3);
+      break;
+    }
+    case 'outfitter':
+      add(new THREE.CylinderGeometry(0.25, 0.27, 0.08, 16), 0x2b2b2b, 0, 0.04, 0, 0.5, { metalness: 0.5 });
+      add(new THREE.CylinderGeometry(0.19, 0.19, 0.5, 16), 0xffd36b, 0, 0.33, 0, 0.4, { emissive: 0xffb020, emissiveIntensity: 0.9 });
+      for (let i = 0; i < 4; i++) {
+        const a = i * Math.PI / 2 + Math.PI / 4;
+        add(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 6), 0x2b2b2b, Math.sin(a) * 0.21, 0.33, Math.cos(a) * 0.21, 0.5, { metalness: 0.5 });
+      }
+      add(new THREE.ConeGeometry(0.28, 0.2, 16), 0x2b2b2b, 0, 0.68, 0, 0.5, { metalness: 0.5 });
+      add(new THREE.TorusGeometry(0.11, 0.025, 8, 16), 0x2b2b2b, 0, 0.88, 0, 0.5, { metalness: 0.5 });
+      break;
+    default: {   // ice cream
+      const cone = add(new THREE.ConeGeometry(0.28, 0.65, 16), 0xd9a25b, 0, 0.325, 0);
+      cone.rotation.x = Math.PI;
+      add(new THREE.SphereGeometry(0.3, 16, 12), 0xf7a8c4, 0, 0.72, 0, 0.7);
+      add(new THREE.SphereGeometry(0.07, 8, 6), 0xc0392b, 0, 1.03, 0, 0.3);
+    }
+  }
+  return g;
+}
+function sizedJobModel(job, height) {   // the model scaled to a given height
+  const m = makeJobModel(job);
+  const size = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3());
+  m.scale.setScalar(height / (size.y || 1));
+  return m;
+}
+
+// ---------- Pawns: your job's model on a little base in your rainbow color ----------
+const pawns = {};   // id -> { g, c, job, anim }
+function makePawn(c, job) {
+  const g = new THREE.Group();
+  const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.008, 20), std(new THREE.Color(RAINBOW[c]), 0.5));
+  baseDisc.position.y = 0.004;
+  baseDisc.castShadow = true;
+  const model = sizedJobModel(job, 0.05);
+  model.position.y = 0.008;
+  g.add(baseDisc, model);
   trailGroup.add(g);
   return g;
 }
-function pawnSpotPos(k, rank) {   // several pawns on one stone stand in a little ring
+function pawnSpotPos(k, rank) {   // several pawns on one stone stand in a little ring, nudged toward the outside edge
   const p = spotPos[k].clone();
+  const out = new THREE.Vector3(p.x, 0, p.z).normalize();
+  p.addScaledVector(out, 0.01);
   p.y += 0.008;
   const ang = rank * Math.PI / 3;
   p.x += Math.sin(ang) * 0.02; p.z += Math.cos(ang) * 0.02;
   return p;
 }
 
-// ---------- Players and turns ----------
+// ---------- Booths: what you own shows up beside the stone ----------
+const booths = {};   // spot -> { g, key }
+function makeBooth(c, job, lv, k) {
+  const g = new THREE.Group();
+  const s = [0.75, 0.95, 1.15, 1.4][lv] || 1;
+  const wood = std(0x8a5a33, 0.8);
+  const col = std(new THREE.Color(RAINBOW[c]), 0.6);
+  box(0.04 * s, 0.026 * s, 0.026 * s, wood, 0, 0.013 * s, 0, g);             // the stall
+  box(0.03 * s, 0.006 * s, 0.002, std(0xf1e6c8, 0.8), 0, 0.018 * s, 0.0135 * s, g);   // counter sign
+  const awning = box(0.048 * s, 0.004 * s, 0.024 * s, col, 0, 0.03 * s, 0.012 * s, g);
+  awning.rotation.x = 0.35;                                                  // tilted down toward the trail
+  if (lv >= 2) box(0.004, 0.02 * s, 0.004, wood, -0.022 * s, 0.04 * s, -0.01 * s, g);   // a flag pole for Shops and Lodges
+  if (lv >= 3) box(0.012 * s, 0.008 * s, 0.002, col, -0.016 * s, 0.047 * s, -0.01 * s, g);
+  const item = sizedJobModel(job, 0.022 * s);
+  item.position.y = 0.026 * s;
+  g.add(item);
+  const p = spotPos[k];
+  const out = new THREE.Vector3(p.x, 0, p.z).normalize();
+  g.position.copy(p).addScaledVector(out, -0.035);
+  g.position.y -= 0.004;
+  g.rotation.y = Math.atan2(p.x, p.z);   // facing out toward the trail
+  trailGroup.add(g);
+  return g;
+}
+function syncBooths() {
+  const want = {};
+  for (let k = 0; k < SPOTS; k++) {
+    const st = stallOwner(trail, k);
+    if (st) {
+      const p = trail.players[st.o];
+      want[k] = `${st.o}|${st.lv}|${colorIndex(p)}|${p.job}`;
+    }
+  }
+  for (const k of Object.keys(booths)) {
+    if (booths[k].key !== want[k]) { trailGroup.remove(booths[k].g); delete booths[k]; }
+  }
+  for (const k of Object.keys(want)) {
+    if (!booths[k]) {
+      const st = stallOwner(trail, +k), p = trail.players[st.o];
+      booths[k] = { g: makeBooth(colorIndex(p), p.job, st.lv, +k), key: want[k] };
+    }
+  }
+}
+
+// ---------- Weather deck: 8 good, 8 bad, shuffled; every card comes up once before a reshuffle ----------
+const WEATHER = [
+  { text: 'Sunny day! +100', kind: 'coins', n: 100 },
+  { text: 'Busy weekend! +150', kind: 'coins', n: 150 },
+  { text: 'Found a lost wallet! +75', kind: 'coins', n: 75 },
+  { text: 'Tip jar is full! +50', kind: 'coins', n: 50 },
+  { text: 'Tailwind! Move ahead 3', kind: 'move', n: 3 },
+  { text: 'Chairlift pass! Ride to the Trailhead, +200', kind: 'goto', to: 0, lap: true },
+  { text: 'Hot Spring pass! Off to the Hot Spring', kind: 'goto', to: HOT_SPRING },
+  { text: 'Festival! Everyone gives 25 to whoever has the fewest coins', kind: 'festival' },
+  { text: 'Thunderstorm! −100', kind: 'coins', n: -100 },
+  { text: 'Hail! −75', kind: 'coins', n: -75 },
+  { text: 'Flat tire! −50', kind: 'coins', n: -50 },
+  { text: 'Muddy trail! −50', kind: 'coins', n: -50 },
+  { text: 'Mudslide! Move back 3', kind: 'move', n: -3 },
+  { text: 'Rockslide! Go to the Ranger Station', kind: 'goto', to: RANGER },
+  { text: 'Windstorm! Pay 25 to each other player', kind: 'windstorm' },
+  { text: 'Repairs! Pay 25 for each booth level you own', kind: 'repairs' }
+];
+function newDeck() {
+  const a = WEATHER.map((_, i) => i);
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a.join(',');
+}
+
+// ---------- Players, turns and rules (these work on a copy of the shared state) ----------
 function trailIds(t = trail) {
   return Object.entries((t && t.players) || {}).sort((a, b) => a[1].order - b[1].order).map(([id]) => id);
 }
-function validTrailIds(t = trail) { return trailIds(t).filter(id => presence[id]); }
+function validTrailIds(t = trail) { return trailIds(t).filter(id => presence[id]); }                    // still in the room
+function activeIds(t = trail) { return validTrailIds(t).filter(id => !t.players[id].out); }            // still in the game
 function nextAfter(t, id) {
   const all = trailIds(t);
   const i = all.indexOf(id);
   for (let k = 1; k <= all.length; k++) {
     const cand = all[(i + k + all.length) % all.length];
-    if (presence[cand] && cand !== id) return cand;
+    if (cand !== id && presence[cand] && !t.players[cand].out) return cand;
   }
   return '';
 }
-function effectiveTurn(t = trail) {   // whose turn it really is (skips anyone who left)
+function effectiveTurn(t = trail) {   // whose turn it really is (skips anyone who left or is out)
   if (!t || t.phase !== 'play') return '';
-  const ids = validTrailIds(t);
+  const ids = activeIds(t);
   if (!ids.length) return '';
   if (ids.includes(t.turn)) return t.turn;
   return nextAfter(t, t.turn) || ids[0];
 }
+function areaOf(k) { return Math.floor(k / 4); }
+function stallOwner(t, k) {   // the stall's owner, if they're still playing
+  const st = t && t.stalls && t.stalls['s' + k];
+  if (!st || !t.players || !t.players[st.o] || !presence[st.o] || t.players[st.o].out) return null;
+  return st;
+}
+function ownsArea(t, id, a) {
+  return [1, 2, 3].every(i => { const st = stallOwner(t, a * 4 + i); return st && st.o === id; });
+}
+function rentFor(t, k) {
+  const st = stallOwner(t, k);
+  if (!st) return 0;
+  let r = AREAS[areaOf(k)].rent[st.lv];
+  if (st.lv === 0 && ownsArea(t, st.o, areaOf(k))) r *= 2;   // own the whole area: Cart rent doubles
+  return r;
+}
+function payUpTo(t, id, n) {   // weather and fees: take what you can, never below 0
+  const p = t.players[id];
+  const paid = Math.min(n, p.coins);
+  p.coins -= paid;
+  return paid;
+}
+function goBroke(t, id) {
+  t.players[id].out = true;
+  for (const key of Object.keys(t.stalls || {})) if (t.stalls[key].o === id) delete t.stalls[key];   // stalls go back up for sale
+}
+function payRent(t, id, ownerId, rent, log) {
+  const p = t.players[id], o = t.players[ownerId];
+  if (p.coins >= rent) {
+    p.coins -= rent; o.coins += rent;
+    log.push(`${p.name} paid ${o.name} ${rent} rent`);
+  } else {
+    o.coins += p.coins;
+    log.push(`${p.name} couldn't pay ${rent} rent to ${o.name} and is out of the game!`);
+    p.coins = 0;
+    goBroke(t, id);
+  }
+}
+function moveBy(t, id, n, log) {
+  const p = t.players[id];
+  const raw = p.pos + n;
+  if (raw >= SPOTS) { p.coins += LAP_PAY; log.push(`${p.name} passed the Trailhead (+${LAP_PAY})`); }
+  p.pos = ((raw % SPOTS) + SPOTS) % SPOTS;
+}
+function drawWeather(t, id, log, depth) {
+  if (!t.deck || (t.deckPos || 0) >= WEATHER.length) { t.deck = newDeck(); t.deckPos = 0; }
+  const card = WEATHER[+t.deck.split(',')[t.deckPos]];
+  t.deckPos++;
+  const p = t.players[id];
+  log.push(`🌦 ${p.name} drew: ${card.text}`);
+  const others = activeIds(t).filter(q => q !== id);
+  if (card.kind === 'coins') {
+    if (card.n > 0) p.coins += card.n; else payUpTo(t, id, -card.n);
+  } else if (card.kind === 'move') {
+    moveBy(t, id, card.n, log);
+    if (depth < 2) landOn(t, id, log, depth + 1);
+  } else if (card.kind === 'goto') {
+    p.pos = card.to;
+    if (card.lap) p.coins += LAP_PAY;
+    if (depth < 2) landOn(t, id, log, depth + 1);
+  } else if (card.kind === 'festival') {
+    const ids = activeIds(t);
+    const poorest = ids.reduce((a, b) => (t.players[b].coins < t.players[a].coins ? b : a), ids[0]);
+    let got = 0;
+    for (const q of ids) if (q !== poorest) got += payUpTo(t, q, 25);
+    t.players[poorest].coins += got;
+    log.push(`${t.players[poorest].name} collected ${got} from the Festival`);
+  } else if (card.kind === 'windstorm') {
+    for (const q of others) t.players[q].coins += payUpTo(t, id, 25);
+  } else if (card.kind === 'repairs') {
+    let levels = 0;
+    for (const st of Object.values(t.stalls || {})) if (st.o === id) levels += st.lv + 1;
+    log.push(`${p.name} paid ${payUpTo(t, id, 25 * levels)} for repairs`);
+  }
+}
+// What happens on the stone you land on
+function landOn(t, id, log, depth = 0) {
+  const p = t.players[id], k = p.pos;
+  if (k === HOT_SPRING) { p.coins += HOT_SPRING_PAY; log.push(`${p.name} rested at the Hot Spring (+${HOT_SPRING_PAY})`); return; }
+  if (k === ROCKSLIDE) {
+    p.pos = RANGER;
+    log.push(`${p.name} got caught in a Rockslide and slid down to the Ranger Station (−${payUpTo(t, id, ROCKSLIDE_FEE)})`);
+    return;
+  }
+  if (SPECIALS[k]) { if (SPECIALS[k].weather) drawWeather(t, id, log, depth); return; }
+  const a = AREAS[areaOf(k)], st = stallOwner(t, k);
+  if (!st) {
+    if (p.coins >= a.buy) t.pending = { who: id, k, type: 'buy' };
+    else log.push(`${p.name} can't afford the ${a.name} stall (${a.buy})`);
+  } else if (st.o === id) {
+    if (st.lv < 3 && p.coins >= a.up) t.pending = { who: id, k, type: 'up' };
+  } else {
+    payRent(t, id, st.o, rentFor(t, k), log);
+  }
+}
+function checkWin(t, log) {
+  if (t.phase !== 'play') return;
+  const ids = activeIds(t);
+  let w = ids.find(id => t.players[id].coins >= GOAL);
+  if (!w && ids.length === 1 && trailIds(t).some(id => t.players[id].out)) w = ids[0];
+  if (w) {
+    t.phase = 'over'; t.winner = w; delete t.pending;
+    log.push(`🏆 ${t.players[w].name} wins LittleTrail!`);
+  }
+}
+function finishTurn(t, id) {
+  if (t.phase === 'play' && !t.pending) t.turn = nextAfter(t, id) || id;
+}
+function postLog(t, log) {   // remember what happened so everyone's chat can show it
+  t.note = log.join('\n');
+  if (log.length) t.ev = (t.ev || 0) + 1;
+}
+function resetPlayers(t) {
+  for (const id of Object.keys(t.players || {})) {
+    const p = t.players[id];
+    p.pos = 0; p.coins = START_COINS; p.out = false;
+  }
+  delete t.stalls; delete t.pending; delete t.dice; delete t.deck;
+  t.deckPos = 0; t.note = ''; t.mover = ''; t.winner = ''; t.passed = false;
+}
 
 function syncPawns() {
-  const ids = validTrailIds();
+  const ids = activeIds();
   const players = (trail && trail.players) || {};
   for (const id of Object.keys(pawns)) {
-    if (!ids.includes(id) || colorIndex(players[id]) !== pawns[id].c) {
+    const p = players[id];
+    if (!ids.includes(id) || colorIndex(p) !== pawns[id].c || p.job !== pawns[id].job) {
       trailGroup.remove(pawns[id].g);
       delete pawns[id];
     }
   }
   ids.forEach((id, rank) => {
     if (!pawns[id]) {
-      const c = colorIndex(players[id]);
-      pawns[id] = { g: makePawn(c), c, anim: null };
-      pawns[id].g.position.copy(pawnSpotPos(players[id].pos || 0, rank));
+      const p = players[id], c = colorIndex(p);
+      pawns[id] = { g: makePawn(c, p.job), c, job: p.job, anim: null };
+      pawns[id].g.position.copy(pawnSpotPos(p.pos || 0, rank));
     }
   });
 }
 function placeAllPawns() {
   const players = (trail && trail.players) || {};
-  validTrailIds().forEach((id, rank) => {
+  activeIds().forEach((id, rank) => {
     if (pawns[id]) { pawns[id].anim = null; pawns[id].g.position.copy(pawnSpotPos(players[id].pos || 0, rank)); }
   });
 }
@@ -1318,9 +1615,9 @@ function diceFinalQuat(v, yaw) {
 let rollAnim = null;
 function startRoll(t) {
   const mover = t.players[t.mover];
-  const ids = validTrailIds(t);
   const a = seatAngle(mover.seat >= 0 ? mover.seat : 0);
-  if (pawns[t.mover]) pawns[t.mover].g.position.copy(pawnSpotPos(t.from, ids.indexOf(t.mover)));   // start from where they were
+  const rank = activeIds(t).indexOf(t.mover);
+  if (pawns[t.mover] && rank >= 0) pawns[t.mover].g.position.copy(pawnSpotPos(t.from, rank));   // start from where they were
   rollAnim = { t: 0, dur: 0.9, items: [] };
   [-0.33, 0.33].forEach((off, i) => {
     const ang = a + off;
@@ -1336,8 +1633,10 @@ function startHop(t) {
   const pw = pawns[t.mover];
   if (!pw) { trailBusy = false; placeAllPawns(); refreshTrailUI(); return; }
   const path = [];
-  for (let s = 1; s <= t.steps; s++) path.push((t.from + s) % SPOTS);
-  pw.anim = { path, i: 0, t: 0, prev: t.from, rank: validTrailIds(t).indexOf(t.mover) };
+  for (let s = 1; s <= t.steps; s++) path.push({ k: (t.from + s) % SPOTS });
+  const finalPos = t.players[t.mover].pos;
+  if (path[path.length - 1].k !== finalPos) path.push({ k: finalPos, jump: true });   // a Weather card or Rockslide moved them on
+  pw.anim = { path, i: 0, t: 0, prev: t.from, rank: activeIds(t).indexOf(t.mover) };
 }
 function finishTrailAnims() {
   if (rollAnim) {
@@ -1361,16 +1660,17 @@ function updateTrailAnims(dt) {
   for (const id of Object.keys(pawns)) {
     const pw = pawns[id], a = pw.anim;
     if (!a) continue;
-    const next = a.path[a.i];
-    const lift = a.prev === SPOTS - 1 && next === 0;          // the chairlift ride down
-    const dur = lift ? 1.2 : 0.22;
+    const step = a.path[a.i];
+    const lift = !step.jump && a.prev === SPOTS - 1 && step.k === 0;   // the chairlift ride down
+    const long = lift || step.jump;
+    const dur = long ? 1.0 : 0.22;
     a.t += dt;
     const p = Math.min(a.t / dur, 1);
-    const from = pawnSpotPos(a.prev, a.rank), to = pawnSpotPos(next, a.rank);
-    pw.g.position.lerpVectors(from, to, lift ? easeInOut(p) : p);
-    pw.g.position.y += Math.sin(p * Math.PI) * (lift ? 0.14 : 0.04);
+    const from = pawnSpotPos(a.prev, Math.max(a.rank, 0)), to = pawnSpotPos(step.k, Math.max(a.rank, 0));
+    pw.g.position.lerpVectors(from, to, long ? easeInOut(p) : p);
+    pw.g.position.y += Math.sin(p * Math.PI) * (long ? 0.16 : 0.04);
     if (p >= 1) {
-      a.prev = next; a.i++; a.t = 0;
+      a.prev = step.k; a.i++; a.t = 0;
       if (a.i >= a.path.length) { pw.anim = null; trailBusy = false; placeAllPawns(); refreshTrailUI(); }
     }
   }
@@ -1408,6 +1708,7 @@ function applyTrail(t) {
   const prev = trail;
   trail = t || { phase: 'lobby', rollNo: 0 };
   syncPawns();
+  syncBooths();
   const players = trail.players || {};
   const isNextRoll = prev && trail.rollNo === (prev.rollNo || 0) + 1 && trail.mover && players[trail.mover] && trail.dice;
   if (isNextRoll && activeGame === 'trail') {
@@ -1417,32 +1718,35 @@ function applyTrail(t) {
   } else if (!trailBusy) {
     placeAllPawns();
   }
+  if (prev && (trail.ev || 0) > (prev.ev || 0) && trail.note) {   // tell the chat what happened
+    trail.note.split('\n').forEach(line => addSys(line));
+  }
   refreshTrailUI();
   refreshTrailCounters();
 }
 
 // ---------- Actions ----------
-function trailJoinLeave() {
-  if (!trail) return;
-  if (trail.players && trail.players[myId]) {
-    runTransaction(trailRef, t => {
-      if (!t || !t.players || !t.players[myId]) return;
-      if (t.phase === 'play' && effectiveTurn(t) === myId) t.turn = nextAfter(t, myId);
-      delete t.players[myId];
-      return t;
-    });
-    return;
-  }
-  if (seated < 0) return;
+function trailJoin(job) {
+  if (!trail || seated < 0) return;
   const seat = seated;
   runTransaction(trailRef, t => {
     t = t || { phase: 'lobby', rollNo: 0 };
     if (t.phase === 'play') return;
     t.players = t.players || {};
     for (const id of Object.keys(t.players)) if (!presence[id]) delete t.players[id];   // tidy up people who left
-    if (Object.keys(t.players).length >= MAX_TRAIL) return;
-    t.players[myId] = { seat, pos: 0, coins: START_COINS, order: Date.now(), c: myHue, name: myName };
-    if (t.phase === 'over') t.phase = 'lobby';
+    if (Object.keys(t.players).filter(id => id !== myId).length >= MAX_TRAIL) return;
+    if (Object.entries(t.players).some(([id, q]) => id !== myId && q.job === job)) return;   // someone just took that job
+    t.players[myId] = { seat, pos: 0, coins: START_COINS, order: Date.now(), c: myHue, name: myName, job, out: false };
+    if (t.phase === 'over') { t.phase = 'lobby'; resetPlayers(t); }
+    return t;
+  });
+}
+function trailLeave() {
+  runTransaction(trailRef, t => {
+    if (!t || !t.players || !t.players[myId]) return;
+    if (t.phase === 'play' && effectiveTurn(t) === myId) { delete t.pending; t.turn = nextAfter(t, myId); }
+    goBroke(t, myId);                      // your stalls go back up for sale
+    delete t.players[myId];
     return t;
   });
 }
@@ -1452,18 +1756,16 @@ function trailStart() {
     for (const id of Object.keys(t.players)) if (!presence[id]) delete t.players[id];
     const ids = trailIds(t);
     if (ids.length < 2) return;
-    ids.forEach(id => { t.players[id].pos = 0; t.players[id].coins = START_COINS; });
-    t.phase = 'play'; t.turn = ids[0]; t.winner = ''; t.mover = ''; t.passed = false;
-    delete t.dice;
+    resetPlayers(t);
+    t.phase = 'play'; t.turn = ids[0];
     return t;
   });
 }
 function trailEnd() {
   runTransaction(trailRef, t => {
     if (!t || !t.players || !t.players[myId]) return;
-    for (const id of Object.keys(t.players)) { t.players[id].pos = 0; t.players[id].coins = START_COINS; }
-    t.phase = 'lobby'; t.turn = ''; t.mover = ''; t.winner = '';
-    delete t.dice;
+    resetPlayers(t);
+    t.phase = 'lobby'; t.turn = '';
     return t;
   });
 }
@@ -1471,15 +1773,46 @@ function trailRoll() {
   if (trailBusy || effectiveTurn() !== myId) return;
   runTransaction(trailRef, t => {
     if (!t || t.phase !== 'play' || effectiveTurn(t) !== myId) return;
+    if (t.pending) {
+      const w = t.pending.who;
+      if (presence[w] && t.players[w] && !t.players[w].out) return;   // someone is still deciding
+      delete t.pending;                                                // they left, carry on
+    }
     const p = t.players[myId];
     const a = 1 + Math.floor(Math.random() * 6), b = 1 + Math.floor(Math.random() * 6);
-    const from = p.pos || 0, raw = from + a + b;
-    const passed = raw >= SPOTS;
-    p.pos = raw % SPOTS;
-    if (passed) p.coins = (p.coins || 0) + LAP_PAY;
-    t.dice = [a, b]; t.rollNo = (t.rollNo || 0) + 1; t.mover = myId; t.from = from; t.steps = a + b; t.passed = passed;
-    if (p.coins >= GOAL) { t.phase = 'over'; t.winner = myId; }
-    else t.turn = nextAfter(t, myId) || myId;
+    const log = [];
+    t.dice = [a, b]; t.rollNo = (t.rollNo || 0) + 1; t.mover = myId; t.from = p.pos || 0; t.steps = a + b;
+    t.passed = t.from + a + b >= SPOTS;
+    moveBy(t, myId, a + b, []);            // the status line already says when you pass the Trailhead
+    landOn(t, myId, log, 0);
+    checkWin(t, log);
+    finishTurn(t, myId);
+    postLog(t, log);
+    return t;
+  });
+}
+function trailDecide(yes) {
+  if (trailBusy) return;
+  runTransaction(trailRef, t => {
+    if (!t || t.phase !== 'play' || !t.pending || t.pending.who !== myId) return;
+    const { k, type } = t.pending;
+    const p = t.players[myId], a = AREAS[areaOf(k)], log = [];
+    t.stalls = t.stalls || {};
+    if (yes && type === 'buy' && !stallOwner(t, k) && p.coins >= a.buy) {
+      p.coins -= a.buy;
+      t.stalls['s' + k] = { o: myId, lv: 0 };
+      log.push(`${p.name} opened a ${jobInfo(p.job).name} Cart at ${a.name} (−${a.buy})`);
+    } else if (yes && type === 'up') {
+      const st = t.stalls['s' + k];
+      if (st && st.o === myId && st.lv < 3 && p.coins >= a.up) {
+        p.coins -= a.up; st.lv++;
+        log.push(`${p.name} upgraded to a ${LEVELS[st.lv]} at ${a.name} (−${a.up})`);
+      }
+    }
+    delete t.pending;
+    checkWin(t, log);
+    finishTurn(t, myId);
+    postLog(t, log);
     return t;
   });
 }
@@ -1487,36 +1820,66 @@ function trailRoll() {
 // ---------- LittleTrail panel ----------
 const tStatus = document.getElementById('tStatus');
 const tPlayers = document.getElementById('tPlayers');
+const tNote = document.getElementById('tNote');
 const tInfo = document.getElementById('tInfo');
-const tJoin = document.getElementById('tJoin');
-const tStart = document.getElementById('tStart');
+const tJobs = document.getElementById('tJobs');
+const tJobBtns = document.getElementById('tJobBtns');
 const tRoll = document.getElementById('tRoll');
+const tBuy = document.getElementById('tBuy');
+const tPass = document.getElementById('tPass');
+const tStart = document.getElementById('tStart');
+const tLeave = document.getElementById('tLeave');
 const tEnd = document.getElementById('tEnd');
-tJoin.addEventListener('click', trailJoinLeave);
-tStart.addEventListener('click', trailStart);
+const jobButtons = {};
+for (const j of JOBS) {
+  const b = document.createElement('button');
+  b.textContent = `${j.icon} ${j.name}`;
+  b.addEventListener('click', () => trailJoin(j.id));
+  tJobBtns.appendChild(b);
+  jobButtons[j.id] = b;
+}
 tRoll.addEventListener('click', trailRoll);
+tBuy.addEventListener('click', () => trailDecide(true));
+tPass.addEventListener('click', () => trailDecide(false));
+tStart.addEventListener('click', trailStart);
+tLeave.addEventListener('click', trailLeave);
 tEnd.addEventListener('click', trailEnd);
 
+function liveTrailPending(t = trail) {
+  const pd = t && t.pending;
+  if (!pd || !presence[pd.who] || !t.players[pd.who] || t.players[pd.who].out) return null;
+  return pd;
+}
 function refreshTrailUI() {
   if (!trail) return;
   const ids = validTrailIds();
   const players = trail.players || {};
   const me = !!(players[myId] && presence[myId]);
   const turnId = effectiveTurn();
+  const pd = trail.phase === 'play' ? liveTrailPending() : null;
   let st;
   if (trail.phase === 'play') {
-    if (ids.length < 2) st = 'Not enough players left · click End game to go back';
-    else {
+    if (activeIds().length < 2) st = 'Not enough players left · click End game to go back';
+    else if (pd) {
+      const a = AREAS[areaOf(pd.k)];
+      if (pd.who !== myId) st = `${players[pd.who].name} is deciding about ${a.name}…`;
+      else if (pd.type === 'buy') st = `Open a stall at ${a.name} for ${a.buy}? Rent starts at ${a.rent[0]}.`;
+      else {
+        const lv = trail.stalls['s' + pd.k].lv;
+        st = `Upgrade your ${LEVELS[lv]} at ${a.name} to a ${LEVELS[lv + 1]} for ${a.up}? Rent goes ${a.rent[lv]} → ${a.rent[lv + 1]}.`;
+      }
+    } else {
       const last = trail.mover && players[trail.mover] && trail.dice
-        ? `${players[trail.mover].name} rolled ${trail.dice[0]} + ${trail.dice[1]}${trail.passed ? ', passed the Trailhead (+200)' : ''}. ` : '';
+        ? `${players[trail.mover].name} rolled ${trail.dice[0]} + ${trail.dice[1]}${trail.passed ? ' and passed the Trailhead (+200)' : ''}. ` : '';
       st = last + (turnId === myId ? 'Your turn! Roll the dice' : `${players[turnId] ? players[turnId].name : '…'}'s turn`);
     }
   } else if (trail.phase === 'over') {
-    st = `${players[trail.winner] ? players[trail.winner].name : 'Someone'} reached ${GOAL.toLocaleString()} coins and wins!`;
+    st = `🏆 ${players[trail.winner] ? players[trail.winner].name : 'Someone'} wins! Click Start to play again.`;
   } else {
-    st = ids.length >= 2 ? `${ids.length} players ready · a player can click Start` : 'Sit in a chair and click Join (2–6 players)';
+    st = ids.length >= 2 ? `${ids.length} players ready · a player can click Start` : 'Sit in a chair and pick a job to join (2–6 players)';
   }
   tStatus.textContent = st;
+  tNote.textContent = trail.phase !== 'lobby' ? (trail.note || '') : '';
 
   tPlayers.textContent = '';
   ids.forEach(id => {
@@ -1526,16 +1889,28 @@ function refreshTrailUI() {
     dot.textContent = '● ';
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
-    div.appendChild(document.createTextNode(`${trail.phase === 'play' && id === turnId ? '▶ ' : ''}${p.name}${id === myId ? ' (you)' : ''} · ${(p.coins || 0).toLocaleString()} · ${spotInfo(p.pos || 0).name}`));
+    const where = p.out ? 'out' : `${(p.coins || 0).toLocaleString()} · ${spotInfo(p.pos || 0).name}`;
+    div.appendChild(document.createTextNode(`${trail.phase === 'play' && id === turnId ? '▶ ' : ''}${jobInfo(p.job).icon} ${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
     tPlayers.appendChild(div);
   });
 
-  tJoin.style.display = (seated >= 0 || me) && !boardView ? '' : 'none';
-  tJoin.textContent = me ? 'Leave game' : trail.phase === 'play' ? 'Game in progress' : ids.length >= MAX_TRAIL ? 'Game full' : 'Join game';
-  tJoin.disabled = !me && (trail.phase === 'play' || ids.length >= MAX_TRAIL);
+  const taken = new Set(ids.filter(id => id !== myId).map(id => players[id].job));
+  const canJoin = !me && seated >= 0 && !boardView && trail.phase !== 'play' && ids.length < MAX_TRAIL;
+  tJobs.style.display = canJoin ? '' : 'none';
+  for (const j of JOBS) jobButtons[j.id].disabled = taken.has(j.id);
+
+  const mine = pd && pd.who === myId;
+  tRoll.style.display = me && trail.phase === 'play' && !pd ? '' : 'none';
+  tRoll.disabled = !(turnId === myId && !trailBusy && activeIds().length >= 2);
+  tBuy.style.display = tPass.style.display = mine ? '' : 'none';
+  if (mine) {
+    const a = AREAS[areaOf(pd.k)];
+    tBuy.textContent = pd.type === 'buy' ? `Buy (${a.buy})` : `Upgrade (${a.up})`;
+    tPass.textContent = pd.type === 'buy' ? 'Pass' : 'Not now';
+  }
+  tBuy.disabled = tPass.disabled = trailBusy;
   tStart.style.display = me && trail.phase !== 'play' && ids.length >= 2 ? '' : 'none';
-  tRoll.style.display = me && trail.phase === 'play' ? '' : 'none';
-  tRoll.disabled = !(turnId === myId && !trailBusy && ids.length >= 2);
+  tLeave.style.display = me ? '' : 'none';
   tEnd.style.display = me && trail.phase !== 'lobby' ? '' : 'none';
 }
 
@@ -1574,6 +1949,7 @@ function refreshAll() {
   refreshAvatars();
   refreshWho();
   syncPawns();
+  syncBooths();
   if (!trailBusy) placeAllPawns();
   refreshTrailUI();
   refreshTrailCounters();
@@ -1853,8 +2229,11 @@ function pickUnder(e) {
 function showSpotInfo(k) {
   if (k < 0) { tInfo.textContent = 'Point at a trail stone to see what it is'; return; }
   const info = spotInfo(k);
-  const here = validTrailIds().filter(id => (trail.players[id].pos || 0) === k).map(id => trail.players[id].name);
-  tInfo.textContent = `#${k} ${info.name} · ${info.desc}${here.length ? ' · here: ' + here.join(', ') : ''}`;
+  let desc = info.desc;
+  const st = stallOwner(trail, k);
+  if (st) desc = `${trail.players[st.o].name}'s ${jobInfo(trail.players[st.o].job).name} ${LEVELS[st.lv]} · rent ${rentFor(trail, k)}`;
+  const here = activeIds().filter(id => (trail.players[id].pos || 0) === k).map(id => trail.players[id].name);
+  tInfo.textContent = `${info.name} · ${desc}${here.length ? ' · here: ' + here.join(', ') : ''}`;
 }
 function setHover(chair) {
   if (hovered === chair) return;
