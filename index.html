@@ -15,6 +15,13 @@
   #game { left: 16px; bottom: 16px; max-width: 280px; }
   #status { font-size: 16px; margin-bottom: 4px; }
   #players { font-size: 13px; opacity: 0.8; margin-bottom: 8px; }
+  #switchRow { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(243,230,207,0.2); }
+  .panel button.sw { background: rgba(233,201,143,0.25); color: #f3e6cf; }
+  .panel button.sw.on { background: #e9c98f; color: #2a1c10; }
+  #tStatus { font-size: 16px; margin-bottom: 4px; }
+  #tPlayers { font-size: 13px; margin-bottom: 4px; }
+  #tInfo { font-size: 12px; opacity: 0.7; font-style: italic; margin-bottom: 8px; }
+  #msgs .sys { font-style: italic; opacity: 0.75; font-size: 13px; }
   .panel button { font-family: inherit; font-size: 14px; padding: 6px 12px; margin: 0 6px 6px 0; border: none; border-radius: 14px; background: #e9c98f; color: #2a1c10; cursor: pointer; }
   .panel button:disabled { opacity: 0.5; cursor: default; }
   #who { right: 16px; top: 16px; min-width: 160px; max-width: 240px; font-size: 14px; }
@@ -48,6 +55,9 @@
     #game { left: 8px; right: 8px; bottom: 8px; max-width: none; padding: 8px 10px; }
     #status { font-size: 14px; }
     #players { font-size: 12px; margin-bottom: 6px; }
+    #tStatus { font-size: 14px; }
+    #tPlayers { font-size: 12px; }
+    #switchRow { margin-bottom: 4px; padding-bottom: 4px; }
     #game br { display: none; }
     .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
     #stand { top: 48px; bottom: auto; font-size: 14px; padding: 6px 16px; }
@@ -62,10 +72,19 @@
 </div>
 <button id="stand">Stand up</button>
 <div id="game" class="panel">
-  <div id="status">Connecting…</div>
-  <div id="players">Black: open &middot; White: open</div>
-  <button id="join" style="display:none">Join game</button><button id="boardView">Board view</button><br>
-  <button id="newGame">New game</button><button id="hints">Hints: On</button>
+  <div id="switchRow"><button id="swOthello" class="sw on">Othello</button><button id="swTrail" class="sw">LittleTrail</button></div>
+  <div id="othelloUI">
+    <div id="status">Connecting…</div>
+    <div id="players">Black: open &middot; White: open</div>
+    <button id="join" style="display:none">Join game</button><button id="newGame">New game</button><button id="hints">Hints: On</button>
+  </div>
+  <div id="trailUI" style="display:none">
+    <div id="tStatus">Connecting…</div>
+    <div id="tPlayers"></div>
+    <div id="tInfo">Point at a trail stone to see what it is</div>
+    <button id="tJoin" style="display:none">Join game</button><button id="tRoll" style="display:none">🎲 Roll</button><button id="tStart" style="display:none">Start</button><button id="tEnd" style="display:none">End game</button>
+  </div>
+  <button id="boardView">Board view</button>
 </div>
 <div id="who" class="panel">
   <h2>In the room</h2>
@@ -546,12 +565,14 @@ const CELL = 0.1;                  // size of one square
 const HALF = CELL * 4;             // half the board width
 const BOARD_TOP = TABLE_Y + 0.025; // height of the green surface
 const DISC_H = 0.016;
+const othelloGroup = new THREE.Group();   // everything Othello, hidden while another game is on the table
+scene.add(othelloGroup);
 
 // Board frame and green felt
 const boardFrame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.06, 0.025, HALF * 2 + 0.06), std(0x2e1d12, 0.6));
 boardFrame.position.y = TABLE_Y + 0.0125;
 boardFrame.castShadow = true; boardFrame.receiveShadow = true;
-scene.add(boardFrame);
+othelloGroup.add(boardFrame);
 
 const feltTex = paintTexture(512, 512, (g, w, h) => {
   g.fillStyle = '#1e6b3c'; g.fillRect(0, 0, w, h);
@@ -571,7 +592,7 @@ felt.rotation.x = -Math.PI / 2;
 felt.position.y = BOARD_TOP + 0.0005;
 felt.receiveShadow = true;
 felt.userData.isBoard = true;
-scene.add(felt);
+othelloGroup.add(felt);
 
 function cellCenter(idx) {
   const r = Math.floor(idx / 8), c = idx % 8;
@@ -593,7 +614,7 @@ for (let i = 0; i < 64; i++) {
   const p = cellCenter(i);
   g.position.set(p.x, DISC_Y, p.z);
   g.visible = false;
-  scene.add(g);
+  othelloGroup.add(g);
   discs.push({ g, rot: 0, anim: null });
 }
 
@@ -607,7 +628,7 @@ for (let i = 0; i < 64; i++) {
   d.rotation.x = -Math.PI / 2;
   d.position.set(p.x, BOARD_TOP + 0.002, p.z);
   d.visible = false;
-  scene.add(d);
+  othelloGroup.add(d);
   hintDots.push(d);
 }
 
@@ -810,15 +831,16 @@ const FONT = {
   '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
   '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100']
 };
-const CNT_COLS = 13, CNT_ROWS = 9, DOT = 16;
+const CNT_ROWS = 9, DOT = 16;
 
-function makeCounter() {
+// A small flat dot-matrix panel set into the tabletop. cols = how many dot columns wide.
+function makeCounter(cols = 13, w = 0.12, parent = othelloGroup) {
   const cv = document.createElement('canvas');
-  cv.width = CNT_COLS * DOT; cv.height = CNT_ROWS * DOT;
+  cv.width = cols * DOT; cv.height = CNT_ROWS * DOT;
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   const outer = new THREE.Group();
-  const w = 0.12, h = w * CNT_ROWS / CNT_COLS;
+  const h = w * CNT_ROWS / cols;
   const housing = new THREE.Mesh(new THREE.BoxGeometry(w + 0.016, 0.01, h + 0.016), std(0x3a0e0a, 0.7));
   housing.position.y = -0.003;
   outer.add(housing);
@@ -828,8 +850,8 @@ function makeCounter() {
   face.position.y = 0.0025;
   outer.add(face);
   outer.visible = false;
-  scene.add(outer);
-  return { outer, faceMat, ctx: cv.getContext('2d'), cv, tex, shown: -1, anim: null, active: false, seat: -1 };
+  parent.add(outer);
+  return { outer, faceMat, ctx: cv.getContext('2d'), cv, tex, cols, shown: -1, anim: null, active: false, seat: -1 };
 }
 const CNT_DIST = HALF + 0.03 + 0.07;   // just off the board's edge (straight-on seats)
 const CNT_DIST_CORNER = 0.76;          // seats facing a corner of the board sit a bit farther out
@@ -841,17 +863,17 @@ function drawCounter(cnt, num) {
   cnt.shown = num;
   const digits = String(num);
   const width = digits.length * 6 - 1;
-  const start = Math.floor((CNT_COLS - width) / 2);
+  const start = Math.floor((cnt.cols - width) / 2);
   const lit = new Set();
   [...digits].forEach((ch, i) => {
-    FONT[ch].forEach((row, r) => [...row].forEach((bit, c) => {
-      if (bit === '1') lit.add((r + 1) * CNT_COLS + (start + i * 6 + c));
+    (FONT[ch] || FONT['0']).forEach((row, r) => [...row].forEach((bit, c) => {
+      if (bit === '1') lit.add((r + 1) * cnt.cols + (start + i * 6 + c));
     }));
   });
   const g = cnt.ctx;
   g.fillStyle = '#0c0b0a'; g.fillRect(0, 0, cnt.cv.width, cnt.cv.height);
-  for (let r = 0; r < CNT_ROWS; r++) for (let c = 0; c < CNT_COLS; c++) {
-    const on = lit.has(r * CNT_COLS + c);
+  for (let r = 0; r < CNT_ROWS; r++) for (let c = 0; c < cnt.cols; c++) {
+    const on = lit.has(r * cnt.cols + c);
     g.fillStyle = on ? '#ff3b2f' : '#34332e';
     g.beginPath(); g.arc(c * DOT + DOT / 2, r * DOT + DOT / 2, DOT * 0.42, 0, Math.PI * 2); g.fill();
     if (on) { g.fillStyle = 'rgba(255,200,180,0.5)'; g.beginPath(); g.arc(c * DOT + DOT / 2 - 2, r * DOT + DOT / 2 - 2, DOT * 0.14, 0, Math.PI * 2); g.fill(); }
@@ -859,22 +881,36 @@ function drawCounter(cnt, num) {
   cnt.tex.needsUpdate = true;
 }
 
-function popCounter(color, seat) {
-  const cnt = counters[color];
+// Rise a counter out of the table in front of a seat
+function placeCounter(cnt, seat, dist) {
   const a = seatAngle(seat);
-  const dist = seat % 2 ? CNT_DIST_CORNER : CNT_DIST;
   cnt.outer.position.set(Math.sin(a) * dist, TABLE_Y - CNT_SUNK, Math.cos(a) * dist);
-  cnt.outer.rotation.y = a;            // top of the digits points toward the board
+  cnt.outer.rotation.y = a;            // top of the digits points toward the middle of the table
   cnt.faceMat.color.setHex(0x000000);
   cnt.outer.visible = true;
   cnt.anim = { type: 'up', t: 0 };
   cnt.active = true; cnt.seat = seat;
 }
-function sinkCounter(color) {
-  const cnt = counters[color];
+function sinkCounterObj(cnt) {
   cnt.anim = { type: 'down', t: 0 };
   cnt.active = false; cnt.seat = -1;
 }
+function animateCounter(cnt, dt) {
+  const a = cnt.anim;
+  if (!a) return;
+  a.t += dt;
+  const p = Math.min(a.t / 0.5, 1);
+  const k = a.type === 'up' ? easeInOut(p) : 1 - easeInOut(p);
+  cnt.outer.position.y = TABLE_Y - CNT_SUNK * (1 - k);   // rise up until flush with the table
+  cnt.faceMat.color.setScalar(k);                       // light up as it rises
+  if (a.type === 'down' && p >= 1) cnt.outer.visible = false;
+  if (p >= 1) cnt.anim = null;
+}
+
+function popCounter(color, seat) {
+  placeCounter(counters[color], seat, seat % 2 ? CNT_DIST_CORNER : CNT_DIST);
+}
+function sinkCounter(color) { sinkCounterObj(counters[color]); }
 function refreshCounters() {
   for (const c of [1, 2]) {
     const cnt = counters[c];
@@ -887,15 +923,7 @@ function updateCounters(dt) {
   for (const color of [1, 2]) {
     const cnt = counters[color];
     if (cnt.outer.visible) drawCounter(cnt, count(color));
-    const a = cnt.anim;
-    if (!a) continue;
-    a.t += dt;
-    const p = Math.min(a.t / 0.5, 1);
-    const k = a.type === 'up' ? easeInOut(p) : 1 - easeInOut(p);
-    cnt.outer.position.y = TABLE_Y - CNT_SUNK * (1 - k);   // rise up until flush with the table
-    cnt.faceMat.color.setScalar(k);                       // light up as it rises
-    if (a.type === 'down' && p >= 1) cnt.outer.visible = false;
-    if (p >= 1) cnt.anim = null;
+    animateCounter(cnt, dt);
   }
 }
 
@@ -1000,11 +1028,556 @@ function refreshWho() {
   }
 }
 
+// =====================================================================
+// ---------- LITTLETRAIL (the mountain trail market game) ----------
+// =====================================================================
+const trailGroup = new THREE.Group();   // the mountain and everything on it, hidden while Othello is on the table
+trailGroup.visible = false;
+scene.add(trailGroup);
+const trailRef = ref(db, 'room/trail');
+let trail = null;            // the shared LittleTrail state
+let activeGame = 'othello';  // which game is on the table
+let trailBusy = false;       // dice or pawns are moving
+const SPOTS = 32, START_COINS = 1500, LAP_PAY = 200, GOAL = 10000, MAX_TRAIL = 6;
+
+// Areas climb the mountain: 3 stalls each, prices go up as you climb
+const AREAS = [
+  { name: 'Meadow',         color: '#7cc35a', buy: 100, up: 50,  rent: [10, 40, 120, 300] },
+  { name: 'Pine Forest',    color: '#2e7d4f', buy: 160, up: 80,  rent: [15, 60, 180, 450] },
+  { name: 'Creek Crossing', color: '#3aa0c8', buy: 220, up: 110, rent: [20, 85, 250, 600] },
+  { name: 'Waterfall',      color: '#5b7fe0', buy: 300, up: 150, rent: [30, 120, 350, 800] },
+  { name: 'Cliff Ridge',    color: '#a0703c', buy: 380, up: 190, rent: [40, 160, 450, 1000] },
+  { name: 'Snowline',       color: '#dfe8f0', buy: 460, up: 230, rent: [50, 200, 550, 1200] },
+  { name: 'Alpine Lake',    color: '#2bb7b0', buy: 530, up: 265, rent: [55, 225, 625, 1350] },
+  { name: 'Summit',         color: '#e0b23a', buy: 600, up: 300, rent: [60, 250, 700, 1500] }
+];
+const SPECIALS = {
+  0:  { name: 'Trailhead',      color: '#f5e6b8', desc: 'Start · +200 every lap' },
+  4:  { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
+  8:  { name: 'Ranger Station', color: '#4b6b45', desc: 'Just visiting' },
+  12: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
+  16: { name: 'Hot Spring',     color: '#ff8a65', desc: 'Free rest' },
+  20: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' },
+  24: { name: 'Rockslide',      color: '#77736d', desc: 'Off to the Ranger Station (coming soon)' },
+  28: { name: 'Weather',        color: '#8e5ec9', desc: 'Weather card (coming soon)' }
+};
+function spotInfo(k) {
+  if (SPECIALS[k]) return { ...SPECIALS[k], special: true };
+  const a = AREAS[Math.floor(k / 4)];
+  return { name: a.name, color: a.color, desc: `Buy ${a.buy} · rent from ${a.rent[0]}` };
+}
+
+// ---------- The mountain ----------
+const MTN_R = 0.82, MTN_H = 0.58, MTN_TOP = 0.04;
+function mtnNoise(th, y) {
+  return 0.022 * Math.sin(5 * th + y * 9) + 0.014 * Math.sin(11 * th - y * 17 + 1.3) + 0.008 * Math.sin(23 * th + y * 31);
+}
+function mtnSurfaceR(th, y) {   // how far the rocky surface is from the center at this angle and height
+  return (MTN_R - (MTN_R - MTN_TOP) * (y / MTN_H)) + mtnNoise(th, y) * (1 - 0.7 * y / MTN_H);
+}
+const mountainMesh = (function mountain() {
+  const geo = new THREE.CylinderGeometry(MTN_TOP, MTN_R, MTN_H, 72, 18, false);
+  const pos = geo.attributes.position;
+  const colors = [], c = new THREE.Color();
+  const grass = new THREE.Color(0x4f7d3a), rock = new THREE.Color(0x7d746a), snow = new THREE.Color(0xf2f4f7);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i), yy = pos.getY(i) + MTN_H / 2;
+    const r = Math.hypot(x, z), th = Math.atan2(x, z);
+    if (r > 0.0001) {
+      const nr = mtnSurfaceR(th, yy);
+      pos.setX(i, Math.sin(th) * nr); pos.setZ(i, Math.cos(th) * nr);
+    }
+    const t = yy / MTN_H + 0.06 * Math.sin(th * 7 + yy * 20);
+    if (t < 0.34) c.copy(grass);
+    else if (t < 0.42) c.copy(grass).lerp(rock, (t - 0.34) / 0.08);
+    else if (t < 0.7) c.copy(rock);
+    else if (t < 0.76) c.copy(rock).lerp(snow, (t - 0.7) / 0.06);
+    else c.copy(snow);
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
+  m.position.y = TABLE_Y + MTN_H / 2;
+  m.castShadow = true; m.receiveShadow = true;
+  m.userData.mountain = true;
+  trailGroup.add(m);
+  return m;
+})();
+
+// ---------- The trail: 32 stepping stones spiraling up, evenly spaced ----------
+const spotPos = [];
+(function trailPath() {
+  const N = 600, TURNS = 1.25, TH0 = Math.PI / 8;
+  const samples = [], dist = [0];
+  for (let i = 0; i <= N; i++) {
+    const u = i / N, y = 0.035 + 0.40 * u, th = TH0 + u * TURNS * Math.PI * 2;
+    const r = mtnSurfaceR(th, y) + 0.03;
+    samples.push(new THREE.Vector3(Math.sin(th) * r, TABLE_Y + y, Math.cos(th) * r));
+    if (i) dist.push(dist[i - 1] + samples[i].distanceTo(samples[i - 1]));
+  }
+  let j = 0;
+  for (let k = 0; k < SPOTS; k++) {
+    const target = dist[N] * k / (SPOTS - 1);
+    while (j < N - 1 && dist[j + 1] < target) j++;
+    const f = (target - dist[j]) / ((dist[j + 1] - dist[j]) || 1);
+    spotPos.push(samples[j].clone().lerp(samples[j + 1], f));
+  }
+})();
+
+const spotMeshes = [];
+spotPos.forEach((p, k) => {
+  const info = spotInfo(k);
+  const big = k === 0 || k === SPOTS - 1;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(big ? 0.052 : 0.042, big ? 0.056 : 0.046, 0.016, 24), std(new THREE.Color(info.color), 0.6));
+  m.position.copy(p);
+  m.castShadow = true; m.receiveShadow = true;
+  m.userData.spot = k;
+  trailGroup.add(m);
+  spotMeshes.push(m);
+});
+
+// Dirt path linking the stones
+(function dirtPath() {
+  const curve = new THREE.CatmullRomCurve3(spotPos.map(p => p.clone().add(new THREE.Vector3(0, -0.005, 0))));
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 320, 0.013, 6), std(0xa98a60, 0.95));
+  tube.receiveShadow = true;
+  trailGroup.add(tube);
+})();
+
+// Little pine trees on the lower slopes
+(function trees() {
+  const trunkMat = std(0x5a3a24), leafMat = std(0x2f5d34, 0.9);
+  let placed = 0, tries = 0;
+  while (placed < 26 && tries < 500) {
+    tries++;
+    const th = rnd() * Math.PI * 2, y = 0.03 + rnd() * 0.2;
+    const r = mtnSurfaceR(th, y);
+    const p = new THREE.Vector3(Math.sin(th) * r, TABLE_Y + y, Math.cos(th) * r);
+    if (spotPos.some(s => s.distanceTo(p) < 0.08)) continue;
+    const s = 0.6 + rnd() * 0.6;
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.006 * s, 0.006 * s, 0.03 * s, 6), trunkMat);
+    trunk.position.y = 0.015 * s;
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.03 * s, 0.09 * s, 8), leafMat);
+    cone.position.y = 0.06 * s;
+    cone.castShadow = true;
+    g.add(trunk, cone);
+    g.position.copy(p);
+    trailGroup.add(g);
+    placed++;
+  }
+})();
+
+// Signs over the Trailhead and the Summit
+(function signs() {
+  const a = makeLabel('Trailhead', '#f5e6b8');
+  a.position.copy(spotPos[0]).add(new THREE.Vector3(0, 0.1, 0));
+  a.scale.set(0.32, 0.08, 1);
+  const b = makeLabel('Summit', '#e0b23a');
+  b.position.copy(spotPos[SPOTS - 1]).add(new THREE.Vector3(0, 0.1, 0));
+  b.scale.set(0.32, 0.08, 1);
+  trailGroup.add(a, b);
+})();
+
+// ---------- Chairlift from the Summit back down to the Trailhead ----------
+const liftChairs = [];
+let liftA, liftB;
+(function chairlift() {
+  const metal = std(0x3a3a3a, 0.5, { metalness: 0.5 });
+  const top = spotPos[SPOTS - 1].clone().multiplyScalar(0.55); top.y = spotPos[SPOTS - 1].y;
+  const baseAng = Math.PI / 8 - 0.2;
+  const bottom = new THREE.Vector3(Math.sin(baseAng) * 0.88, TABLE_Y, Math.cos(baseAng) * 0.88);
+  function pole(p, h) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, h, 8), metal);
+    m.position.set(p.x, p.y + h / 2, p.z);
+    m.castShadow = true;
+    trailGroup.add(m);
+    return new THREE.Vector3(p.x, p.y + h, p.z);
+  }
+  liftA = pole(top, 0.16);
+  liftB = pole(bottom, 0.3);
+  const dir = new THREE.Vector3().subVectors(liftB, liftA);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, dir.length(), 6), std(0x222222, 0.5));
+  cable.position.copy(liftA).add(liftB).multiplyScalar(0.5);
+  cable.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
+  trailGroup.add(cable);
+  for (let i = 0; i < 3; i++) {
+    const chair = new THREE.Group();
+    const hanger = new THREE.Mesh(new THREE.CylinderGeometry(0.002, 0.002, 0.03, 4), metal);
+    hanger.position.y = -0.015;
+    const seatBox = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.02), std(0xc0392b, 0.6));
+    seatBox.position.y = -0.032;
+    chair.add(hanger, seatBox);
+    trailGroup.add(chair);
+    liftChairs.push({ g: chair, t: i / 3 });
+  }
+})();
+function updateLift(dt) {
+  for (const c of liftChairs) {
+    c.t = (c.t + dt * 0.05) % 1;
+    c.g.position.copy(liftA).lerp(liftB, c.t);
+  }
+}
+
+// ---------- Pawns ----------
+const pawns = {};   // id -> { g, c, anim }
+function makePawn(c) {
+  const g = new THREE.Group();
+  const mat = std(new THREE.Color(RAINBOW[c]), 0.5);
+  const body = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.05, 16), mat);
+  body.position.y = 0.025;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.013, 16, 12), mat);
+  head.position.y = 0.056;
+  body.castShadow = head.castShadow = true;
+  g.add(body, head);
+  trailGroup.add(g);
+  return g;
+}
+function pawnSpotPos(k, rank) {   // several pawns on one stone stand in a little ring
+  const p = spotPos[k].clone();
+  p.y += 0.008;
+  const ang = rank * Math.PI / 3;
+  p.x += Math.sin(ang) * 0.02; p.z += Math.cos(ang) * 0.02;
+  return p;
+}
+
+// ---------- Players and turns ----------
+function trailIds(t = trail) {
+  return Object.entries((t && t.players) || {}).sort((a, b) => a[1].order - b[1].order).map(([id]) => id);
+}
+function validTrailIds(t = trail) { return trailIds(t).filter(id => presence[id]); }
+function nextAfter(t, id) {
+  const all = trailIds(t);
+  const i = all.indexOf(id);
+  for (let k = 1; k <= all.length; k++) {
+    const cand = all[(i + k + all.length) % all.length];
+    if (presence[cand] && cand !== id) return cand;
+  }
+  return '';
+}
+function effectiveTurn(t = trail) {   // whose turn it really is (skips anyone who left)
+  if (!t || t.phase !== 'play') return '';
+  const ids = validTrailIds(t);
+  if (!ids.length) return '';
+  if (ids.includes(t.turn)) return t.turn;
+  return nextAfter(t, t.turn) || ids[0];
+}
+
+function syncPawns() {
+  const ids = validTrailIds();
+  const players = (trail && trail.players) || {};
+  for (const id of Object.keys(pawns)) {
+    if (!ids.includes(id) || colorIndex(players[id]) !== pawns[id].c) {
+      trailGroup.remove(pawns[id].g);
+      delete pawns[id];
+    }
+  }
+  ids.forEach((id, rank) => {
+    if (!pawns[id]) {
+      const c = colorIndex(players[id]);
+      pawns[id] = { g: makePawn(c), c, anim: null };
+      pawns[id].g.position.copy(pawnSpotPos(players[id].pos || 0, rank));
+    }
+  });
+}
+function placeAllPawns() {
+  const players = (trail && trail.players) || {};
+  validTrailIds().forEach((id, rank) => {
+    if (pawns[id]) { pawns[id].anim = null; pawns[id].g.position.copy(pawnSpotPos(players[id].pos || 0, rank)); }
+  });
+}
+
+// ---------- Dice ----------
+const PIPS = {
+  1: [[0.5, 0.5]],
+  2: [[0.28, 0.28], [0.72, 0.72]],
+  3: [[0.28, 0.28], [0.5, 0.5], [0.72, 0.72]],
+  4: [[0.28, 0.28], [0.72, 0.28], [0.28, 0.72], [0.72, 0.72]],
+  5: [[0.28, 0.28], [0.72, 0.28], [0.5, 0.5], [0.28, 0.72], [0.72, 0.72]],
+  6: [[0.28, 0.25], [0.72, 0.25], [0.28, 0.5], [0.72, 0.5], [0.28, 0.75], [0.72, 0.75]]
+};
+const FACE_NORMAL = { 1: [0, 1, 0], 6: [0, -1, 0], 3: [1, 0, 0], 4: [-1, 0, 0], 2: [0, 0, 1], 5: [0, 0, -1] };
+const diceMats = [3, 4, 1, 6, 2, 5].map(n => std(0xffffff, 0.4, { map: paintTexture(128, 128, (g, w, h) => {
+  g.fillStyle = '#f6f1e4'; g.fillRect(0, 0, w, h);
+  g.fillStyle = n === 1 ? '#b3261e' : '#222222';
+  for (const [x, y] of PIPS[n]) { g.beginPath(); g.arc(x * w, y * h, n === 1 ? 14 : 11, 0, Math.PI * 2); g.fill(); }
+}) }));
+const DIE = 0.055;
+const dice = [0, 1].map(() => {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(DIE, DIE, DIE), diceMats);
+  m.castShadow = true;
+  m.visible = false;
+  trailGroup.add(m);
+  return m;
+});
+function diceFinalQuat(v, yaw) {
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(...FACE_NORMAL[v]), new THREE.Vector3(0, 1, 0));
+  return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw).multiply(q);
+}
+let rollAnim = null;
+function startRoll(t) {
+  const mover = t.players[t.mover];
+  const ids = validTrailIds(t);
+  const a = seatAngle(mover.seat >= 0 ? mover.seat : 0);
+  if (pawns[t.mover]) pawns[t.mover].g.position.copy(pawnSpotPos(t.from, ids.indexOf(t.mover)));   // start from where they were
+  rollAnim = { t: 0, dur: 0.9, items: [] };
+  [-0.33, 0.33].forEach((off, i) => {
+    const ang = a + off;
+    const land = new THREE.Vector3(Math.sin(ang) * 0.91, TABLE_Y + DIE / 2, Math.cos(ang) * 0.91);
+    const start = land.clone().multiplyScalar(1.06); start.y = land.y + 0.35;
+    const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+    rollAnim.items.push({ mesh: dice[i], start, land, qFinal: diceFinalQuat(t.dice[i], Math.random() * Math.PI * 2), axis });
+    dice[i].visible = true;
+  });
+  rollAnim.after = () => startHop(t);
+}
+function startHop(t) {
+  const pw = pawns[t.mover];
+  if (!pw) { trailBusy = false; placeAllPawns(); refreshTrailUI(); return; }
+  const path = [];
+  for (let s = 1; s <= t.steps; s++) path.push((t.from + s) % SPOTS);
+  pw.anim = { path, i: 0, t: 0, prev: t.from, rank: validTrailIds(t).indexOf(t.mover) };
+}
+function finishTrailAnims() {
+  if (rollAnim) {
+    for (const it of rollAnim.items) { it.mesh.position.copy(it.land); it.mesh.quaternion.copy(it.qFinal); }
+    rollAnim = null;
+  }
+  for (const id of Object.keys(pawns)) pawns[id].anim = null;
+  trailBusy = false;
+}
+function updateTrailAnims(dt) {
+  if (rollAnim) {
+    rollAnim.t += dt;
+    const p = Math.min(rollAnim.t / rollAnim.dur, 1);
+    for (const it of rollAnim.items) {
+      it.mesh.position.lerpVectors(it.start, it.land, easeInOut(p));
+      it.mesh.position.y = it.land.y + 0.35 * Math.pow(1 - p, 2) + Math.abs(Math.sin(p * Math.PI * 3)) * 0.03 * (1 - p);
+      it.mesh.quaternion.setFromAxisAngle(it.axis, Math.pow(1 - p, 2) * 14).multiply(it.qFinal);
+    }
+    if (p >= 1) { const after = rollAnim.after; rollAnim = null; after(); }
+  }
+  for (const id of Object.keys(pawns)) {
+    const pw = pawns[id], a = pw.anim;
+    if (!a) continue;
+    const next = a.path[a.i];
+    const lift = a.prev === SPOTS - 1 && next === 0;          // the chairlift ride down
+    const dur = lift ? 1.2 : 0.22;
+    a.t += dt;
+    const p = Math.min(a.t / dur, 1);
+    const from = pawnSpotPos(a.prev, a.rank), to = pawnSpotPos(next, a.rank);
+    pw.g.position.lerpVectors(from, to, lift ? easeInOut(p) : p);
+    pw.g.position.y += Math.sin(p * Math.PI) * (lift ? 0.14 : 0.04);
+    if (p >= 1) {
+      a.prev = next; a.i++; a.t = 0;
+      if (a.i >= a.path.length) { pw.anim = null; trailBusy = false; placeAllPawns(); refreshTrailUI(); }
+    }
+  }
+  updateLift(dt);
+  updateTrailCounters(dt);
+}
+
+// ---------- Coin counters in front of each player ----------
+const trailCounters = {};   // id -> counter
+const TRAIL_CNT_DIST = 0.945;
+function refreshTrailCounters() {
+  const players = (trail && trail.players) || {};
+  const ids = validTrailIds();
+  for (const id of ids) {
+    const seat = players[id].seat;
+    if (!trailCounters[id]) trailCounters[id] = makeCounter(31, 0.24, trailGroup);
+    const cnt = trailCounters[id];
+    if (seat >= 0 && (!cnt.active || cnt.seat !== seat)) placeCounter(cnt, seat, TRAIL_CNT_DIST);
+  }
+  for (const id of Object.keys(trailCounters)) {
+    if (!ids.includes(id) && trailCounters[id].active) sinkCounterObj(trailCounters[id]);
+  }
+}
+function updateTrailCounters(dt) {
+  const players = (trail && trail.players) || {};
+  for (const id of Object.keys(trailCounters)) {
+    const cnt = trailCounters[id];
+    if (cnt.outer.visible && players[id]) drawCounter(cnt, players[id].coins || 0);
+    animateCounter(cnt, dt);
+  }
+}
+
+// ---------- Applying the shared state ----------
+function applyTrail(t) {
+  const prev = trail;
+  trail = t || { phase: 'lobby', rollNo: 0 };
+  syncPawns();
+  const players = trail.players || {};
+  const isNextRoll = prev && trail.rollNo === (prev.rollNo || 0) + 1 && trail.mover && players[trail.mover] && trail.dice;
+  if (isNextRoll && activeGame === 'trail') {
+    finishTrailAnims();
+    trailBusy = true;
+    startRoll(trail);
+  } else if (!trailBusy) {
+    placeAllPawns();
+  }
+  refreshTrailUI();
+  refreshTrailCounters();
+}
+
+// ---------- Actions ----------
+function trailJoinLeave() {
+  if (!trail) return;
+  if (trail.players && trail.players[myId]) {
+    runTransaction(trailRef, t => {
+      if (!t || !t.players || !t.players[myId]) return;
+      if (t.phase === 'play' && effectiveTurn(t) === myId) t.turn = nextAfter(t, myId);
+      delete t.players[myId];
+      return t;
+    });
+    return;
+  }
+  if (seated < 0) return;
+  const seat = seated;
+  runTransaction(trailRef, t => {
+    t = t || { phase: 'lobby', rollNo: 0 };
+    if (t.phase === 'play') return;
+    t.players = t.players || {};
+    for (const id of Object.keys(t.players)) if (!presence[id]) delete t.players[id];   // tidy up people who left
+    if (Object.keys(t.players).length >= MAX_TRAIL) return;
+    t.players[myId] = { seat, pos: 0, coins: START_COINS, order: Date.now(), c: myHue, name: myName };
+    if (t.phase === 'over') t.phase = 'lobby';
+    return t;
+  });
+}
+function trailStart() {
+  runTransaction(trailRef, t => {
+    if (!t || t.phase === 'play' || !t.players || !t.players[myId]) return;
+    for (const id of Object.keys(t.players)) if (!presence[id]) delete t.players[id];
+    const ids = trailIds(t);
+    if (ids.length < 2) return;
+    ids.forEach(id => { t.players[id].pos = 0; t.players[id].coins = START_COINS; });
+    t.phase = 'play'; t.turn = ids[0]; t.winner = ''; t.mover = ''; t.passed = false;
+    delete t.dice;
+    return t;
+  });
+}
+function trailEnd() {
+  runTransaction(trailRef, t => {
+    if (!t || !t.players || !t.players[myId]) return;
+    for (const id of Object.keys(t.players)) { t.players[id].pos = 0; t.players[id].coins = START_COINS; }
+    t.phase = 'lobby'; t.turn = ''; t.mover = ''; t.winner = '';
+    delete t.dice;
+    return t;
+  });
+}
+function trailRoll() {
+  if (trailBusy || effectiveTurn() !== myId) return;
+  runTransaction(trailRef, t => {
+    if (!t || t.phase !== 'play' || effectiveTurn(t) !== myId) return;
+    const p = t.players[myId];
+    const a = 1 + Math.floor(Math.random() * 6), b = 1 + Math.floor(Math.random() * 6);
+    const from = p.pos || 0, raw = from + a + b;
+    const passed = raw >= SPOTS;
+    p.pos = raw % SPOTS;
+    if (passed) p.coins = (p.coins || 0) + LAP_PAY;
+    t.dice = [a, b]; t.rollNo = (t.rollNo || 0) + 1; t.mover = myId; t.from = from; t.steps = a + b; t.passed = passed;
+    if (p.coins >= GOAL) { t.phase = 'over'; t.winner = myId; }
+    else t.turn = nextAfter(t, myId) || myId;
+    return t;
+  });
+}
+
+// ---------- LittleTrail panel ----------
+const tStatus = document.getElementById('tStatus');
+const tPlayers = document.getElementById('tPlayers');
+const tInfo = document.getElementById('tInfo');
+const tJoin = document.getElementById('tJoin');
+const tStart = document.getElementById('tStart');
+const tRoll = document.getElementById('tRoll');
+const tEnd = document.getElementById('tEnd');
+tJoin.addEventListener('click', trailJoinLeave);
+tStart.addEventListener('click', trailStart);
+tRoll.addEventListener('click', trailRoll);
+tEnd.addEventListener('click', trailEnd);
+
+function refreshTrailUI() {
+  if (!trail) return;
+  const ids = validTrailIds();
+  const players = trail.players || {};
+  const me = !!(players[myId] && presence[myId]);
+  const turnId = effectiveTurn();
+  let st;
+  if (trail.phase === 'play') {
+    if (ids.length < 2) st = 'Not enough players left · click End game to go back';
+    else {
+      const last = trail.mover && players[trail.mover] && trail.dice
+        ? `${players[trail.mover].name} rolled ${trail.dice[0]} + ${trail.dice[1]}${trail.passed ? ', passed the Trailhead (+200)' : ''}. ` : '';
+      st = last + (turnId === myId ? 'Your turn! Roll the dice' : `${players[turnId] ? players[turnId].name : '…'}'s turn`);
+    }
+  } else if (trail.phase === 'over') {
+    st = `${players[trail.winner] ? players[trail.winner].name : 'Someone'} reached ${GOAL.toLocaleString()} coins and wins!`;
+  } else {
+    st = ids.length >= 2 ? `${ids.length} players ready · a player can click Start` : 'Sit in a chair and click Join (2–6 players)';
+  }
+  tStatus.textContent = st;
+
+  tPlayers.textContent = '';
+  ids.forEach(id => {
+    const p = players[id];
+    const div = document.createElement('div');
+    const dot = document.createElement('span');
+    dot.textContent = '● ';
+    dot.style.color = RAINBOW_CSS[colorIndex(p)];
+    div.appendChild(dot);
+    div.appendChild(document.createTextNode(`${trail.phase === 'play' && id === turnId ? '▶ ' : ''}${p.name}${id === myId ? ' (you)' : ''} · ${(p.coins || 0).toLocaleString()} · ${spotInfo(p.pos || 0).name}`));
+    tPlayers.appendChild(div);
+  });
+
+  tJoin.style.display = (seated >= 0 || me) && !boardView ? '' : 'none';
+  tJoin.textContent = me ? 'Leave game' : trail.phase === 'play' ? 'Game in progress' : ids.length >= MAX_TRAIL ? 'Game full' : 'Join game';
+  tJoin.disabled = !me && (trail.phase === 'play' || ids.length >= MAX_TRAIL);
+  tStart.style.display = me && trail.phase !== 'play' && ids.length >= 2 ? '' : 'none';
+  tRoll.style.display = me && trail.phase === 'play' ? '' : 'none';
+  tRoll.disabled = !(turnId === myId && !trailBusy && ids.length >= 2);
+  tEnd.style.display = me && trail.phase !== 'lobby' ? '' : 'none';
+}
+
+// ---------- Switching which game is on the table ----------
+const swOthello = document.getElementById('swOthello');
+const swTrail = document.getElementById('swTrail');
+function tableIsFree() {
+  return !(validPlayer(1) || validPlayer(2)) && validTrailIds().length === 0;
+}
+function refreshSwitch() {
+  swOthello.classList.toggle('on', activeGame === 'othello');
+  swTrail.classList.toggle('on', activeGame === 'trail');
+  const free = tableIsFree();
+  swOthello.disabled = activeGame !== 'othello' && !free;
+  swTrail.disabled = activeGame !== 'trail' && !free;
+}
+function switchTo(name) {
+  if (name === activeGame || !tableIsFree()) return;
+  set(ref(db, 'room/active'), name);
+}
+swOthello.addEventListener('click', () => switchTo('othello'));
+swTrail.addEventListener('click', () => switchTo('trail'));
+function applyActive(name) {
+  activeGame = name === 'trail' ? 'trail' : 'othello';
+  othelloGroup.visible = activeGame === 'othello';
+  trailGroup.visible = activeGame === 'trail';
+  document.getElementById('othelloUI').style.display = activeGame === 'othello' ? '' : 'none';
+  document.getElementById('trailUI').style.display = activeGame === 'trail' ? '' : 'none';
+  if (activeGame !== 'trail') finishTrailAnims();
+  refreshAll();
+}
+
 function refreshAll() {
   refreshPanel();
   refreshCounters();
   refreshAvatars();
   refreshWho();
+  syncPawns();
+  if (!trailBusy) placeAllPawns();
+  refreshTrailUI();
+  refreshTrailCounters();
+  refreshSwitch();
 }
 
 // ---------- Chat ----------
@@ -1021,6 +1594,25 @@ function addMsg(name, text, mine, c) {
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   if (!mine && !document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
+}
+function addSys(text, c) {   // grey line in chat, like "Sam joined the room"
+  const div = document.createElement('div');
+  div.className = 'sys';
+  const dot = document.createElement('span');
+  dot.textContent = '● ';
+  if (Number.isInteger(c) && c >= 0 && c < 7) dot.style.color = RAINBOW_CSS[c];
+  div.appendChild(dot);
+  div.appendChild(document.createTextNode(text));
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+function logJoinsLeaves(before, after) {
+  for (const [id, p] of Object.entries(after)) {
+    if (id !== myId && !before[id]) addSys(`${p.name} joined the room`, colorIndex(p));
+  }
+  for (const [id, p] of Object.entries(before)) {
+    if (id !== myId && !after[id]) addSys(`${p.name} left the room`, colorIndex(p));
+  }
 }
 function sendChat() {
   const text = chatInput.value.trim();
@@ -1076,7 +1668,21 @@ function enterRoom() {
       connEl.textContent = 'Reconnecting…';
     }
   });
-  onValue(ref(db, 'room/presence'), s => { presence = s.val() || {}; refreshAll(); });
+  let firstPresence = true;
+  onValue(ref(db, 'room/presence'), s => {
+    const next = s.val() || {};
+    if (!firstPresence) logJoinsLeaves(presence, next);   // the first list is just who's already here
+    firstPresence = false;
+    presence = next;
+    refreshAll();
+  });
+
+  // Which game is on the table, and the shared LittleTrail game
+  onValue(ref(db, 'room/active'), s => applyActive(s.val()));
+  get(trailRef).then(s => {
+    if (!s.exists()) set(trailRef, { phase: 'lobby', rollNo: 0 });
+  });
+  onValue(trailRef, s => applyTrail(s.val()));
 
   // The shared game: create it the first time anyone ever visits
   get(gameRef).then(s => {
@@ -1114,6 +1720,8 @@ let yaw = 0, pitch = 0;
 const baseQuat = new THREE.Quaternion();
 const savedView = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
 const boardSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
+const mtnView = { pos: new THREE.Vector3(), yaw: 0 };
+const MTN_TARGET = new THREE.Vector3(0, TABLE_Y + 0.2, 0);
 
 function seatEye(i) {
   const a = seatAngle(i);
@@ -1146,6 +1754,7 @@ function sit(i) {
   setMySeat(i);
   const mine = myColor();
   if (mine) update(gameRef, { ['s' + mine]: i });   // your counter follows you to your new seat
+  if (trail && trail.players && trail.players[myId]) update(ref(db, 'room/trail/players/' + myId), { seat: i });
   refreshPanel();
 }
 
@@ -1174,10 +1783,17 @@ function toggleBoardView() {
     const side = new THREE.Vector3();
     if (seated >= 0) { const a = seatAngle(seated); side.set(Math.sin(a), 0, Math.cos(a)); }
     else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
-    const pos = side.clone().multiplyScalar(0.85);
-    pos.y = BOARD_TOP + 1.0;
     setFov(BASE_FOV);
-    moveCamera(pos, lookQuat(pos, new THREE.Vector3(0, BOARD_TOP, 0)), null);
+    if (activeGame === 'trail') {
+      // Up above the mountain, drag left and right to walk around it
+      mtnView.pos.copy(side).multiplyScalar(1.15); mtnView.pos.y = TABLE_Y + 1.5;
+      mtnView.yaw = 0;
+      moveCamera(mtnView.pos.clone(), lookQuat(mtnView.pos, MTN_TARGET), null);
+    } else {
+      const pos = side.clone().multiplyScalar(0.85);
+      pos.y = BOARD_TOP + 1.0;
+      moveCamera(pos, lookQuat(pos, new THREE.Vector3(0, BOARD_TOP, 0)), null);
+    }
     boardView = true;
     boardBtn.textContent = seated >= 0 ? 'Back to seat' : 'Back';
     standBtn.style.display = 'none';
@@ -1219,9 +1835,12 @@ let lastX = 0, lastY = 0;
 function pickUnder(e) {
   pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects([...chairs, felt], true);
+  const targets = activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes] : [...chairs, felt];
+  const hits = raycaster.intersectObjects(targets, true);
   if (!hits.length) return null;
   const h = hits[0];
+  if (h.object.userData.spot !== undefined) return { spot: h.object.userData.spot };
+  if (h.object.userData.mountain) return null;
   if (h.object.userData.isBoard) {
     const c = Math.floor((h.point.x + HALF) / CELL);
     const r = Math.floor((h.point.z + HALF) / CELL);
@@ -1230,6 +1849,12 @@ function pickUnder(e) {
   }
   if (boardView) return null;
   return { chair: h.object.userData.chair };
+}
+function showSpotInfo(k) {
+  if (k < 0) { tInfo.textContent = 'Point at a trail stone to see what it is'; return; }
+  const info = spotInfo(k);
+  const here = validTrailIds().filter(id => (trail.players[id].pos || 0) === k).map(id => trail.players[id].name);
+  tInfo.textContent = `#${k} ${info.name} · ${info.desc}${here.length ? ' · here: ' + here.join(', ') : ''}`;
 }
 function setHover(chair) {
   if (hovered === chair) return;
@@ -1262,6 +1887,9 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
+  if (down && boardView && activeGame === 'trail' && !anim) {
+    mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the mountain
+  }
   if (down && seated >= 0 && !boardView && !anim) {
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
     yaw += (e.clientX - lastX) * k;
@@ -1277,12 +1905,14 @@ window.addEventListener('pointermove', e => {
     setHover(chair);
     const legal = p && p.cell !== undefined && myTurn() && flipsFor(cells, p.cell, game.turn).length > 0;
     canvas.style.cursor = (chair || legal) ? 'pointer' : 'grab';
+    if (activeGame === 'trail' && trail) showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
 window.addEventListener('pointerup', e => {
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
     if (p && p.cell !== undefined) play(p.cell);
+    else if (p && p.spot !== undefined) showSpotInfo(p.spot);
     else if (p && p.chair && p.chair.userData.seat !== seated) { setHover(null); sit(p.chair.userData.seat); }
   }
   down = null;
@@ -1314,7 +1944,10 @@ renderer.setAnimationLoop(() => {
     camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
   } else if (boardView) {
-    // camera stays put looking down at the board
+    if (activeGame === 'trail') {   // circle the mountain as you drag
+      camera.position.copy(mtnView.pos).applyAxisAngle(new THREE.Vector3(0, 1, 0), mtnView.yaw);
+      camera.quaternion.copy(lookQuat(camera.position, MTN_TARGET));
+    }
   } else if (seated >= 0) {
     lookEuler.set(pitch, yaw, 0);
     look.setFromEuler(lookEuler);
@@ -1324,6 +1957,7 @@ renderer.setAnimationLoop(() => {
   }
   updateDiscAnims(dt);
   updateCounters(dt);
+  updateTrailAnims(dt);
   updateClock();
   updateSky();
   renderer.render(scene, camera);
