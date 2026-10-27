@@ -336,12 +336,63 @@ for (let i = 0; i < SEATS; i++) makeChair(i);
   scene.add(shelf);
 })();
 
-// ---------- Window with night sky ----------
-(function windowAndMoon() {
+// ---------- Window whose sky follows your own clock ----------
+const skyCanvas = document.createElement('canvas');
+skyCanvas.width = 256; skyCanvas.height = 192;
+const skyCtx = skyCanvas.getContext('2d');
+const skyTex = new THREE.CanvasTexture(skyCanvas);
+skyTex.colorSpace = THREE.SRGBColorSpace;
+const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
+const windowLight = new THREE.DirectionalLight(0x8fa8ff, 0.35);
+windowLight.position.set(-8, 4, 1.2);
+windowLight.target.position.set(0, 0, 0);
+scene.add(windowLight, windowLight.target);
+
+const SKY = {
+  night: { top: '#050b1f', bottom: '#0d1d45', light: 0x8fa8ff, power: 0.35 },
+  dawn:  { top: '#2b4f8f', bottom: '#ff9e6b', light: 0xffb27a, power: 0.5 },
+  day:   { top: '#3d8fe0', bottom: '#a9d8ff', light: 0xfff4e0, power: 0.8 },
+  dusk:  { top: '#3a2a6b', bottom: '#ff7a45', light: 0xff9a6a, power: 0.5 }
+};
+let lastSkyMinute = -1;
+function updateSky() {
+  const now = new Date();
+  const minute = now.getHours() * 60 + now.getMinutes();
+  if (minute === lastSkyMinute) return;          // only redraw once a minute
+  lastSkyMinute = minute;
+  const h = minute / 60;
+  const phase = (h < 5 || h >= 21) ? 'night' : h < 7 ? 'dawn' : h < 17.5 ? 'day' : 'dusk';
+  const s = SKY[phase], g = skyCtx, W = 256, H = 192;
+  const grad = g.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, s.top); grad.addColorStop(1, s.bottom);
+  g.fillStyle = grad; g.fillRect(0, 0, W, H);
+  if (phase === 'night') {
+    g.fillStyle = '#ffffff';
+    for (const [x, y, b] of STARS) { g.globalAlpha = 0.35 + b * 0.65; g.fillRect(x * W, y * H, 1 + b * 1.5, 1 + b * 1.5); }
+    g.globalAlpha = 1;
+    const p = ((h < 5 ? h + 24 : h) - 21) / 8;   // moon crosses the window through the night
+    const mx = W * (0.15 + 0.7 * p), my = H * (0.6 - 0.4 * Math.sin(p * Math.PI));
+    g.fillStyle = '#f4f1d0'; g.beginPath(); g.arc(mx, my, 15, 0, Math.PI * 2); g.fill();
+    g.fillStyle = s.top; g.beginPath(); g.arc(mx + 7, my - 4, 13, 0, Math.PI * 2); g.fill();   // crescent
+  } else {
+    const p = (h - 5) / 16;                       // sun crosses from dawn to dusk
+    const sx = W * (0.1 + 0.8 * p), sy = H * (0.85 - 0.6 * Math.sin(p * Math.PI));
+    const glow = g.createRadialGradient(sx, sy, 4, sx, sy, 45);
+    glow.addColorStop(0, 'rgba(255,240,180,0.9)'); glow.addColorStop(1, 'rgba(255,240,180,0)');
+    g.fillStyle = glow; g.fillRect(0, 0, W, H);
+    g.fillStyle = phase === 'day' ? '#fff6c8' : '#ffcf6b';
+    g.beginPath(); g.arc(sx, sy, 16, 0, Math.PI * 2); g.fill();
+  }
+  skyTex.needsUpdate = true;
+  windowLight.color.setHex(s.light);
+  windowLight.intensity = s.power;
+}
+updateSky();
+
+(function windowFrame() {
   const g = new THREE.Group();
   const frame = std(0xe8dcc4, 0.6);
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2),
-    new THREE.MeshStandardMaterial({ color: 0x0b1a33, emissive: 0x16305c, emissiveIntensity: 0.6 }));
+  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), new THREE.MeshBasicMaterial({ map: skyTex }));
   g.add(glass);
   box(1.75, 0.08, 0.06, frame, 0, 0.64, 0, g);
   box(1.75, 0.08, 0.06, frame, 0, -0.64, 0, g);
@@ -353,12 +404,61 @@ for (let i = 0; i < SEATS; i++) makeChair(i);
   g.position.set(-ROOM / 2 + 0.02, 1.7, 1.2);
   g.rotation.y = Math.PI / 2;
   scene.add(g);
-
-  const moon = new THREE.DirectionalLight(0x8fa8ff, 0.35);
-  moon.position.set(-8, 4, 2);
-  moon.target.position.set(0, 0, 0);
-  scene.add(moon, moon.target);
 })();
+
+// ---------- Wall clock (real local time), on the wall across from the window ----------
+const clockHands = {};
+(function wallClock() {
+  const g = new THREE.Group();
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.06, 48), std(0x3e2716, 0.6));
+  rim.rotation.x = Math.PI / 2;
+  rim.castShadow = true;
+  g.add(rim);
+  const faceTex = paintTexture(256, 256, (c, w, h) => {
+    c.fillStyle = '#f3e6cf'; c.beginPath(); c.arc(128, 128, 128, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#2a1c10';
+    for (let i = 0; i < 60; i++) {
+      const a = (i / 60) * Math.PI * 2, big = i % 5 === 0;
+      c.save(); c.translate(128, 128); c.rotate(a);
+      c.fillRect(big ? -3 : -1, -118, big ? 6 : 2, big ? 16 : 7);
+      c.restore();
+    }
+    c.font = 'bold 28px Georgia'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    for (let n = 1; n <= 12; n++) {
+      const a = (n / 12) * Math.PI * 2;
+      c.fillText(String(n), 128 + Math.sin(a) * 82, 128 - Math.cos(a) * 82);
+    }
+  });
+  const face = new THREE.Mesh(new THREE.CircleGeometry(0.29, 48), std(0xffffff, 0.8, { map: faceTex }));
+  face.position.z = 0.031;
+  g.add(face);
+  function hand(len, width, color, z) {
+    const geo = new THREE.BoxGeometry(width, len, 0.006);
+    geo.translate(0, len / 2 - 0.03, 0);         // turns around the clock's center
+    const m = new THREE.Mesh(geo, std(color, 0.5));
+    m.position.z = z;
+    g.add(m);
+    return m;
+  }
+  clockHands.hour = hand(0.15, 0.022, 0x2a1c10, 0.036);
+  clockHands.minute = hand(0.23, 0.014, 0x2a1c10, 0.042);
+  clockHands.second = hand(0.25, 0.005, 0xc0392b, 0.048);
+  const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.02, 16), std(0x2a1c10, 0.5));
+  pin.rotation.x = Math.PI / 2; pin.position.z = 0.05;
+  g.add(pin);
+  g.position.set(ROOM / 2 - 0.04, 2.0, 1.2);
+  g.rotation.y = -Math.PI / 2;
+  scene.add(g);
+})();
+function updateClock() {
+  const d = new Date();
+  const s = d.getSeconds() + d.getMilliseconds() / 1000;
+  const m = d.getMinutes() + s / 60;
+  const h = (d.getHours() % 12) + m / 60;
+  clockHands.second.rotation.z = -(s / 60) * Math.PI * 2;
+  clockHands.minute.rotation.z = -(m / 60) * Math.PI * 2;
+  clockHands.hour.rotation.z = -(h / 12) * Math.PI * 2;
+}
 
 // ---------- Pictures on the wall ----------
 (function pictures() {
@@ -372,7 +472,7 @@ for (let i = 0; i < SEATS; i++) makeChair(i);
     box(0.75, 0.95, 0.04, std(0x2e1d12, 0.6), 0, 0, 0, pic);
     const canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.82), std(0xffffff, 0.9, { map: art }));
     canvasMesh.position.z = 0.025; pic.add(canvasMesh);
-    pic.position.set(ROOM / 2 - 0.03, 1.9, -1.2 + i * 1.6);
+    pic.position.set(ROOM / 2 - 0.03, 1.9, -2.0 + i * 1.1);
     pic.rotation.y = -Math.PI / 2;
     scene.add(pic);
   });
@@ -784,16 +884,22 @@ const RAINBOW = [0xe53935, 0xfb8c00, 0xfdd835, 0x43a047, 0x1e88e5, 0x3949ab, 0x8
 const RAINBOW_CSS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#3949ab', '#8e24aa'];
 function colorIndex(p) { return Number.isInteger(p.c) && p.c >= 0 && p.c < 7 ? p.c : 0; }
 function nameColor(c) { return new THREE.Color(RAINBOW[c]); }
-function makeLabel(text) {
+function makeLabel(text, color) {
+  // Name in the person's rainbow color with a thin white outline and a soft shadow, no box behind it
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
   const g = c.getContext('2d');
-  g.font = 'bold 32px Georgia';
-  const w = Math.min(250, g.measureText(text).width + 28);
-  g.fillStyle = 'rgba(30,20,12,0.8)';
-  g.fillRect((256 - w) / 2, 8, w, 48);
-  g.fillStyle = '#f3e6cf'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillText(text, 128, 33);
+  let size = 34;
+  g.font = `bold ${size}px Georgia`;
+  while (g.measureText(text).width > 236 && size > 16) { size -= 2; g.font = `bold ${size}px Georgia`; }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineJoin = 'round'; g.lineWidth = 5;
+  g.shadowColor = 'rgba(0,0,0,0.6)'; g.shadowBlur = 6;
+  g.strokeStyle = 'rgba(255,255,255,0.95)';
+  g.strokeText(text, 128, 32);
+  g.shadowBlur = 0;
+  g.fillStyle = color;
+  g.fillText(text, 128, 32);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true }));
@@ -811,16 +917,18 @@ function makeAvatar(name, c) {
     b.castShadow = true;
     g.add(b);
   }
-  // Simple stick arms angled up and out from the middle ball
-  const stick = std(0x4a2f1d, 0.9);
+  // Solid arms in the body color, reaching forward so the hands rest on the table
   for (const side of [-1, 1]) {
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.015, 0.32, 8), stick);
-    arm.position.set(side * 0.27, 1.08, 0);
-    arm.rotation.z = side * -1.0;
+    const from = new THREE.Vector3(side * 0.15, 1.06, -0.03);   // shoulder on the middle ball
+    const to = new THREE.Vector3(side * 0.2, 0.825, -0.4);      // hand resting on the tabletop
+    const dir = new THREE.Vector3().subVectors(to, from);
+    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, dir.length(), 6, 12), mat);
+    arm.position.copy(from).add(to).multiplyScalar(0.5);
+    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
     arm.castShadow = true;
     g.add(arm);
   }
-  const label = makeLabel(name);
+  const label = makeLabel(name, RAINBOW_CSS[c]);
   label.position.y = 1.56;
   g.add(label);
   scene.add(g);
@@ -839,7 +947,7 @@ function refreshAvatars() {
     if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const a = seatAngle(p.seat);
     avatars[id].g.position.set(Math.sin(a) * (CHAIR_R + 0.03), 0, Math.cos(a) * (CHAIR_R + 0.03));
-    avatars[id].g.rotation.y = a;   // arms point left and right, not at the table
+    avatars[id].g.rotation.y = a;   // turned so the arms reach toward the table
   }
 }
 function seatTakenByOther(s) {
@@ -1189,6 +1297,8 @@ renderer.setAnimationLoop(() => {
   }
   updateDiscAnims(dt);
   updateCounters(dt);
+  updateClock();
+  updateSky();
   renderer.render(scene, camera);
 });
 </script>
