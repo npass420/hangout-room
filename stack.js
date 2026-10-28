@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { ref, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, serverNow, scene, TABLE_Y, seatAngle, paintTexture, std, RAINBOW_CSS, colorIndex } from './core.js';
 import { sfx } from './sounds.js';
+// Play a sound without ever letting a sound problem break the game
+function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[name](...args); } catch (e) { console.warn('LittleStack sound', e); } }
 
 export const stackGroup = new THREE.Group();   // the tower, hidden while another game is on the table
 stackGroup.visible = false;
@@ -19,7 +21,7 @@ let losses = {};      // name -> how many times they knocked the tower over
 // ---------- Sizes and odds ----------
 const LEVELS = 18, N = LEVELS * 3, MAX_STACK = 8;
 const BL = 0.135, BW = 0.045, BH = 0.027;              // block length, width, height
-const RISK = { loose: 0.005, snug: 0.02, tight: 0.06 }; // chance the tower falls when you pull one
+const RISK = { loose: 0.005, snug: 0.02, tight: 0.09 }; // chance the tower falls when you pull one
 const RISK_WEAK = 0.001;                                // extra for each level that's missing a block
 const RISK_TALL = 0.002;                                // extra for each level taller than the start
 const PULL_TIME = 2.4;                                  // seconds the slow pull takes
@@ -233,7 +235,7 @@ const K = 10;   // physics runs 10x bigger, which it handles better
 let collapse = null;   // { world, bodies } or { simple: [...] }
 function startCollapse(leanDir) {
   if (collapse) return;
-  if (S.activeGame === 'stack') sfx.crash();
+  if (S.activeGame === 'stack') sound('crash');
   const push = (p, i) => {   // higher blocks get shoved harder, all in roughly the same direction
     const h = p.y - TABLE_Y, r = seeded(i * 13 + (game.round || 1) * 977);
     return new THREE.Vector3(leanDir.x * (0.25 + h * 2.2) + (r() - 0.5) * 0.15, (r() - 0.3) * 0.2, leanDir.z * (0.25 + h * 2.2) + (r() - 0.5) * 0.15);
@@ -390,7 +392,7 @@ function announce(prev) {
   if ((g.ev || 0) > (prev.ev || 0) && g.note) {   // the tower fell
     if (g.phase === 'over') {
       banner(g.note, 6);
-      if (S.activeGame === 'stack') sfx.win();
+      if (S.activeGame === 'stack') sound('win');
       hooks.addSys(g.note);   // keep the match result in the chat too
     } else banner(g.fell === myId ? '💥 Oops! You knocked it over!' : g.note, 4);
     return;
@@ -410,10 +412,10 @@ function announce(prev) {
     banner('Your turn! 🎯', 2);
   }
   if (S.activeGame === 'stack') {
-    if (g.testing >= 0 && g.testing !== prev.testing) sfx.clack(0.4);
-    if (g.stage === 'pulling' && prev.stage !== 'pulling') sfx.clack(0.6);
-    if (g.stage === 'carry' && prev.stage === 'pulling') sfx.clack(0.9);
-    if (g.stage === 'pick' && prev.stage === 'carry') sfx.clack(0.8);
+    if (g.testing >= 0 && g.testing !== prev.testing) sound('clack', 0.4);
+    if (g.stage === 'pulling' && prev.stage !== 'pulling') sound('clack', 0.6);
+    if (g.stage === 'carry' && prev.stage === 'pulling') sound('clack', 0.9);
+    if (g.stage === 'pick' && prev.stage === 'carry') sound('clack', 0.8);
   }
 }
 

@@ -79,6 +79,16 @@ export const sfx = {
   buy()    { [523, 659, 784].forEach((f, i) => tone(f, { type: 'triangle', dur: 0.18, vol: 0.1, delay: i * 0.08 })); },
   card()   { hiss({ dur: 0.35, vol: 0.1, freq: 900, freqTo: 3000, q: 0.7 }); tone(880, { dur: 0.3, vol: 0.05, delay: 0.15 }); },
   out()    { tone(392, { type: 'sawtooth', dur: 0.25, vol: 0.05 }); tone(294, { type: 'sawtooth', dur: 0.45, vol: 0.05, delay: 0.22, slideTo: 220 }); },
+  // LittleStack
+  clack(v = 1) { tone(320 + Math.random() * 60, { type: 'triangle', dur: 0.06, vol: 0.18 * v }); hiss({ dur: 0.03, vol: 0.1 * v, freq: 3200, q: 2 }); },
+  crash() {
+    for (let i = 0; i < 14; i++) {
+      const d = i * 0.07 + Math.random() * 0.12;
+      tone(220 + Math.random() * 200, { type: 'triangle', dur: 0.07, vol: 0.12, delay: d });
+      hiss({ dur: 0.04, vol: 0.08, delay: d, freq: 2500 + Math.random() * 1500, q: 2 });
+    }
+    tone(90, { type: 'sine', dur: 0.5, vol: 0.2, delay: 0.25, slideTo: 50 });
+  },
   win() {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, { type: 'triangle', dur: 0.2, vol: 0.12, delay: i * 0.12 }));
     [523, 659, 784].forEach(f => tone(f, { type: 'triangle', dur: 0.9, vol: 0.08, delay: 0.5 }));
