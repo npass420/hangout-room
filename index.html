@@ -44,6 +44,14 @@
   #actionBar #slotSpin:not(:disabled) { background: #ff7043; color: #fff; }
   #slotPays { font-size: 12px; color: #f3e6cf; background: rgba(30,20,12,0.8); padding: 4px 10px; border-radius: 10px; margin: 4px auto 0; max-width: min(560px, calc(100vw - 32px)); white-space: normal; pointer-events: auto; }
   body.atSlot #game, body.atSlot #stand { display: none !important; }
+  #arcadeBar { display: none; }
+  body.atArcade #arcadeBar { display: block; }
+  body.atArcade #actionBar > :not(#arcadeBar), body.atArcade #game, body.atArcade #stand { display: none !important; }
+  #arcadeInfo { display: inline-block; font-size: 15px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 6px 12px; border-radius: 14px; margin: 2px 4px 4px; }
+  #arcadePad, #arcadeBtns { display: inline-block; vertical-align: middle; }
+  #arcadeBtns { max-width: 300px; }
+  #actionBar #arcadePad button { font-size: 22px; width: 54px; padding: 6px 0; margin: 3px; background: #7af0ff; }
+  #actionBar #arcadeBtns button { font-size: 15px; padding: 8px 12px; margin: 3px; }
   body:not([data-game="stack"]) #sPull, body:not([data-game="stack"]) #sTry, body:not([data-game="stack"]) #sRebuild, body:not([data-game="stack"]) #sNudge,
   body:not([data-game="trail"]) #tRoll, body:not([data-game="trail"]) #tBuy, body:not([data-game="trail"]) #tRide, body:not([data-game="trail"]) #tPass { display: none !important; }
   #collapse { display: none; }
@@ -146,6 +154,7 @@
 </div>
 <div id="banner"></div>
 <div id="actionBar">
+  <div id="arcadeBar"><div id="arcadeInfo">🕹️ Peak Hop</div><br><div id="arcadePad"><button id="aUL" title="Hop up-left">↖</button><button id="aUR" title="Hop up-right">↗</button><br><button id="aDL" title="Hop down-left">↙</button><button id="aDR" title="Hop down-right">↘</button></div><div id="arcadeBtns"><button id="aUndo">↶ Undo</button><button id="aRestart">⟲ Restart</button><br><button id="aRun">🎲 Run</button><button id="aDaily">📅 Daily</button><button id="aBack">← Back</button></div></div>
   <div id="slotBar"><span id="slotChips">🪙 0</span><button id="slotBet10" class="bet">10</button><button id="slotBet25" class="bet">25</button><button id="slotBet50" class="bet">50</button><button id="slotSpin">🎰 Spin</button><button id="slotBack">← Back</button><div id="slotPays"></div></div>
   <div id="sNudge" style="display:none"><button id="sLeft" title="Block to the left">◀</button><button id="sUp" title="Block above">▲</button><button id="sDown" title="Block below">▼</button><button id="sRight" title="Block to the right">▶</button></div>
   <button id="tRoll" style="display:none">🎲 Roll</button><button id="tBuy" style="display:none">Buy</button><button id="tRide" style="display:none">🚂 Ride</button><button id="tPass" style="display:none">Pass</button><button id="sPull" style="display:none" disabled>✋ Pull it</button><button id="sTry" style="display:none" disabled>Try another</button><button id="sRebuild" style="display:none">🔨 Rebuild</button>
@@ -176,7 +185,7 @@
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 } }
 </script>
-<!-- The room's code lives in room.js, which loads core.js, othello.js, trail.js, stack.js and sounds.js -->
+<!-- The room's code lives in room.js, which loads core.js, othello.js, trail.js, stack.js, slots.js, arcade.js and sounds.js -->
 <script type="module" src="room.js"></script>
 </body>
 </html>
