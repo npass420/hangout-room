@@ -295,9 +295,14 @@ let restoredAfterFall = false;   // walked in to an already-fallen tower (no cra
 const UP = new THREE.Vector3(0, 1, 0);
 const WIGGLE = { loose: 0.005, snug: 0.0025, tight: 0.001 };
 function leanDirOf(g) { return new THREE.Vector3(Math.sin(g.lean || 0), 0, Math.cos(g.lean || 0)); }
+let uiKey = '';
 export function updateStack(dt) {
   if (!game) return;
   const t = performance.now() / 1000;
+
+  // Keep the panel in step with the game, even if an update was missed
+  const key = [S.activeGame, game.phase, game.stage, game.testing, effectiveTurn(), game.moves, game.round, S.seated, S.boardView].join('|');
+  if (key !== uiKey) { uiKey = key; try { refreshStackUI(); } catch (e) { console.error('LittleStack panel', e); } }
 
   // Doomed pull: the tower gives way partway through
   const pulling = game.phase === 'play' && game.stage === 'pulling';
@@ -375,7 +380,7 @@ function applyGame(g) {
   if (!prev && (game.phase === 'fallen' || game.phase === 'over')) restoredAfterFall = true;   // just walked in: don't replay the crash
   if (prev && (game.round || 0) !== (prev.round || 0)) { endCollapse(); restoredAfterFall = false; }   // a fresh tower
   if (game.phase === 'play' && S.activeGame === 'stack') loadPhysics();   // have the crash ready
-  if (prev) announce(prev);
+  if (prev) { try { announce(prev); } catch (e) { console.error('LittleStack announce', e); } }
   refreshStackUI();
 }
 // Sounds and big on-screen messages for what just happened
@@ -519,7 +524,6 @@ armButton(sReset, 'Reset losses', () => update(ref(db, 'room/stack'), { losses: 
 const FEEL = { loose: 'Loose 🙂', snug: 'Snug 😐', tight: 'Tight 😬' };
 function refreshStackUI() {
   if (!game) return;
-  const on = S.activeGame === 'stack';
   const list = present();
   const players = game.players || {};
   const me = !!(players[myId] && S.presence[myId]);
@@ -546,7 +550,7 @@ function refreshStackUI() {
   }
   sStatus.textContent = st;
   sInfo.textContent = info;
-  sInfo.style.display = on && info ? '' : 'none';
+  sInfo.style.display = info ? '' : 'none';
 
   // The counter: which tower, how many pulls, how tall
   if (inMatch) {
@@ -582,8 +586,10 @@ function refreshStackUI() {
   sJoin.style.display = !me && S.seated >= 0 && !S.boardView && list.length < MAX_STACK ? '' : 'none';
   sStart.style.display = choosing ? '' : 'none';
   sStart.textContent = game.phase === 'over' ? 'Play again' : 'Start';
-  sPull.style.display = sTry.style.display = on && myPick && testing >= 0 ? '' : 'none';
-  sRebuild.style.display = on && me && game.phase === 'fallen' ? '' : 'none';
+  // Pull it / Try another stay put during a match, greyed out unless you've tested a block on your turn
+  sPull.style.display = sTry.style.display = me && game.phase === 'play' ? '' : 'none';
+  sPull.disabled = sTry.disabled = !(myPick && testing >= 0);
+  sRebuild.style.display = me && game.phase === 'fallen' ? '' : 'none';
   sMore.style.display = me ? '' : 'none';
   if (!me) menuOpen = false;
   sMenu.style.display = me && menuOpen ? '' : 'none';

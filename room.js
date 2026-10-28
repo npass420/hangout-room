@@ -474,6 +474,7 @@ function refreshSwitch() {
 hooks.refreshSwitch = refreshSwitch;
 function applyActive(name) {
   S.activeGame = GAMES[name] ? name : 'othello';
+  document.body.dataset.game = S.activeGame;   // lets the page show only this game's ⋯ button
   for (const [n, g] of Object.entries(GAMES)) {
     g.group.visible = S.activeGame === n;
     document.getElementById(g.ui).style.display = S.activeGame === n ? '' : 'none';
