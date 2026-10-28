@@ -32,7 +32,9 @@
   #actionBar button { pointer-events: auto; font-family: inherit; font-size: 18px; padding: 10px 20px; margin: 4px; border: none; border-radius: 20px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); white-space: nowrap; }
   #actionBar button:disabled { opacity: 0.45; cursor: default; }
   #actionBar #sPull:not(:disabled), #actionBar #tRoll:not(:disabled) { background: #ffb36b; }
-  body:not([data-game="stack"]) #sPull, body:not([data-game="stack"]) #sTry, body:not([data-game="stack"]) #sRebuild,
+  #actionBar #sNudge button { font-size: 16px; padding: 6px 14px; margin: 2px; }
+  #leaveRoom { margin: 8px 0 0; font-size: 13px; padding: 4px 10px; }
+  body:not([data-game="stack"]) #sPull, body:not([data-game="stack"]) #sTry, body:not([data-game="stack"]) #sRebuild, body:not([data-game="stack"]) #sNudge,
   body:not([data-game="trail"]) #tRoll, body:not([data-game="trail"]) #tBuy, body:not([data-game="trail"]) #tPass { display: none !important; }
   #collapse { display: none; }
   #tTimer { font-size: 13px; color: #ffb36b; margin-bottom: 4px; }
@@ -134,12 +136,14 @@
 </div>
 <div id="banner"></div>
 <div id="actionBar">
+  <div id="sNudge" style="display:none"><button id="sLeft" title="Block to the left">◀</button><button id="sUp" title="Block above">▲</button><button id="sDown" title="Block below">▼</button><button id="sRight" title="Block to the right">▶</button></div>
   <button id="tRoll" style="display:none">🎲 Roll</button><button id="tBuy" style="display:none">Buy</button><button id="tPass" style="display:none">Pass</button><button id="sPull" style="display:none" disabled>✋ Pull it</button><button id="sTry" style="display:none" disabled>Try another</button><button id="sRebuild" style="display:none">🔨 Rebuild</button>
 </div>
 <div id="who" class="panel">
   <h2>In the room</h2>
   <div id="whoList"></div>
   <div id="conn">Connecting…</div>
+  <button id="leaveRoom">🚪 Leave room</button>
 </div>
 <div id="chat" class="panel">
   <div id="msgs"></div>

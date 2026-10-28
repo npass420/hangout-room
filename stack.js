@@ -149,8 +149,61 @@ function stackTest(i) {
   if (!canTest(slotsOf(game), i)) { banner('Not from the top two levels! ✋', 2); return; }
   update(gameRef, { testing: i });
 }
-// room.js calls this when you press on a block; in this version pressing a block tests it
-export function stackGrab(i) { stackTest(i); return false; }
+// room.js calls this when you press on a block; blocks are now tested with a tap instead (see stackTap)
+export function stackGrab() { return false; }
+// A tap on or near the tower: test the closest block you're allowed to, or place your block in the closest spot.
+// Taps don't have to be exact, which matters on a phone. Returns true if the tap was used.
+const TAP_NEAR = 0.06;   // how close (in meters) a tap has to land to count
+function rayDist(ray, p) { const d = ray && ray.distanceToPoint ? ray.distanceToPoint(p) : NaN; return typeof d === 'number' ? d : NaN; }
+export function stackTap(hitBlock, hitSlot, ray) {
+  if (!game || !stackGroup.visible || !myTurn()) return false;
+  if (game.stage === 'carry') {
+    if (hitSlot !== undefined) { stackPlace(hitSlot); return true; }
+    let best = -1, bestD = TAP_NEAR * 1.5;
+    for (const s of freeSpots(slotsOf(game))) {   // the glowing spots on top
+      const L = Math.floor(s / 3), [x, z] = slotXZ(L, s % 3);
+      const d = rayDist(ray, new THREE.Vector3(x, TABLE_Y + BH * (L + 0.5), z));
+      if (d < bestD) { bestD = d; best = s % 3; }
+    }
+    if (best >= 0) { stackPlace(best); return true; }
+    return false;
+  }
+  if (game.stage !== 'pick') return false;
+  const sl = slotsOf(game);
+  if (hitBlock !== undefined && canTest(sl, hitBlock)) { stackTest(hitBlock); return true; }
+  let best = -1, bestD = TAP_NEAR;
+  for (let i = 0; i < N; i++) {
+    if (!canTest(sl, i)) continue;
+    const d = rayDist(ray, shown[i].p);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  if (best >= 0) { stackTest(best); return true; }
+  if (hitBlock !== undefined) { stackTest(hitBlock); return true; }   // a top-level block: shows the "not from the top" hint
+  return false;
+}
+// The ▲ ▼ ◀ ▶ buttons: move your test to the next block over
+function stackNudge(dL, dJ) {
+  if (!myTurn() || game.stage !== 'pick') return;
+  const sl = slotsOf(game), top = topLevel(sl);
+  const at = {};   // spot -> block
+  sl.forEach((s, i) => { if (s >= 0) at[s] = i; });
+  const ok = s => at[s] !== undefined && canTest(sl, at[s]);
+  let cur = game.testing >= 0 && sl[game.testing] >= 0 ? sl[game.testing] : -1;
+  if (cur < 0) {   // nothing tested yet: start in the middle of the tower
+    const L0 = Math.max(0, Math.floor((top - 2) / 2));
+    for (let d = 0; d <= top; d++) for (const L of [L0 - d, L0 + d]) for (const j of [1, 0, 2]) {
+      if (L >= 0 && ok(L * 3 + j)) { update(gameRef, { testing: at[L * 3 + j] }); return; }
+    }
+    return;
+  }
+  let L = Math.floor(cur / 3), j = cur % 3;
+  for (let step = 0; step < LEVELS * 3; step++) {
+    if (dL) L += dL; else { j += dJ; if (j < 0 || j > 2) return; }
+    if (L < 0 || L > top) return;
+    if (dL) { for (const jj of [j, 1, 0, 2]) if (ok(L * 3 + jj)) { update(gameRef, { testing: at[L * 3 + jj] }); return; } }
+    else if (ok(L * 3 + j)) { update(gameRef, { testing: at[L * 3 + j] }); return; }
+  }
+}
 export function stackDrag() {}
 export function stackRelease() {}
 function stackPull() {
@@ -491,6 +544,11 @@ const sMore = document.getElementById('sMore');
 const sMenu = document.getElementById('sMenu');
 const sLeave = document.getElementById('sLeave');
 const sReset = document.getElementById('sReset');
+const sNudge = document.getElementById('sNudge');
+document.getElementById('sUp').addEventListener('click', () => stackNudge(1, 0));
+document.getElementById('sDown').addEventListener('click', () => stackNudge(-1, 0));
+document.getElementById('sLeft').addEventListener('click', () => stackNudge(0, -1));
+document.getElementById('sRight').addEventListener('click', () => stackNudge(0, 1));
 const lengthBtns = TOWERS.map(n => {
   const b = document.createElement('button');
   b.className = 'sw';
@@ -591,6 +649,7 @@ function refreshStackUI() {
   // Pull it / Try another stay put during a match, greyed out unless you've tested a block on your turn
   sPull.style.display = sTry.style.display = me && game.phase === 'play' ? '' : 'none';
   sPull.disabled = sTry.disabled = !(myPick && testing >= 0);
+  sNudge.style.display = myPick ? '' : 'none';
   sRebuild.style.display = me && game.phase === 'fallen' ? '' : 'none';
   sMore.style.display = me ? '' : 'none';
   if (!me) menuOpen = false;

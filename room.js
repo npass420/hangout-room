@@ -6,13 +6,13 @@ import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, SEATS, CHAIR_R, TABLE_Y, seatAngle, rnd,
          renderer, scene, camera, controls, canvas, BASE_FOV,
-         paintTexture, box, std, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, FONT } from './core.js';
+         paintTexture, box, std, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, FONT, PHONE } from './core.js';
 import { othelloGroup, validPlayer, felt, HALF, CELL, BOARD_TOP, canPlayAt, play, refreshPanel, refreshCounters,
          othelloSeatChanged, startOthello, updateOthello } from './othello.js';
 import { trailGroup, trailInUse, hideTrail, mountainMesh, spotMeshes, MTN_TARGET, showSpotInfo, refreshTrail,
          trailSeatChanged, startTrail, updateTrail } from './trail.js';
 import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackHover, stackGrab, stackDrag,
-         stackRelease, stackPlace, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
+         stackRelease, stackTap, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -265,8 +265,8 @@ function updateClock() {
   clockTex.needsUpdate = true;
 }
 
-// ---------- Door on the front wall ----------
-(function door() {
+// ---------- Door on the front wall (click it twice to leave the room) ----------
+const doorGroup = (function door() {
   const g = new THREE.Group();
   const trim = std(0xe8dcc4, 0.6);
   const wood = std(0x5a3a24, 0.65);
@@ -280,14 +280,16 @@ function updateClock() {
   g.add(knob);
   g.position.set(1.5, 0, ROOM / 2 - 0.03);
   g.rotation.y = Math.PI;
+  g.traverse(o => { if (o.isMesh) o.userData.door = true; });
   scene.add(g);
+  return g;
 })();
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.75));
 
 // Two floor lamps in opposite corners (no overhead light)
-function floorLamp(x, z) {
+function floorLamp(x, z, shadows) {
   const g = new THREE.Group();
   const metal = std(0x2a2a2a, 0.4, { metalness: 0.6 });
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.6, 12), metal);
@@ -299,15 +301,15 @@ function floorLamp(x, z) {
   shade.position.y = 1.65; g.add(shade);
   const light = new THREE.PointLight(0xffc982, 5, 0, 1);   // softer falloff so it reaches the table
   light.position.y = 1.6;
-  light.castShadow = true;
-  light.shadow.mapSize.set(1024, 1024);
+  light.castShadow = shadows;
+  light.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
   light.shadow.bias = -0.002;
   g.add(light);
   g.position.set(x, 0, z);
   scene.add(g);
 }
-floorLamp(ROOM / 2 - 0.6, -ROOM / 2 + 0.6);
-floorLamp(-ROOM / 2 + 0.6, ROOM / 2 - 0.6);
+floorLamp(ROOM / 2 - 0.6, -ROOM / 2 + 0.6, true);
+floorLamp(-ROOM / 2 + 0.6, ROOM / 2 - 0.6, !PHONE);   // phones: only one lamp casts shadows (much lighter to draw)
 
 // ---------- Other people: a snowman in their chair with a name tag ----------
 const avatars = {};   // id -> { g, name, c }
@@ -516,6 +518,23 @@ const gamePanel = document.getElementById('game');
 function trackPanelHeight() { document.documentElement.style.setProperty('--panelH', gamePanel.offsetHeight + 'px'); }
 if (window.ResizeObserver) new ResizeObserver(trackPanelHeight).observe(gamePanel);
 trackPanelHeight();
+
+// ---------- Leaving the room: the 🚪 button or the door, clicked twice ----------
+const leaveBtn = document.getElementById('leaveRoom');
+let leaveArmed = 0;
+function leaveRoom() {
+  if (!S.myName) return;
+  if (Date.now() - leaveArmed > 3000) {   // first click: ask to be sure
+    leaveArmed = Date.now();
+    leaveBtn.textContent = 'Sure? Click again';
+    showBanner('🚪 Click again to leave the room', 3);
+    setTimeout(() => { if (Date.now() - leaveArmed >= 3000) leaveBtn.textContent = '🚪 Leave room'; }, 3100);
+    return;
+  }
+  // Leaving frees your chair and drops you out of any game; the page reloads to the name screen
+  remove(ref(db, 'room/presence/' + myId)).finally(() => location.reload());
+}
+leaveBtn.addEventListener('click', leaveRoom);
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
@@ -726,9 +745,10 @@ function pickUnder(e) {
   aim(e);
   const targets = S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
     : S.activeGame === 'stack' ? [...chairs, ...stackPickables()] : [...chairs, felt];
-  const hits = raycaster.intersectObjects(targets, true);
+  const hits = raycaster.intersectObjects([...targets, doorGroup], true);
   if (!hits.length) return null;
   const h = hits[0];
+  if (h.object.userData.door) return S.boardView ? null : { door: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
   if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
   if (h.object.userData.spot !== undefined) return { spot: h.object.userData.spot };
@@ -799,7 +819,7 @@ window.addEventListener('pointermove', e => {
     const legal = p && p.cell !== undefined && canPlayAt(p.cell);
     const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
     const slot = p && p.slot !== undefined;
-    canvas.style.cursor = (chair || legal || grabbable || slot) ? 'pointer' : 'grab';
+    canvas.style.cursor = (chair || legal || grabbable || slot || (p && p.door)) ? 'pointer' : 'grab';
     if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
@@ -807,7 +827,8 @@ window.addEventListener('pointerup', e => {
   if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
-    if (p && p.slot !== undefined) stackPlace(p.slot);
+    if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
+    else if (p && p.door) leaveRoom();
     else if (p && p.cell !== undefined) play(p.cell);
     else if (p && p.spot !== undefined) showSpotInfo(p.spot);
     else if (p && p.chair && p.chair.userData.seat !== S.seated) { setHover(null); sit(p.chair.userData.seat); }
