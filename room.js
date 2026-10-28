@@ -13,6 +13,8 @@ import { trailGroup, trailInUse, hideTrail, mountainMesh, spotMeshes, MTN_TARGET
          trailSeatChanged, startTrail, updateTrail } from './trail.js';
 import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackHover, stackGrab, stackDrag,
          stackRelease, stackTap, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
+import { slotsGroup, slotPickables, slotViewPose, slotEnter, slotLeave, slotSpin, slotOccupantOf, slotStandSpot, slotName,
+         chipsOf, startSlots, updateSlots, refreshSlotUI } from './slots.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -344,17 +346,28 @@ function makeAvatar(name, c) {
 function refreshAvatars() {
   for (const id of Object.keys(avatars)) {
     const p = S.presence[id];
-    if (!p || p.seat < 0 || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
+    if (!p || (p.seat < 0 && slotOccupantOf(id) < 0) || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
       scene.remove(avatars[id].g);
       delete avatars[id];
     }
   }
   for (const [id, p] of Object.entries(S.presence)) {
-    if (id === myId || p.seat < 0) continue;
+    if (id === myId) continue;
+    const slot = p.seat < 0 ? slotOccupantOf(id) : -1;
+    if (p.seat < 0 && slot < 0) continue;
     if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
+    const g = avatars[id].g;
+    if (slot >= 0) {   // standing at a slot machine, facing it
+      const spot = slotStandSpot(slot);
+      g.position.set(spot.x, -0.52, spot.z);
+      g.rotation.y = 0;
+      g.children[3].visible = g.children[4].visible = false;   // arms down (hidden) while standing
+      continue;
+    }
+    g.children[3].visible = g.children[4].visible = true;
     const a = seatAngle(p.seat);
-    avatars[id].g.position.set(Math.sin(a) * (CHAIR_R + 0.03), 0, Math.cos(a) * (CHAIR_R + 0.03));
-    avatars[id].g.rotation.y = a;   // turned so the arms reach toward the table
+    g.position.set(Math.sin(a) * (CHAIR_R + 0.03), 0, Math.cos(a) * (CHAIR_R + 0.03));
+    g.rotation.y = a;   // turned so the arms reach toward the table
   }
 }
 function seatTakenByOther(s) {
@@ -376,10 +389,17 @@ function refreshWho() {
     dot.textContent = '● ';
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
-    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${p.seat >= 0 ? 'seat ' + (p.seat + 1) : 'standing'}`));
+    const slot = slotOccupantOf(id);
+    const where = p.seat >= 0 ? 'seat ' + (p.seat + 1) : slot >= 0 ? '🎰 ' + slotName(slot) : 'standing';
+    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
+    const chipSpan = document.createElement('span');
+    chipSpan.style.opacity = '0.7';
+    chipSpan.textContent = ` · 🪙 ${chipsOf(p.name).toLocaleString()}`;
+    div.appendChild(chipSpan);
     whoList.appendChild(div);
   }
 }
+hooks.refreshWho = refreshWho;
 
 function refreshAll() {
   refreshPanel();
@@ -532,6 +552,7 @@ function leaveRoom() {
     return;
   }
   // Leaving frees your chair and drops you out of any game; the page reloads to the name screen
+  slotLeave();
   remove(ref(db, 'room/presence/' + myId)).finally(() => location.reload());
 }
 leaveBtn.addEventListener('click', leaveRoom);
@@ -582,6 +603,7 @@ function enterRoom() {
   startOthello();   // the Othello game
   startTrail();     // LittleTrail
   startStack();     // LittleStack
+  startSlots();     // the slot machines
 
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
@@ -655,7 +677,7 @@ function sit(i) {
 }
 
 function stand() {
-  if (S.seated < 0 || anim || S.boardView) return;
+  if (S.seated < 0 || anim || S.boardView || S.atSlot >= 0) return;
   S.seated = -1;
   setFov(BASE_FOV);
   moveCamera(savedView.pos.clone(), lookQuat(savedView.pos, savedView.target), () => {
@@ -669,8 +691,54 @@ function stand() {
   refreshAll();
 }
 
+// ---------- Walking up to a slot machine ----------
+const slotSaved = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+function enterSlot(i) {
+  if (anim || S.boardView || S.atSlot >= 0 || !S.myName) return;
+  slotEnter(i).then(ok => {
+    if (!ok || anim) { if (ok) slotLeave(); return; }
+    if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
+      slotSaved.pos.copy(savedView.pos); slotSaved.target.copy(savedView.target);
+      S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
+    } else {
+      slotSaved.pos.copy(camera.position); slotSaved.target.copy(controls.target);
+    }
+    if (Math.hypot(slotSaved.pos.x, slotSaved.pos.y, slotSaved.pos.z) < 0.1) {   // no saved view yet: use the starting view
+      slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
+    }
+    controls.enabled = false;
+    S.atSlot = i;
+    setFov(BASE_FOV);
+    const v = slotViewPose(i, camera.aspect);
+    moveCamera(v.pos, lookQuat(v.pos, v.target), null);
+    document.body.classList.add('atSlot');
+    hint.textContent = `Playing ${slotName(i)} · press Spin or pull the lever · Esc to step back`;
+    refreshSlotUI();
+    refreshAll();
+  });
+}
+function leaveSlot() {
+  if (S.atSlot < 0 || anim) return;
+  slotLeave();
+  S.atSlot = -1;
+  document.body.classList.remove('atSlot');
+  moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => {
+    controls.target.copy(slotSaved.target);
+    controls.enabled = true;
+    controls.update();
+  });
+  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
+  refreshAll();
+}
+hooks.slotKicked = () => { if (S.atSlot >= 0) { S.atSlot = -1; leaveSlotCamera(); } };
+function leaveSlotCamera() {
+  document.body.classList.remove('atSlot');
+  moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => { controls.target.copy(slotSaved.target); controls.enabled = true; controls.update(); });
+}
+document.getElementById('slotBack').addEventListener('click', leaveSlot);
+
 function toggleBoardView() {
-  if (anim) return;
+  if (anim || S.atSlot >= 0) return;
   if (!S.boardView) {
     boardSaved.pos.copy(camera.position);
     boardSaved.quat.copy(camera.quaternion);
@@ -716,7 +784,8 @@ standBtn.addEventListener('click', stand);
 boardBtn.addEventListener('click', toggleBoardView);
 window.addEventListener('keydown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat or name box
-  if (e.key === 'Escape') { if (S.boardView) toggleBoardView(); else stand(); }
+  if (e.key === 'Escape') { if (S.atSlot >= 0) leaveSlot(); else if (S.boardView) toggleBoardView(); else stand(); }
+  if ((e.key === ' ' || e.key === 'Enter') && S.atSlot >= 0) { e.preventDefault(); slotSpin(); }
   if (e.key === 'b' || e.key === 'B') toggleBoardView();
 });
 
@@ -743,11 +812,12 @@ function aim(e) {
 // What's under the pointer: a chair, a square on the board, a trail stone, or a tower block
 function pickUnder(e) {
   aim(e);
-  const targets = S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
+  const targets = S.atSlot >= 0 ? [] : S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
     : S.activeGame === 'stack' ? [...chairs, ...stackPickables()] : [...chairs, felt];
-  const hits = raycaster.intersectObjects([...targets, doorGroup], true);
+  const hits = raycaster.intersectObjects(S.atSlot >= 0 ? slotPickables() : [...targets, ...slotPickables(), doorGroup], true);
   if (!hits.length) return null;
   const h = hits[0];
+  if (h.object.userData.machine !== undefined) return S.boardView ? null : { machine: h.object.userData.machine, lever: !!h.object.userData.lever };
   if (h.object.userData.door) return S.boardView ? null : { door: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
   if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
@@ -819,7 +889,8 @@ window.addEventListener('pointermove', e => {
     const legal = p && p.cell !== undefined && canPlayAt(p.cell);
     const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
     const slot = p && p.slot !== undefined;
-    canvas.style.cursor = (chair || legal || grabbable || slot || (p && p.door)) ? 'pointer' : 'grab';
+    const machine = p && p.machine !== undefined && (S.atSlot < 0 || p.lever);
+    canvas.style.cursor = (chair || legal || grabbable || slot || machine || (p && p.door)) ? 'pointer' : 'grab';
     if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
@@ -827,7 +898,9 @@ window.addEventListener('pointerup', e => {
   if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
-    if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
+    if (S.atSlot >= 0) { if (p && p.machine === S.atSlot) slotSpin(); }   // at a machine: clicking it (or its lever) spins
+    else if (p && p.machine !== undefined) enterSlot(p.machine);
+    else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
     else if (p && p.cell !== undefined) play(p.cell);
     else if (p && p.spot !== undefined) showSpotInfo(p.spot);
@@ -863,6 +936,8 @@ renderer.setAnimationLoop(() => {
       camera.position.copy(mtnViewPos());
       camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
     }
+  } else if (S.atSlot >= 0) {
+    // standing still in front of the machine
   } else if (S.seated >= 0) {
     lookEuler.set(pitch, yaw, 0);
     look.setFromEuler(lookEuler);
@@ -873,6 +948,7 @@ renderer.setAnimationLoop(() => {
   updateOthello(dt);
   updateTrail(dt);
   updateStack(dt);
+  updateSlots(dt);
   updateClock();
   updateSky();
   renderer.render(scene, camera);

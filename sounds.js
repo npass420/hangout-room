@@ -89,6 +89,8 @@ export const sfx = {
     }
     tone(90, { type: 'sine', dur: 0.5, vol: 0.2, delay: 0.25, slideTo: 50 });
   },
+  // Slot machines: a reel thunking to a stop
+  reel()   { tone(150 + Math.random() * 30, { type: 'triangle', dur: 0.09, vol: 0.2 }); hiss({ dur: 0.05, vol: 0.12, freq: 1400, q: 1.5 }); },
   win() {
     [523, 659, 784, 1047].forEach((f, i) => tone(f, { type: 'triangle', dur: 0.2, vol: 0.12, delay: i * 0.12 }));
     [523, 659, 784].forEach(f => tone(f, { type: 'triangle', dur: 0.9, vol: 0.08, delay: 0.5 }));

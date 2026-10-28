@@ -26,6 +26,7 @@ export const S = {
   presence: {},       // everyone in the room: id -> { name, seat, c }
   seated: -1,         // which seat I'm in (-1 = standing)
   boardView: false,
+  atSlot: -1,         // which slot machine I'm playing (-1 = none)
   activeGame: 'othello',
   timeOffset: 0       // how far my clock is from the database's clock
 };
