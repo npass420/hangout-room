@@ -134,7 +134,7 @@ export function stackInUse() { return present().length > 0; }
 
 // ---------- Your turn: test a block, pull it, place it ----------
 let hoverIdx = -1;
-let hint = '';   // a little message for you, like "Not from the top two levels!"
+function banner(text, secs) { if (S.activeGame === 'stack' && hooks.banner) hooks.banner(text, secs); }
 export function stackHover(i) {   // highlight blocks you're allowed to test
   const ok = i >= 0 && myTurn() && game.stage === 'pick' && canTest(slotsOf(game), i);
   const want = ok ? i : -1;
@@ -144,8 +144,7 @@ export function stackHover(i) {   // highlight blocks you're allowed to test
 }
 function stackTest(i) {
   if (!myTurn() || game.stage !== 'pick') return;
-  if (!canTest(slotsOf(game), i)) { hint = 'Not from the top two levels!'; refreshStackUI(); return; }
-  hint = '';
+  if (!canTest(slotsOf(game), i)) { banner('Not from the top two levels! ✋', 2); return; }
   update(gameRef, { testing: i });
 }
 // room.js calls this when you press on a block; in this version pressing a block tests it
@@ -174,9 +173,20 @@ function finishPull() {   // the pull is over: either it's in your hand, or the 
     if (!g || g.phase !== 'play' || g.stage !== 'pulling' || g.pullAt !== pullAt) return;
     if (g.fall) {
       loser = g.pullerName;
-      g.phase = 'fallen'; g.fell = g.puller; g.stage = 'pick';
-      g.note = `💥 ${g.pullerName} knocked the tower over!`;
+      if (g.players && g.players[g.puller]) g.players[g.puller].lost = (g.players[g.puller].lost || 0) + 1;
+      g.fell = g.puller; g.stage = 'pick';
       g.ev = (g.ev || 0) + 1;
+      if ((g.tower || 1) >= (g.towers || 10)) {   // that was the last tower: fewest knock-overs wins
+        const ps = Object.values(g.players || {});
+        const least = Math.min(...ps.map(p => p.lost || 0));
+        const names = ps.filter(p => (p.lost || 0) === least).map(p => p.name);
+        g.phase = 'over';
+        g.winners = names.join(' & ');
+        g.note = `🏆 ${g.winners} ${names.length > 1 ? 'win' : 'wins'} the match!`;
+      } else {
+        g.phase = 'fallen';
+        g.note = `💥 ${g.pullerName} knocked it over!`;
+      }
     } else {
       const sl = slotsOf(g); sl[g.moving] = -1; g.slots = sl.join(',');
       g.stage = 'carry';
@@ -292,7 +302,8 @@ export function updateStack(dt) {
   // Doomed pull: the tower gives way partway through
   const pulling = game.phase === 'play' && game.stage === 'pulling';
   const prog = pulling ? Math.min(1, Math.max(0, (serverNow() - game.pullAt) / 1000 / PULL_TIME)) : 0;
-  if ((pulling && game.fall && prog >= FALL_AT) || (game.phase === 'fallen' && !collapse && !restoredAfterFall)) startCollapse(leanDirOf(game));
+  const down = game.phase === 'fallen' || game.phase === 'over';
+  if ((pulling && game.fall && prog >= FALL_AT) || (down && !collapse && !restoredAfterFall)) startCollapse(leanDirOf(game));
   if (pulling && prog >= 1 && myTurn()) { if (!finishing) { finishing = true; finishPull(); } } else if (!pulling) finishing = false;
 
   if (collapse) {
@@ -361,30 +372,60 @@ function applyGame(g) {
   const prev = game;
   game = g || { phase: 'lobby' };
   if (game.phase === 'play' && !['pick', 'pulling', 'carry'].includes(game.stage)) game.stage = 'pick';   // a game left over from an older version
-  if (!prev && game.phase === 'fallen') restoredAfterFall = true;   // just walked in: don't replay the crash
+  if (!prev && (game.phase === 'fallen' || game.phase === 'over')) restoredAfterFall = true;   // just walked in: don't replay the crash
   if (prev && (game.round || 0) !== (prev.round || 0)) { endCollapse(); restoredAfterFall = false; }   // a fresh tower
   if (game.phase === 'play' && S.activeGame === 'stack') loadPhysics();   // have the crash ready
-  if (prev && (game.ev || 0) > (prev.ev || 0) && game.note) hooks.addSys(game.note);
-  if (prev && S.activeGame === 'stack' && game.phase === 'play') {
-    if (game.testing >= 0 && game.testing !== prev.testing) sfx.clack(0.4);
-    if (game.stage === 'pulling' && prev.stage !== 'pulling') sfx.clack(0.6);
-    if (game.stage === 'carry' && prev.stage === 'pulling') sfx.clack(0.9);
-    if (game.stage === 'pick' && prev.stage === 'carry') sfx.clack(0.8);
-  }
-  if (game.stage !== 'pick' || !myTurn()) hint = '';
+  if (prev) announce(prev);
   refreshStackUI();
+}
+// Sounds and big on-screen messages for what just happened
+function announce(prev) {
+  const g = game, players = g.players || {};
+  const nameOf = id => players[id] ? players[id].name : 'Someone';
+  if ((g.ev || 0) > (prev.ev || 0) && g.note) {   // the tower fell
+    if (g.phase === 'over') {
+      banner(g.note, 6);
+      if (S.activeGame === 'stack') sfx.win();
+      hooks.addSys(g.note);   // keep the match result in the chat too
+    } else banner(g.fell === myId ? '💥 Oops! You knocked it over!' : g.note, 4);
+    return;
+  }
+  if (g.phase !== 'play') return;
+  const newTower = (g.round || 0) !== (prev.round || 0);
+  const myTurnNow = effectiveTurn(g) === myId && g.stage === 'pick';
+  const wasMyTurn = prev.phase === 'play' && effectiveTurn(prev) === myId;
+  if (newTower) {
+    const label = `Tower ${g.tower || 1} of ${g.towers || 10}`;
+    banner(myTurnNow ? `${label} · you go first! 🎯` : `${label} · ${nameOf(effectiveTurn(g))} goes first`, 3);
+  } else if (g.stage === 'pulling' && prev.stage !== 'pulling') {
+    banner(g.puller === myId ? 'Pulling… 🤞' : `${nameOf(g.puller)} is pulling… 😬`, 2.4);
+  } else if (g.stage === 'carry' && prev.stage === 'pulling') {
+    banner(g.puller === myId ? 'Phew! 😅 Click a glowing spot on top' : `Phew! ${nameOf(g.puller)} got it 😅`, 2.5);
+  } else if (myTurnNow && !wasMyTurn) {
+    banner('Your turn! 🎯', 2);
+  }
+  if (S.activeGame === 'stack') {
+    if (g.testing >= 0 && g.testing !== prev.testing) sfx.clack(0.4);
+    if (g.stage === 'pulling' && prev.stage !== 'pulling') sfx.clack(0.6);
+    if (g.stage === 'carry' && prev.stage === 'pulling') sfx.clack(0.9);
+    if (g.stage === 'pick' && prev.stage === 'carry') sfx.clack(0.8);
+  }
 }
 
 // ---------- Actions ----------
+function tidy(g) {   // drop people who left the room; if nobody's left, the match is over
+  for (const id of Object.keys(g.players || {})) if (!S.presence[id] && id !== myId) delete g.players[id];
+  if (!Object.keys(g.players || {}).length && g.phase !== 'lobby') { g.phase = 'lobby'; g.stage = 'pick'; g.testing = -1; g.moving = -1; }
+}
 function stackJoin() {
   if (S.seated < 0) return;
   const seat = S.seated;
   runTransaction(gameRef, g => {
     g = g || { phase: 'lobby' };
     g.players = g.players || {};
-    for (const id of Object.keys(g.players)) if (!S.presence[id]) delete g.players[id];   // tidy up people who left
+    tidy(g);
     if (Object.keys(g.players).filter(id => id !== myId).length >= MAX_STACK) return;
-    g.players[myId] = { seat, order: Date.now(), name: S.myName, c: S.myHue };
+    g.players[myId] = { seat, order: Date.now(), name: S.myName, c: S.myHue, lost: 0 };
     return g;
   });
 }
@@ -396,33 +437,43 @@ function stackLeave() {
       g.testing = -1;
     }
     delete g.players[myId];
+    tidy(g);
     return g;
   });
 }
-function freshTower(startWith) {
+function freshTower(g, startWith) {
+  g.phase = 'play'; g.seed = 1 + Math.floor(Math.random() * 2147483000); g.round = (g.round || 0) + 1;
+  g.slots = freshSlots().join(',');
+  g.stage = 'pick'; g.testing = -1; g.moving = -1; g.fall = false; g.fell = ''; g.note = ''; g.moves = 0;
+  g.turn = startWith && g.players[startWith] ? startWith : ids(g)[0];
+}
+function startMatch() {
   runTransaction(gameRef, g => {
-    if (!g || !g.players || !g.players[myId]) return;
-    for (const id of Object.keys(g.players)) if (!S.presence[id]) delete g.players[id];
-    const list = ids(g);
-    if (!list.length) return;
-    g.phase = 'play'; g.seed = 1 + Math.floor(Math.random() * 2147483000); g.round = (g.round || 0) + 1;
-    g.slots = freshSlots().join(',');
-    g.stage = 'pick'; g.testing = -1; g.moving = -1; g.fall = false; g.fell = ''; g.note = ''; g.moves = 0;
-    g.turn = startWith && g.players[startWith] ? startWith : list[0];
+    if (!g || !g.players || !g.players[myId] || g.phase === 'play' || g.phase === 'fallen') return;
+    tidy(g);
+    for (const p of Object.values(g.players)) p.lost = 0;
+    g.towers = TOWERS.includes(g.towers) ? g.towers : 10;
+    g.tower = 1; g.winners = '';
+    freshTower(g, '');
     return g;
   });
 }
-function stackEnd() {
+function rebuild() {   // the next tower in the match; whoever knocked it over goes first
   runTransaction(gameRef, g => {
-    if (!g || !g.players || !g.players[myId]) return;
-    g.phase = 'lobby'; g.stage = 'pick'; g.testing = -1; g.moving = -1;
+    if (!g || !g.players || !g.players[myId] || g.phase !== 'fallen') return;
+    tidy(g);
+    g.tower = (g.tower || 1) + 1;
+    freshTower(g, g.fell);
     return g;
   });
 }
 
 // ---------- LittleStack panel ----------
+const TOWERS = [5, 10, 15];
 const sStatus = document.getElementById('sStatus');
+const sCount = document.getElementById('sCount');
 const sPlayers = document.getElementById('sPlayers');
+const sLength = document.getElementById('sLength');
 const sInfo = document.getElementById('sInfo');
 const sJoin = document.getElementById('sJoin');
 const sStart = document.getElementById('sStart');
@@ -432,13 +483,20 @@ const sRebuild = document.getElementById('sRebuild');
 const sMore = document.getElementById('sMore');
 const sMenu = document.getElementById('sMenu');
 const sLeave = document.getElementById('sLeave');
-const sEnd = document.getElementById('sEnd');
 const sReset = document.getElementById('sReset');
+const lengthBtns = TOWERS.map(n => {
+  const b = document.createElement('button');
+  b.className = 'sw';
+  b.textContent = `${n} towers`;
+  b.addEventListener('click', () => update(gameRef, { towers: n }));
+  sLength.appendChild(b);
+  return b;
+});
 sJoin.addEventListener('click', stackJoin);
-sStart.addEventListener('click', () => freshTower(''));
+sStart.addEventListener('click', startMatch);
 sPull.addEventListener('click', stackPull);
 sTry.addEventListener('click', () => { if (myTurn() && game.stage === 'pick') update(gameRef, { testing: -1 }); });
-sRebuild.addEventListener('click', () => freshTower(game && game.fell));   // whoever knocked it over goes first
+sRebuild.addEventListener('click', rebuild);
 let menuOpen = false;
 sMore.addEventListener('click', () => { menuOpen = !menuOpen; refreshStackUI(); });
 function armButton(btn, label, action) {
@@ -456,18 +514,19 @@ function armButton(btn, label, action) {
   });
 }
 armButton(sLeave, 'Leave game', stackLeave);
-armButton(sEnd, 'End game', stackEnd);
 armButton(sReset, 'Reset losses', () => update(ref(db, 'room/stack'), { losses: null }));
 
 const FEEL = { loose: 'Loose 🙂', snug: 'Snug 😐', tight: 'Tight 😬' };
 function refreshStackUI() {
   if (!game) return;
+  const on = S.activeGame === 'stack';
   const list = present();
   const players = game.players || {};
   const me = !!(players[myId] && S.presence[myId]);
   const turn = effectiveTurn();
   const turnName = players[turn] ? players[turn].name : '…';
   const sl = slotsOf(game);
+  const inMatch = game.phase === 'play' || game.phase === 'fallen';
   const testing = game.phase === 'play' && game.stage === 'pick' && game.testing >= 0 && sl[game.testing] >= 0 ? game.testing : -1;
   let st, info = '';
   if (game.phase === 'play') {
@@ -477,15 +536,24 @@ function refreshStackUI() {
     if (testing >= 0) {
       const feel = holdsUp(sl, testing) ? FEEL[kindOf(sl, game.seed, testing)] : 'Holding its level up! 😱';
       info = `${turn === myId ? 'This block feels' : turnName + "'s block feels"}: ${feel}`;
-    } else if (hint) info = hint;
+    }
   } else if (game.phase === 'fallen') {
-    st = `${game.note || '💥 The tower fell!'} Click Rebuild for the next round.`;
+    st = `${game.note || '💥 The tower fell!'} Click Rebuild for the next tower.`;
+  } else if (game.phase === 'over') {
+    st = `${game.note || '🏆 Match over!'} Pick a length and click Play again.`;
   } else {
-    st = list.length ? `${list.length} player${list.length > 1 ? 's' : ''} ready · click Start` : 'Sit in a chair and click Join game';
+    st = list.length ? `${list.length} player${list.length > 1 ? 's' : ''} ready · pick a length and click Start` : 'Sit in a chair and click Join game';
   }
   sStatus.textContent = st;
   sInfo.textContent = info;
-  sInfo.style.display = info ? '' : 'none';
+  sInfo.style.display = on && info ? '' : 'none';
+
+  // The counter: which tower, how many pulls, how tall
+  if (inMatch) {
+    const moves = game.moves || 0;
+    sCount.textContent = `Tower ${game.tower || 1} of ${game.towers || 10} · ${moves} pull${moves === 1 ? '' : 's'} · ${topLevel(sl) + 1} levels tall`;
+  }
+  sCount.style.display = inMatch ? '' : 'none';
 
   sPlayers.textContent = '';
   list.forEach(id => {
@@ -495,26 +563,36 @@ function refreshStackUI() {
     dot.textContent = '● ';
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
-    const lost = losses[lossKey(p.name)] || 0;
-    div.appendChild(document.createTextNode(`${game.phase === 'play' && id === turn ? '▶ ' : ''}${p.name}${id === myId ? ' (you)' : ''} · 💥 ${lost}`));
+    const total = losses[lossKey(p.name)] || 0;
+    const match = game.phase === 'lobby' ? '' : ` · 💥 ${p.lost || 0}`;
+    const crown = game.phase === 'over' && (p.lost || 0) === Math.min(...list.map(x => players[x].lost || 0)) ? ' 🏆' : '';
+    div.appendChild(document.createTextNode(`${game.phase === 'play' && id === turn ? '▶ ' : ''}${p.name}${id === myId ? ' (you)' : ''}${match}${crown}`));
+    const small = document.createElement('span');
+    small.style.opacity = '0.6';
+    small.textContent = ` (${total} all-time)`;
+    div.appendChild(small);
     sPlayers.appendChild(div);
   });
 
+  const choosing = me && (game.phase === 'lobby' || game.phase === 'over');
+  sLength.style.display = choosing ? '' : 'none';
+  const towers = TOWERS.includes(game.towers) ? game.towers : 10;
+  lengthBtns.forEach((b, k) => b.classList.toggle('on', TOWERS[k] === towers));
   const myPick = me && turn === myId && game.phase === 'play' && game.stage === 'pick';
   sJoin.style.display = !me && S.seated >= 0 && !S.boardView && list.length < MAX_STACK ? '' : 'none';
-  sStart.style.display = me && game.phase === 'lobby' ? '' : 'none';
-  sPull.style.display = sTry.style.display = myPick && testing >= 0 ? '' : 'none';
-  sRebuild.style.display = me && game.phase === 'fallen' ? '' : 'none';
+  sStart.style.display = choosing ? '' : 'none';
+  sStart.textContent = game.phase === 'over' ? 'Play again' : 'Start';
+  sPull.style.display = sTry.style.display = on && myPick && testing >= 0 ? '' : 'none';
+  sRebuild.style.display = on && me && game.phase === 'fallen' ? '' : 'none';
   sMore.style.display = me ? '' : 'none';
   if (!me) menuOpen = false;
   sMenu.style.display = me && menuOpen ? '' : 'none';
-  sEnd.style.display = game.phase !== 'lobby' ? '' : 'none';
   if (hooks.refreshSwitch) hooks.refreshSwitch();
 }
 
 // ---------- Called by the room ----------
 export function refreshStack() { refreshStackUI(); }
-export function hideStack() { hoverIdx = -1; }
+export function hideStack() { hoverIdx = -1; refreshStackUI(); }
 export function stackSeatChanged(seat) {
   if (game && game.players && game.players[myId]) update(ref(db, 'room/stack/game/players/' + myId), { seat });
 }

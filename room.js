@@ -518,6 +518,19 @@ function addSys(text, c) {   // grey line in chat, like "Sam joined the room"
   msgs.scrollTop = msgs.scrollHeight;
 }
 hooks.addSys = addSys;
+
+// ---------- Big on-screen messages, like "Your turn!" ----------
+const banner = document.getElementById('banner');
+let bannerTimer = 0;
+function showBanner(text, secs = 3) {
+  banner.textContent = text;
+  banner.classList.remove('show');
+  void banner.offsetWidth;   // restart the pop-in animation
+  banner.classList.add('show');
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => banner.classList.remove('show'), secs * 1000);
+}
+hooks.banner = showBanner;
 function logJoinsLeaves(before, after) {
   for (const [id, p] of Object.entries(after)) {
     if (id !== myId && !before[id]) { addSys(`${p.name} joined the room`, colorIndex(p)); sfx.join(); }
@@ -623,7 +636,7 @@ let yaw = 0, pitch = 0;
 const baseQuat = new THREE.Quaternion();
 const savedView = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
 const boardSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
-const mtnView = { pos: new THREE.Vector3(), yaw: 0, target: MTN_TARGET };
+const mtnView = { flat: new THREE.Vector3(), dist: 1, yaw: 0, tilt: 0.5, minTilt: 0.1, target: MTN_TARGET };
 
 function seatEye(i) {
   const a = seatAngle(i);
@@ -633,6 +646,12 @@ function seatEye(i) {
 function lookQuat(pos, target, up = new THREE.Vector3(0, 1, 0)) {
   const m = new THREE.Matrix4().lookAt(pos, target, up);
   return new THREE.Quaternion().setFromRotationMatrix(m);
+}
+function mtnViewPos() {   // where the camera sits while circling the hill or tower
+  const flat = mtnView.flat.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), mtnView.yaw);
+  return mtnView.target.clone()
+    .addScaledVector(flat, mtnView.dist * Math.cos(mtnView.tilt))
+    .add(new THREE.Vector3(0, mtnView.dist * Math.sin(mtnView.tilt), 0));
 }
 function moveCamera(toPos, toQuat, done) {
   anim = { fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(), toPos, toQuat, t: 0, dur: 0.8, done };
@@ -687,12 +706,17 @@ function toggleBoardView() {
     else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
     setFov(BASE_FOV);
     if (S.activeGame === 'trail' || S.activeGame === 'stack') {
-      // Up above the hill or tower, drag left and right to walk around it
+      // Up above the hill or tower: drag left and right to walk around it, up and down to tilt
       const stack = S.activeGame === 'stack';
       mtnView.target = stack ? STACK_TARGET : MTN_TARGET;
-      mtnView.pos.copy(side).multiplyScalar(stack ? 0.95 : 1.15); mtnView.pos.y = TABLE_Y + (stack ? 0.75 : 1.3);
+      const across = stack ? 0.95 : 1.15, upBy = TABLE_Y + (stack ? 0.75 : 1.3) - mtnView.target.y;
+      mtnView.flat.copy(side);
+      mtnView.dist = Math.hypot(across, upBy);
+      mtnView.tilt = Math.atan2(upBy, across);
+      mtnView.minTilt = stack ? 0.05 : 0.25;
       mtnView.yaw = 0;
-      moveCamera(mtnView.pos.clone(), lookQuat(mtnView.pos, mtnView.target), null);
+      const pos = mtnViewPos();
+      moveCamera(pos, lookQuat(pos, mtnView.target), null);
     } else {
       const pos = side.clone().multiplyScalar(0.85);
       pos.y = BOARD_TOP + 1.0;
@@ -801,6 +825,7 @@ window.addEventListener('pointermove', e => {
   }
   if (down && S.boardView && (S.activeGame === 'trail' || S.activeGame === 'stack') && !anim) {
     mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the hill or tower
+    mtnView.tilt = Math.max(mtnView.minTilt, Math.min(1.45, mtnView.tilt + (e.clientY - lastY) * 0.006));   // and tilt up or down
   }
   if (down && S.seated >= 0 && !S.boardView && !anim) {
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
@@ -858,7 +883,7 @@ renderer.setAnimationLoop(() => {
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
   } else if (S.boardView) {
     if (S.activeGame === 'trail' || S.activeGame === 'stack') {   // circle the hill or tower as you drag
-      camera.position.copy(mtnView.pos).applyAxisAngle(UP, mtnView.yaw);
+      camera.position.copy(mtnViewPos());
       camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
     }
   } else if (S.seated >= 0) {

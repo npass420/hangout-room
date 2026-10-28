@@ -20,7 +20,15 @@
   .panel button.sw.on { background: #e9c98f; color: #2a1c10; }
   #tStatus, #sStatus { font-size: 16px; margin-bottom: 4px; }
   #sPlayers { font-size: 13px; margin-bottom: 8px; }
-  #sInfo { font-size: 14px; color: #ffd88a; margin-bottom: 8px; }
+  #sCount { font-size: 13px; color: #ffb36b; margin-bottom: 4px; }
+  #sLength button { font-size: 13px; padding: 4px 8px; margin: 0 4px 4px 0; }
+  #banner { position: fixed; top: 70px; left: 50%; transform: translate(-50%, -12px) scale(0.85); max-width: 90vw; padding: 10px 24px; font-size: 22px; text-align: center; background: rgba(30,20,12,0.92); color: #ffe9a0; border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s; }
+  #banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  #actionBar { position: fixed; left: 50%; bottom: 74px; transform: translateX(-50%); text-align: center; white-space: nowrap; pointer-events: none; }
+  #actionBar button, #sInfo { pointer-events: auto; }
+  #actionBar button { font-family: inherit; font-size: 18px; padding: 10px 20px; margin: 0 5px; border: none; border-radius: 20px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+  #actionBar #sPull { background: #ffb36b; }
+  #sInfo { display: inline-block; font-size: 16px; color: #ffd88a; background: rgba(30,20,12,0.88); padding: 6px 14px; margin-bottom: 8px; border-radius: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
   #tTimer { font-size: 13px; color: #ffb36b; margin-bottom: 4px; }
   #tPlayers { font-size: 13px; margin-bottom: 4px; }
   #tInfo { font-size: 12px; opacity: 0.7; font-style: italic; margin-bottom: 8px; }
@@ -66,6 +74,10 @@
     #switchRow { margin-bottom: 4px; padding-bottom: 4px; }
     .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
     #stand { top: 48px; bottom: auto; font-size: 14px; padding: 6px 16px; }
+    #banner { top: 92px; font-size: 17px; padding: 8px 16px; }
+    #actionBar { bottom: auto; top: 140px; }
+    #actionBar button { font-size: 15px; padding: 8px 14px; margin: 0 3px; }
+    #sInfo { font-size: 14px; }
   }
 </style>
 </head>
@@ -96,12 +108,18 @@
   </div>
   <div id="stackUI" style="display:none">
     <div id="sStatus">Connecting…</div>
+    <div id="sCount" style="display:none"></div>
     <div id="sPlayers"></div>
-    <div id="sInfo" style="display:none"></div>
-    <button id="sJoin" style="display:none">Join game</button><button id="sStart" style="display:none">Start</button><button id="sPull" style="display:none">✋ Pull it</button><button id="sTry" style="display:none">Try another</button><button id="sRebuild" style="display:none">🔨 Rebuild</button><button id="sMore" style="display:none" title="More">⋯</button>
-    <div id="sMenu" style="display:none"><button id="sLeave">Leave game</button><button id="sEnd">End game</button><button id="sReset">Reset losses</button></div>
+    <div id="sLength" style="display:none"><div class="tLabel">How many towers in the match:</div></div>
+    <button id="sJoin" style="display:none">Join game</button><button id="sStart" style="display:none">Start</button><button id="sMore" style="display:none" title="More">⋯</button>
+    <div id="sMenu" style="display:none"><button id="sLeave">Leave game</button><button id="sReset">Reset losses</button></div>
   </div>
   <div id="bottomRow"><button id="boardView">Board view</button><button id="mute" title="Sound">🔊</button></div>
+</div>
+<div id="banner"></div>
+<div id="actionBar">
+  <div><div id="sInfo" style="display:none"></div></div>
+  <button id="sPull" style="display:none">✋ Pull it</button><button id="sTry" style="display:none">Try another</button><button id="sRebuild" style="display:none">🔨 Rebuild</button>
 </div>
 <div id="who" class="panel">
   <h2>In the room</h2>
