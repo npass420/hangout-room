@@ -1,5 +1,7 @@
 // =====================================================================
-// trail.js — LittleTrail, the mountain trail market game
+// trail.js — LittleTrail, the trail market game
+// A flat loop around a little mountain: open stalls, collect rent, ride the steam train,
+// and be the richest when the sun sets.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -8,397 +10,427 @@ import { db, myId, S, hooks, serverNow, scene, TABLE_Y, seatAngle, rnd, paintTex
          makeCounter, drawCounter, placeCounter, sinkCounter, animateCounter } from './core.js';
 import { sfx } from './sounds.js';
 
-export const trailGroup = new THREE.Group();   // the hill and everything on it, hidden while Othello is on the table
+export const trailGroup = new THREE.Group();   // the board and everything on it, hidden while another game is on the table
 trailGroup.visible = false;
 scene.add(trailGroup);
 const trailRef = ref(db, 'room/trail');
 let trail = null;            // the shared LittleTrail state
-let trailBusy = false;       // dice or pawns are moving
+let trailBusy = false;       // dice, pawns or the train are moving
+const VER = 2;               // games saved by the old mountain board can't continue on this one
 
 // ---------- Money and rules ----------
-const SPOTS = 32, START_COINS = 5000, LAP_PAY = 300, GOAL = 10000, MAX_TRAIL = 6;
-const RANGER = 8, HOT_SPRING = 16, ROCKSLIDE = 24, HOT_SPRING_PAY = 50, ROCKSLIDE_FEE = 50;
-const LENGTHS = [45, 60, 90];   // game length choices, in minutes until sunset
+const SPOTS = 48, START_COINS = 3000, LAP_PAY = 300, GOAL = 10000, MAX_TRAIL = 6;
+const STATIONS = [6, 18, 30, 42];
+const STATION_BUY = 200, STATION_RENT = [25, 50, 100, 200], FARE = 40;
+const SECTION_BONUS = 0.15;     // each other stall you own in the same section adds 15% rent
+const RENT_MULT = [0.12, 0.45, 1.2, 2.8];   // rent at each level, as a share of the stall's price
+const LENGTHS = [20, 40, 60];   // game length choices, in minutes until sunset
+const LEVELS = ['Cart', 'Stand', 'Shop', 'Lodge'];
 
-// Areas climb the hill: 3 stalls each, prices go up as you climb
-const AREAS = [
-  { name: 'Meadow',         color: '#7cc35a', buy: 100, up: 50,  rent: [10, 40, 120, 300] },
-  { name: 'Pine Forest',    color: '#2e7d4f', buy: 160, up: 80,  rent: [15, 60, 180, 450] },
-  { name: 'Creek Crossing', color: '#3aa0c8', buy: 220, up: 110, rent: [20, 85, 250, 600] },
-  { name: 'Waterfall',      color: '#5b7fe0', buy: 300, up: 150, rent: [30, 120, 350, 800] },
-  { name: 'Cliff Ridge',    color: '#a0703c', buy: 380, up: 190, rent: [40, 160, 450, 1000] },
-  { name: 'Snowline',       color: '#dfe8f0', buy: 460, up: 230, rent: [50, 200, 550, 1200] },
-  { name: 'Alpine Lake',    color: '#2bb7b0', buy: 530, up: 265, rent: [55, 225, 625, 1350] },
-  { name: 'Summit',         color: '#e0b23a', buy: 600, up: 300, rent: [60, 250, 700, 1500] }
+// Four sections, each with a train station in the middle and four color groups of stalls
+const SECTIONS = [
+  { name: 'Meadow',   icon: '🌼', ground: 0x8fc45a, station: 'Meadow Station' },
+  { name: 'Forest',   icon: '🌲', ground: 0x4f7d3a, station: 'Forest Station' },
+  { name: 'Lake',     icon: '🏞️', ground: 0x6fae7a, station: 'Lake Station' },
+  { name: 'Mountain', icon: '⛰️', ground: 0x9a8a72, station: 'Mountain Station' }
 ];
-const SPECIALS = {
-  0:  { name: 'Trailhead',      color: '#f5e6b8', desc: `Start · +${LAP_PAY} every time you pass` },
-  4:  { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
-  8:  { name: 'Ranger Station', color: '#4b6b45', desc: 'Just visiting' },
-  12: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
-  16: { name: 'Hot Spring',     color: '#ff8a65', desc: `Rest and collect +${HOT_SPRING_PAY}` },
-  20: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true },
-  24: { name: 'Rockslide',      color: '#77736d', desc: `Slide down to the Ranger Station · pay ${ROCKSLIDE_FEE}` },
-  28: { name: 'Weather',        color: '#8e5ec9', desc: 'Draw a Weather card', weather: true }
-};
+const GROUP_INFO = [
+  ['Wildflowers', '#f48fb1'], ['Sunflower Field', '#ffd54f'], ['Orchard', '#ef6c4a'], ['Berry Patch', '#b0407a'],
+  ['Pine Grove', '#2e7d4f'], ['Birch Grove', '#c9c3a8'], ['Mushroom Glade', '#c0392b'], ['Campground', '#e67e22'],
+  ['Lily Pond', '#7fd6a8'], ['Marsh', '#7d8a3a'], ['Boat Dock', '#3a7fc8'], ['Lakeside Beach', '#f1d18a'],
+  ['Canyon', '#c46a3a'], ['Old Mine', '#6b5a4a'], ['Cliff Ridge', '#8a8f99'], ['Summit Lookout', '#e0b23a']
+];
+const GROUPS = [];        // each group: { name, color, spots, buy, up, rent[] }
+const GROUP_OF = {};      // spot -> group index
+(function buildGroups() {
+  const runs = [];
+  for (let q = 0; q < 4; q++) {
+    const a = [], b = [];
+    for (let k = (q === 0 ? 1 : 12 * q); k < 12 * q + 6; k++) a.push(k);
+    for (let k = 12 * q + 7; k < 12 * q + 12; k++) b.push(k);
+    runs.push(a, b);
+  }
+  for (const r of runs) {
+    for (const spots of [r.slice(0, 3), r.slice(3)]) {
+      const gi = GROUPS.length;
+      const buy = Math.round((60 + 22 * gi) / 10) * 10;
+      GROUPS.push({ name: GROUP_INFO[gi][0], color: GROUP_INFO[gi][1], spots, buy, up: Math.round(buy / 20) * 10,
+                    rent: RENT_MULT.map(m => Math.max(5, Math.round(buy * m / 5) * 5)) });
+      for (const k of spots) GROUP_OF[k] = gi;
+    }
+  }
+})();
+function sectionOf(k) { return Math.floor(k / 12); }
+function isStation(k) { return STATIONS.includes(k); }
 function spotInfo(k) {
-  if (SPECIALS[k]) return { ...SPECIALS[k], special: true };
-  const a = AREAS[Math.floor(k / 4)];
-  return { name: a.name, color: a.color, desc: `Stall · buy ${a.buy} · rent from ${a.rent[0]}` };
+  if (k === 0) return { name: 'Trailhead', color: '#f5e6b8', desc: `Start · +${LAP_PAY} every time you pass` };
+  if (isStation(k)) {
+    const sec = SECTIONS[sectionOf(k)];
+    return { name: sec.station, color: '#5d5f66', station: true, desc: `🚂 Train station · buy ${STATION_BUY} · ride to the next station for ${FARE}` };
+  }
+  const g = GROUPS[GROUP_OF[k]];
+  return { name: g.name, color: g.color, desc: `${SECTIONS[sectionOf(k)].icon} ${SECTIONS[sectionOf(k)].name} stall · buy ${g.buy} · rent from ${g.rent[0]}` };
 }
 
-// ---------- The hill: low and wide, so you can see across the table ----------
-const MTN_R = 0.84, MTN_H = 0.32, MTN_TOP = 0.12;
-function mtnNoise(th, y) {
-  return 0.022 * Math.sin(5 * th + y * 9) + 0.014 * Math.sin(11 * th - y * 17 + 1.3) + 0.008 * Math.sin(23 * th + y * 31);
-}
-function mtnSurfaceR(th, y) {   // how far the surface is from the center at this angle and height
-  return (MTN_R - (MTN_R - MTN_TOP) * (y / MTN_H)) + mtnNoise(th, y) * (1 - 0.7 * y / MTN_H);
-}
-function mtnHeightAt(th, r) {   // how high the ground is at this angle and distance from the center
-  let lo = 0, hi = MTN_H;
-  if (r >= mtnSurfaceR(th, 0)) return 0;
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2;
-    if (mtnSurfaceR(th, mid) > r) lo = mid; else hi = mid;
+// ---------- The board: a flat loop around the table with a little mountain in the middle ----------
+const BASE_H = 0.025;                  // the board is a low, flat plateau
+const R_PATH = 0.70, R_STALL = 0.60, R_TRACK = 0.80, R_BOARD = 0.87;
+const TUNNEL_AFTER = 38;               // the trail (and the train) go through the mountain between spots 38 and 39
+const spotAng = [];
+(function angles() {
+  const w = [];
+  for (let k = 0; k < SPOTS; k++) w.push(k === TUNNEL_AFTER ? 3.4 : 1);   // the tunnel gap is longer
+  const total = w.reduce((a, b) => a + b, 0);
+  let a = Math.PI * 0.75;
+  for (let k = 0; k < SPOTS; k++) { spotAng.push(a); a += w[k] / total * Math.PI * 2; }
+})();
+const TUNNEL_ANG = (spotAng[TUNNEL_AFTER] + spotAng[TUNNEL_AFTER + 1]) / 2;
+const TOP = TABLE_Y + BASE_H;
+function onRing(ang, r, y = TOP) { return new THREE.Vector3(Math.sin(ang) * r, y, Math.cos(ang) * r); }
+function tangentAt(ang) { return new THREE.Vector3(Math.cos(ang), 0, -Math.sin(ang)); }
+function sectionOfAngle(ang) {   // which section a point on the board belongs to (for coloring the ground)
+  let best = 0, bd = 9;
+  for (let k = 0; k < SPOTS; k++) {
+    let d = Math.abs(((ang - spotAng[k]) % (Math.PI * 2) + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+    if (d < bd) { bd = d; best = k; }
   }
-  return lo;
+  return sectionOf(best);
 }
-export const mountainMesh = (function mountain() {
-  const geo = new THREE.CylinderGeometry(MTN_TOP, MTN_R, MTN_H, 72, 12, false);
-  const pos = geo.attributes.position;
-  const colors = [], c = new THREE.Color();
-  const grass = new THREE.Color(0x4f7d3a), rock = new THREE.Color(0x7d746a), snow = new THREE.Color(0xf2f4f7);
+const spotPos = spotAng.map(a => onRing(a, R_PATH, TOP + 0.004));
+
+// Everything that counts as "the ground" for pointing (so pointing at it does nothing)
+export const mountainMesh = new THREE.Group();
+trailGroup.add(mountainMesh);
+(function ground() {
+  const geo = new THREE.CylinderGeometry(R_BOARD, R_BOARD + 0.01, BASE_H, 96, 1, false);
+  const pos = geo.attributes.position, colors = [], c = new THREE.Color();
   for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i), z = pos.getZ(i), yy = pos.getY(i) + MTN_H / 2;
-    const r = Math.hypot(x, z), th = Math.atan2(x, z);
-    if (r > 0.0001) {
-      const nr = mtnSurfaceR(th, yy);
-      pos.setX(i, Math.sin(th) * nr); pos.setZ(i, Math.cos(th) * nr);
-    }
-    const t = yy / MTN_H + 0.06 * Math.sin(th * 7 + yy * 20);
-    if (t < 0.45) c.copy(grass);
-    else if (t < 0.55) c.copy(grass).lerp(rock, (t - 0.45) / 0.1);
-    else if (t < 0.8) c.copy(rock);
-    else if (t < 0.86) c.copy(rock).lerp(snow, (t - 0.8) / 0.06);
-    else c.copy(snow);
+    const x = pos.getX(i), z = pos.getZ(i);
+    if (Math.hypot(x, z) < 0.001) c.setHex(0x7a9a5a);
+    else c.setHex(SECTIONS[sectionOfAngle(Math.atan2(x, z))].ground);
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 }));
+  m.position.y = TABLE_Y + BASE_H / 2;
+  m.receiveShadow = true;
+  m.userData.mountain = true;
+  mountainMesh.add(m);
+})();
+// The little mountain in the middle, plus a ridge running out over the trail with the tunnel through it
+function rockyMesh(geo, snowLine) {
+  const pos = geo.attributes.position, colors = [], c = new THREE.Color();
+  const grass = new THREE.Color(0x5b7d3a), rock = new THREE.Color(0x7d746a), snow = new THREE.Color(0xf2f4f7);
+  geo.computeBoundingBox();
+  const maxY = geo.boundingBox.max.y;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const n = 0.06 * Math.sin(x * 37 + z * 11) + 0.05 * Math.sin(z * 29 - y * 17) + 0.03 * Math.sin(x * 71 + y * 53);
+    if (y > 0.001) { pos.setX(i, x * (1 + n * 0.5)); pos.setZ(i, z * (1 + n * 0.5)); pos.setY(i, y * (1 + n * 0.3)); }
+    const t = y / maxY + 0.08 * Math.sin(x * 40 + z * 30);
+    if (t < 0.25) c.copy(grass); else if (t < 0.4) c.copy(grass).lerp(rock, (t - 0.25) / 0.15);
+    else if (t < snowLine) c.copy(rock); else c.copy(snow);
     colors.push(c.r, c.g, c.b);
   }
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 }));
-  m.position.y = TABLE_Y + MTN_H / 2;
   m.castShadow = true; m.receiveShadow = true;
   m.userData.mountain = true;
-  trailGroup.add(m);
   return m;
+}
+(function mountain() {
+  const peak = rockyMesh(new THREE.ConeGeometry(0.34, 0.27, 28, 6), 0.72);
+  peak.position.set(0, TOP + 0.135, 0);
+  mountainMesh.add(peak);
+  // The ridge: a long rocky hump from the mountain out past the train track
+  const ridgeGeo = new THREE.SphereGeometry(1, 28, 14, 0, Math.PI * 2, 0, Math.PI / 2);
+  const ridge = rockyMesh(ridgeGeo, 0.86);
+  const mid = (0.30 + 0.93) / 2;
+  ridge.scale.set(0.105, 0.15, (0.93 - 0.30) / 2);   // narrow across the trail, long toward the edge
+  ridge.position.copy(onRing(TUNNEL_ANG, mid, TOP - 0.002));
+  ridge.rotation.y = TUNNEL_ANG;
+  mountainMesh.add(ridge);
+  // Stone arches with dark openings where the trail and track go in and out
+  const stone = std(0x6a625a, 0.9);
+  const hole = new THREE.MeshBasicMaterial({ color: 0x0b0806 });
+  for (const side of [-1, 1]) {
+    const t = tangentAt(TUNNEL_ANG);
+    const c = onRing(TUNNEL_ANG, (R_PATH + R_TRACK) / 2, TOP).addScaledVector(t, side * 0.098);
+    const yaw = Math.atan2(t.x, t.z);
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.013, 8, 20, Math.PI), stone);
+    arch.position.copy(c); arch.rotation.y = yaw; arch.castShadow = true;
+    const dark = new THREE.Mesh(new THREE.CircleGeometry(0.075, 20, 0, Math.PI), hole);
+    dark.position.copy(c).addScaledVector(t, -side * 0.004); dark.rotation.y = yaw + (side > 0 ? 0 : Math.PI);
+    dark.userData.mountain = true;
+    mountainMesh.add(arch, dark);
+  }
 })();
-export const MTN_TARGET = new THREE.Vector3(0, TABLE_Y + 0.12, 0);   // where board view looks
+export const MTN_TARGET = new THREE.Vector3(0, TABLE_Y + 0.08, 0);   // where board view looks
 
-// Sunlight on the hill: turns golden, then orange, as sunset gets close
+// Sunlight on the board: turns golden, then orange, as sunset gets close
 const trailSun = new THREE.DirectionalLight(0xffffff, 0);
 trailSun.position.set(1.5, 2.5, 1);
 trailGroup.add(trailSun);
 const SUN_DAY = new THREE.Color(0xfff4e0), SUN_GOLD = new THREE.Color(0xffc070), SUN_SET = new THREE.Color(0xff6a3d);
 
-// ---------- The trail: 32 stepping stones spiraling up, evenly spaced ----------
-const spotPos = [];
-(function trailPath() {
-  const N = 600, TURNS = 1.25, TH0 = Math.PI / 8;
-  const samples = [], dist = [0];
-  for (let i = 0; i <= N; i++) {
-    const u = i / N, y = 0.03 + 0.22 * u, th = TH0 + u * TURNS * Math.PI * 2;
-    const r = mtnSurfaceR(th, y) + 0.02;
-    samples.push(new THREE.Vector3(Math.sin(th) * r, TABLE_Y + y, Math.cos(th) * r));
-    if (i) dist.push(dist[i - 1] + samples[i].distanceTo(samples[i - 1]));
-  }
-  let j = 0;
-  for (let k = 0; k < SPOTS; k++) {
-    const target = dist[N] * k / (SPOTS - 1);
-    while (j < N - 1 && dist[j + 1] < target) j++;
-    const f = (target - dist[j]) / ((dist[j + 1] - dist[j]) || 1);
-    spotPos.push(samples[j].clone().lerp(samples[j + 1], f));
-  }
-})();
-
+// ---------- The trail: 48 stepping stones around the loop ----------
 export const spotMeshes = [];
 spotPos.forEach((p, k) => {
   const info = spotInfo(k);
-  const big = k === 0 || k === SPOTS - 1;
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(big ? 0.052 : 0.042, big ? 0.056 : 0.046, 0.016, 24), std(new THREE.Color(info.color), 0.6));
+  const big = k === 0 || info.station;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(big ? 0.042 : 0.034, big ? 0.045 : 0.037, 0.012, 24), std(new THREE.Color(info.color), 0.6));
   m.position.copy(p);
   m.castShadow = true; m.receiveShadow = true;
   m.userData.spot = k;
   trailGroup.add(m);
   spotMeshes.push(m);
 });
-
-// Dirt path linking the stones
+// Dirt path linking the stones, all the way around
 (function dirtPath() {
-  const curve = new THREE.CatmullRomCurve3(spotPos.map(p => p.clone().add(new THREE.Vector3(0, -0.005, 0))));
-  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 320, 0.013, 6), std(0xa98a60, 0.95));
+  const pts = [];
+  for (let k = 0; k < SPOTS; k++) {
+    pts.push(spotPos[k].clone().add(new THREE.Vector3(0, -0.004, 0)));
+    if (k === TUNNEL_AFTER) pts.push(onRing(TUNNEL_ANG, R_PATH, TOP));
+  }
+  const curve = new THREE.CatmullRomCurve3(pts, true);
+  const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 400, 0.011, 6, true), std(0xa98a60, 0.95));
   tube.receiveShadow = true;
   trailGroup.add(tube);
 })();
-
-// Little pine trees on the lower slopes
-(function trees() {
-  const trunkMat = std(0x5a3a24), leafMat = std(0x2f5d34, 0.9);
-  let placed = 0, tries = 0;
-  while (placed < 26 && tries < 600) {
-    tries++;
-    const th = rnd() * Math.PI * 2, y = 0.02 + rnd() * 0.12;
-    const r = mtnSurfaceR(th, y);
-    const p = new THREE.Vector3(Math.sin(th) * r, TABLE_Y + y, Math.cos(th) * r);
-    if (spotPos.some(s => s.distanceTo(p) < 0.1)) continue;   // keep room for the stalls
-    const s = 0.6 + rnd() * 0.6;
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.006 * s, 0.006 * s, 0.03 * s, 6), trunkMat);
+// Scenery for each section: flowers, trees, a pond, rocks
+(function scenery() {
+  const trunkMat = std(0x5a3a24), leafMat = std(0x2f5d34, 0.9), birchMat = std(0xe8e2d0, 0.8);
+  const rockMat = std(0x8a8178, 0.9), water = std(0x3a8fd0, 0.15, { metalness: 0.2 });
+  const flowerCols = [0xf48fb1, 0xffd54f, 0xffffff, 0xb39ddb];
+  const clear = p => { const r = Math.hypot(p.x, p.z); return spotPos.some(s => s.distanceTo(p) < 0.06) || Math.abs(r - R_STALL) < 0.04 || Math.abs(r - R_PATH) < 0.03 || Math.abs(r - R_TRACK) < 0.03; };
+  const place = (n, rMin, rMax, sec, make) => {
+    let placed = 0, tries = 0;
+    while (placed < n && tries < 800) {
+      tries++;
+      const ang = rnd() * Math.PI * 2, r = rMin + rnd() * (rMax - rMin);
+      if (sectionOfAngle(ang) !== sec || Math.abs(ang - TUNNEL_ANG) < 0.25) continue;
+      const p = onRing(ang, r);
+      if (clear(p)) continue;
+      const o = make(); o.position.copy(p); o.rotation.y = rnd() * 6; trailGroup.add(o); placed++;
+    }
+  };
+  // Meadow: flowers
+  place(40, 0.38, 0.86, 0, () => {
+    const f = new THREE.Mesh(new THREE.SphereGeometry(0.006, 6, 4), std(flowerCols[Math.floor(rnd() * 4)], 0.6));
+    f.position.y = 0.004; const g = new THREE.Group(); g.add(f); return g;
+  });
+  // Forest: pines and birches
+  place(22, 0.36, 0.86, 1, () => {
+    const g = new THREE.Group(), s = 0.6 + rnd() * 0.6, birch = rnd() < 0.3;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.004 * s, 0.005 * s, 0.03 * s, 6), birch ? birchMat : trunkMat);
     trunk.position.y = 0.015 * s;
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.03 * s, 0.09 * s, 8), leafMat);
-    cone.position.y = 0.06 * s;
-    cone.castShadow = true;
-    g.add(trunk, cone);
-    g.position.copy(p);
-    trailGroup.add(g);
-    placed++;
-  }
+    const cone = new THREE.Mesh(birch ? new THREE.SphereGeometry(0.02 * s, 8, 6) : new THREE.ConeGeometry(0.024 * s, 0.07 * s, 8), birch ? std(0x7cb342, 0.9) : leafMat);
+    cone.position.y = (birch ? 0.04 : 0.055) * s; cone.castShadow = true;
+    g.add(trunk, cone); return g;
+  });
+  // Lake: a pond inside the loop, with reeds
+  const lakeMid = (spotAng[24] + spotAng[35]) / 2;
+  const pond = new THREE.Mesh(new THREE.CircleGeometry(0.075, 28), water);
+  pond.rotation.x = -Math.PI / 2; pond.scale.set(1.5, 1, 1);
+  pond.position.copy(onRing(lakeMid, 0.46, TOP + 0.002)); pond.rotation.z = lakeMid;
+  trailGroup.add(pond);
+  place(14, 0.38, 0.86, 2, () => {
+    const g = new THREE.Group();
+    for (let i = 0; i < 3; i++) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.0015, 0.0015, 0.03, 4), std(0x6b8e23)); r.position.set((i - 1) * 0.004, 0.015, 0); g.add(r); }
+    return g;
+  });
+  // Mountain: rocks
+  place(16, 0.36, 0.86, 3, () => {
+    const g = new THREE.Group();
+    const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.012 + rnd() * 0.012, 0), rockMat);
+    r.position.y = 0.006; r.castShadow = true; g.add(r); return g;
+  });
+  // Section names floating over the middle of each section
+  SECTIONS.forEach((sec, q) => {
+    const a = (spotAng[12 * q + 1] + spotAng[12 * q + 11]) / 2;
+    const l = makeLabel(`${sec.icon} ${sec.name}`, '#fff6dd');
+    l.position.copy(onRing(a, 0.47, TOP + 0.09));
+    l.scale.set(0.26, 0.065, 1);
+    trailGroup.add(l);
+  });
+  const th = makeLabel('Trailhead', '#f5e6b8');
+  th.position.copy(spotPos[0]).add(new THREE.Vector3(0, 0.09, 0));
+  th.scale.set(0.28, 0.07, 1);
+  trailGroup.add(th);
 })();
 
-// Signs over the Trailhead and the Summit
-(function signs() {
-  const a = makeLabel('Trailhead', '#f5e6b8');
-  a.position.copy(spotPos[0]).add(new THREE.Vector3(0, 0.1, 0));
-  a.scale.set(0.32, 0.08, 1);
-  const b = makeLabel('Summit', '#e0b23a');
-  b.position.copy(spotPos[SPOTS - 1]).add(new THREE.Vector3(0, 0.1, 0));
-  b.scale.set(0.32, 0.08, 1);
-  trailGroup.add(a, b);
-})();
-
-// ---------- Chairlift from the Summit back down to the Trailhead ----------
-const liftChairs = [];
-let liftA, liftB;
-(function chairlift() {
-  const metal = std(0x3a3a3a, 0.5, { metalness: 0.5 });
-  const top = spotPos[SPOTS - 1].clone().multiplyScalar(0.55); top.y = spotPos[SPOTS - 1].y;
-  const baseAng = Math.PI / 8 - 0.2;
-  const bottom = new THREE.Vector3(Math.sin(baseAng) * 0.88, TABLE_Y, Math.cos(baseAng) * 0.88);
-  function pole(p, h) {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.008, h, 8), metal);
-    m.position.set(p.x, p.y + h / 2, p.z);
-    m.castShadow = true;
+// ---------- The railway: a track around the outside, four stations, and a little steam train ----------
+(function railway() {
+  const rail = std(0x6d6f75, 0.35, { metalness: 0.7 }), wood = std(0x5a3a24, 0.9);
+  for (const r of [R_TRACK - 0.013, R_TRACK + 0.013]) {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(r, 0.0025, 4, 160), rail);
+    m.rotation.x = Math.PI / 2; m.position.y = TOP + 0.005;
     trailGroup.add(m);
-    return new THREE.Vector3(p.x, p.y + h, p.z);
   }
-  liftA = pole(top, 0.16);
-  liftB = pole(bottom, 0.3);
-  const dir = new THREE.Vector3().subVectors(liftB, liftA);
-  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.0025, 0.0025, dir.length(), 6), std(0x222222, 0.5));
-  cable.position.copy(liftA).add(liftB).multiplyScalar(0.5);
-  cable.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
-  trailGroup.add(cable);
-  for (let i = 0; i < 3; i++) {
-    const chair = new THREE.Group();
-    const hanger = new THREE.Mesh(new THREE.CylinderGeometry(0.002, 0.002, 0.03, 4), metal);
-    hanger.position.y = -0.015;
-    const seatBox = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, 0.02), std(0xc0392b, 0.6));
-    seatBox.position.y = -0.032;
-    chair.add(hanger, seatBox);
-    trailGroup.add(chair);
-    liftChairs.push({ g: chair, t: i / 3 });
+  const TIES = 110;
+  for (let i = 0; i < TIES; i++) {
+    const a = i / TIES * Math.PI * 2;
+    const tie = new THREE.Mesh(new THREE.BoxGeometry(0.042, 0.004, 0.01), wood);
+    tie.position.copy(onRing(a, R_TRACK, TOP + 0.002));
+    tie.rotation.y = a + Math.PI / 2;
+    trailGroup.add(tie);
   }
 })();
+// Station buildings sit inside the loop; the roof turns the owner's color
+const stationHouses = {};
+for (const k of STATIONS) {
+  const g = new THREE.Group();
+  const walls = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.035, 0.045), std(0xe8dcc4, 0.8));
+  walls.position.y = 0.0175;
+  const roofMat = std(0x7a7f88, 0.6);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.03, 4), roofMat);
+  roof.position.y = 0.05; roof.rotation.y = Math.PI / 4; roof.scale.set(1, 1, 0.75);
+  const sign = makeLabel('🚉', '#ffffff'); sign.position.y = 0.09; sign.scale.set(0.09, 0.0225, 1);
+  [walls, roof].forEach(m => { m.castShadow = true; g.add(m); });
+  g.add(sign);
+  g.position.copy(onRing(spotAng[k], R_STALL, TOP));
+  g.rotation.y = spotAng[k];
+  // a little platform out to the track
+  const plat = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.006, 0.07), std(0x8a8178, 0.9));
+  plat.position.copy(onRing(spotAng[k], (R_PATH + R_TRACK) / 2 + 0.005, TOP + 0.003));
+  plat.rotation.y = spotAng[k];
+  trailGroup.add(g, plat);
+  stationHouses[k] = { g, roofMat };
+}
+// The train: a locomotive and two cars, always chugging around the loop
+const TRAIN_SPEED = Math.PI * 2 / 45;   // one lap every 45 seconds
+let trainAng = 0;
+const trainParts = [];
+(function train() {
+  const red = std(0xb3261e, 0.5), black = std(0x222222, 0.5, { metalness: 0.4 }), gold = std(0xd4a63c, 0.3, { metalness: 0.8 });
+  const loco = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.01, 0.075), black); base.position.y = 0.01;
+  const boiler = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.045, 12), red); boiler.rotation.x = Math.PI / 2; boiler.position.set(0, 0.026, 0.012);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.025), red); cab.position.set(0, 0.03, -0.022);
+  const cabRoof = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.004, 0.03), black); cabRoof.position.set(0, 0.047, -0.022);
+  const chimney = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.004, 0.018, 8), black); chimney.position.set(0, 0.045, 0.026);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0125, 0.0125, 0.004, 12), gold); band.rotation.x = Math.PI / 2; band.position.set(0, 0.026, 0.02);
+  [base, boiler, cab, cabRoof, chimney, band].forEach(m => { m.castShadow = true; loco.add(m); });
+  trailGroup.add(loco);
+  trainParts.push({ g: loco, back: 0, chimney });
+  const carCols = [0x2e7d4f, 0x3a7fc8];
+  carCols.forEach((col, i) => {
+    const car = new THREE.Group();
+    const cb = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.008, 0.06), black); cb.position.y = 0.009;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.016, 0.058), std(col, 0.6)); body.position.y = 0.021;
+    [cb, body].forEach(m => { m.castShadow = true; car.add(m); });
+    trailGroup.add(car);
+    trainParts.push({ g: car, back: 0.115 * (i + 1) / R_TRACK });
+  });
+})();
+const smoke = Array.from({ length: 7 }, (_, i) => {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), new THREE.MeshBasicMaterial({ color: 0xeeeeee, transparent: true, opacity: 0, depthWrite: false }));
+  trailGroup.add(m);
+  return { m, t: i / 7, from: new THREE.Vector3() };
+});
+function placeTrain(ang) {
+  for (const p of trainParts) {
+    const a = ang - p.back;
+    p.g.position.copy(onRing(a, R_TRACK, TOP + 0.004));
+    const t = tangentAt(a);
+    p.g.rotation.y = Math.atan2(t.x, t.z);
+  }
+}
+placeTrain(0);
 
-// ---------- Jobs: each player's game piece is a tiny model of their trade ----------
+// ---------- Jobs: just for looks, each player's icon on their piece and stalls ----------
 const JOBS = [
-  { id: 'icecream',  name: 'Ice Cream', icon: '🍦' },
-  { id: 'coffee',    name: 'Coffee',    icon: '☕' },
-  { id: 'grill',     name: 'Grill',     icon: '🍔' },
-  { id: 'bar',       name: 'Bar',       icon: '🍺' },
-  { id: 'wine',      name: 'Wine',      icon: '🍷' },
-  { id: 'toys',      name: 'Toys',      icon: '🦆' },
-  { id: 'bakery',    name: 'Bakery',    icon: '🧁' },
-  { id: 'outfitter', name: 'Outfitter', icon: '🏮' }
+  { id: 'burger',   name: 'Burger',    icon: '🍔' },
+  { id: 'bar',      name: 'Bar',       icon: '🍺' },
+  { id: 'icecream', name: 'Ice Cream', icon: '🍦' },
+  { id: 'toys',     name: 'Toys',      icon: '🧸' },
+  { id: 'pets',     name: 'Pets',      icon: '🐾' },
+  { id: 'music',    name: 'Music',     icon: '🎵' }
 ];
 function jobInfo(id) { return JOBS.find(j => j.id === id) || JOBS[0]; }
-const LEVELS = ['Cart', 'Stand', 'Shop', 'Lodge'];
-
-// A little model about 1 unit tall, standing on y = 0, in its natural colors
-function makeJobModel(job) {
-  const g = new THREE.Group();
-  const add = (geo, color, x, y, z, rough = 0.6, extra = {}) => {
-    const m = new THREE.Mesh(geo, std(color, rough, extra));
-    m.position.set(x, y, z);
-    m.castShadow = true;
-    g.add(m);
-    return m;
-  };
-  switch (job) {
-    case 'coffee':
-      add(new THREE.CylinderGeometry(0.3, 0.26, 0.6, 20), 0xf4f1ea, 0, 0.3, 0, 0.4);
-      add(new THREE.CylinderGeometry(0.27, 0.27, 0.02, 20), 0x4a2a14, 0, 0.6, 0);
-      add(new THREE.TorusGeometry(0.14, 0.05, 8, 16), 0xf4f1ea, 0.3, 0.32, 0, 0.4);
-      add(new THREE.SphereGeometry(0.09, 8, 6), 0xffffff, -0.05, 0.78, 0, 1, { transparent: true, opacity: 0.6 });
-      add(new THREE.SphereGeometry(0.07, 8, 6), 0xffffff, 0.06, 0.92, 0, 1, { transparent: true, opacity: 0.45 });
-      break;
-    case 'grill': {
-      add(new THREE.CylinderGeometry(0.35, 0.33, 0.15, 20), 0xd9a25b, 0, 0.075, 0);
-      add(new THREE.CylinderGeometry(0.37, 0.37, 0.12, 20), 0x5a3218, 0, 0.21, 0, 0.9);
-      const cheese = add(new THREE.BoxGeometry(0.62, 0.04, 0.62), 0xf4c430, 0, 0.29, 0);
-      cheese.rotation.y = Math.PI / 4;
-      add(new THREE.CylinderGeometry(0.38, 0.38, 0.03, 20), 0x5aa83a, 0, 0.32, 0);
-      const bun = add(new THREE.SphereGeometry(0.35, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), 0xd9a25b, 0, 0.33, 0);
-      bun.scale.y = 0.8;
-      break;
-    }
-    case 'bar':
-      add(new THREE.CylinderGeometry(0.28, 0.28, 0.6, 20), 0xe0a020, 0, 0.3, 0, 0.3);
-      add(new THREE.CylinderGeometry(0.3, 0.3, 0.12, 20), 0xfffaf0, 0, 0.64, 0, 0.9);
-      add(new THREE.SphereGeometry(0.17, 12, 8), 0xfffaf0, 0.08, 0.72, 0, 0.9);
-      add(new THREE.TorusGeometry(0.15, 0.05, 8, 16), 0xe0a020, 0.3, 0.3, 0, 0.3);
-      break;
-    case 'wine':
-      add(new THREE.CylinderGeometry(0.2, 0.2, 0.6, 20), 0x1f4d2b, 0, 0.3, 0, 0.3);
-      add(new THREE.CylinderGeometry(0.205, 0.205, 0.25, 20), 0xf1e6c8, 0, 0.3, 0, 0.8);
-      add(new THREE.SphereGeometry(0.2, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), 0x1f4d2b, 0, 0.6, 0, 0.3);
-      add(new THREE.CylinderGeometry(0.07, 0.07, 0.3, 12), 0x1f4d2b, 0, 0.82, 0, 0.3);
-      add(new THREE.CylinderGeometry(0.078, 0.078, 0.1, 12), 0x8e1b2b, 0, 0.97, 0);
-      break;
-    case 'toys': {
-      const body = add(new THREE.SphereGeometry(0.33, 16, 12), 0xffd23a, 0, 0.32, -0.04, 0.4);
-      body.scale.set(1.15, 0.85, 1.25);
-      add(new THREE.SphereGeometry(0.2, 16, 12), 0xffd23a, 0, 0.72, 0.14, 0.4);
-      const beak = add(new THREE.ConeGeometry(0.08, 0.2, 10), 0xff8c1a, 0, 0.7, 0.4, 0.5);
-      beak.rotation.x = Math.PI / 2;
-      add(new THREE.SphereGeometry(0.035, 8, 6), 0x111111, 0.1, 0.8, 0.28, 0.3);
-      add(new THREE.SphereGeometry(0.035, 8, 6), 0x111111, -0.1, 0.8, 0.28, 0.3);
-      break;
-    }
-    case 'bakery': {
-      add(new THREE.CylinderGeometry(0.3, 0.22, 0.4, 16), 0x7fc8e8, 0, 0.2, 0);
-      const frost = add(new THREE.SphereGeometry(0.32, 16, 12), 0xf6c1d9, 0, 0.5, 0, 0.7);
-      frost.scale.y = 0.8;
-      add(new THREE.ConeGeometry(0.18, 0.25, 16), 0xf6c1d9, 0, 0.8, 0, 0.7);
-      add(new THREE.SphereGeometry(0.08, 10, 8), 0xc0392b, 0, 0.96, 0, 0.3);
-      break;
-    }
-    case 'outfitter':
-      add(new THREE.CylinderGeometry(0.25, 0.27, 0.08, 16), 0x2b2b2b, 0, 0.04, 0, 0.5, { metalness: 0.5 });
-      add(new THREE.CylinderGeometry(0.19, 0.19, 0.5, 16), 0xffd36b, 0, 0.33, 0, 0.4, { emissive: 0xffb020, emissiveIntensity: 0.9 });
-      for (let i = 0; i < 4; i++) {
-        const a = i * Math.PI / 2 + Math.PI / 4;
-        add(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 6), 0x2b2b2b, Math.sin(a) * 0.21, 0.33, Math.cos(a) * 0.21, 0.5, { metalness: 0.5 });
-      }
-      add(new THREE.ConeGeometry(0.28, 0.2, 16), 0x2b2b2b, 0, 0.68, 0, 0.5, { metalness: 0.5 });
-      add(new THREE.TorusGeometry(0.11, 0.025, 8, 16), 0x2b2b2b, 0, 0.88, 0, 0.5, { metalness: 0.5 });
-      break;
-    default: {   // ice cream
-      const cone = add(new THREE.ConeGeometry(0.28, 0.65, 16), 0xd9a25b, 0, 0.325, 0);
-      cone.rotation.x = Math.PI;
-      add(new THREE.SphereGeometry(0.3, 16, 12), 0xf7a8c4, 0, 0.72, 0, 0.7);
-      add(new THREE.SphereGeometry(0.07, 8, 6), 0xc0392b, 0, 1.03, 0, 0.3);
-    }
+const iconMats = {};
+function iconMaterial(icon) {   // an emoji drawn on a little sprite that always faces you
+  if (!iconMats[icon]) {
+    const t = paintTexture(128, 128, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = '96px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+      g.fillText(icon, w / 2, h / 2 + 6);
+    });
+    iconMats[icon] = new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false });
   }
-  return g;
-}
-function sizedJobModel(job, height) {   // the model scaled to a given height
-  const m = makeJobModel(job);
-  const size = new THREE.Box3().setFromObject(m).getSize(new THREE.Vector3());
-  m.scale.setScalar(height / (size.y || 1));
-  return m;
+  return iconMats[icon];
 }
 
-// ---------- Pawns: your job's model on a little base in your rainbow color ----------
+// ---------- Pawns: a peg in your rainbow color with your job's icon floating on top ----------
 const pawns = {};   // id -> { g, c, job, anim }
 function makePawn(c, job) {
   const g = new THREE.Group();
-  const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.022, 0.008, 20), std(new THREE.Color(RAINBOW[c]), 0.5));
-  baseDisc.position.y = 0.004;
-  baseDisc.castShadow = true;
-  const model = sizedJobModel(job, 0.05);
-  model.position.y = 0.008;
-  g.add(baseDisc, model);
+  const mat = std(new THREE.Color(RAINBOW[c]), 0.45);
+  const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.016, 0.006, 16), mat);
+  baseDisc.position.y = 0.003;
+  const peg = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.011, 0.026, 12), mat);
+  peg.position.y = 0.019;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.009, 12, 8), mat);
+  head.position.y = 0.036;
+  [baseDisc, peg, head].forEach(m => { m.castShadow = true; g.add(m); });
+  const icon = new THREE.Sprite(iconMaterial(jobInfo(job).icon));
+  icon.scale.set(0.03, 0.03, 1); icon.position.y = 0.064;
+  g.add(icon);
   trailGroup.add(g);
   return g;
 }
-function pawnSpotPos(k, rank) {   // several pawns on one stone stand in a little ring, nudged toward the outside edge
+function pawnSpotPos(k, rank) {   // several pawns on one stone stand in a little ring
   const p = spotPos[k].clone();
-  const out = new THREE.Vector3(p.x, 0, p.z).normalize();
-  p.addScaledVector(out, 0.01);
-  p.y += 0.008;
-  const ang = rank * Math.PI / 3;
-  p.x += Math.sin(ang) * 0.02; p.z += Math.cos(ang) * 0.02;
+  p.y += 0.006;
+  if (rank > 0) {
+    const ang = rank * Math.PI / 3;
+    p.x += Math.sin(ang) * 0.02; p.z += Math.cos(ang) * 0.02;
+  }
   return p;
 }
 
-// ---------- Booths: what you own shows up just uphill from the stone ----------
-const booths = {};   // spot -> { g, key }
-function makeBooth(c, job, lv, k) {
+// ---------- Stalls: a flat block in the owner's color for each level, their icon on top ----------
+const stacks = {};   // spot -> { g, key }
+function makeStack(c, job, lv, k) {
   const g = new THREE.Group();
-  const s = [0.75, 0.95, 1.15, 1.4][lv] || 1;
-  const wood = std(0x8a5a33, 0.8);
-  const col = std(new THREE.Color(RAINBOW[c]), 0.6);
-  box(0.04 * s, 0.026 * s, 0.026 * s, wood, 0, 0.013 * s, 0, g);             // the stall
-  box(0.03 * s, 0.006 * s, 0.002, std(0xf1e6c8, 0.8), 0, 0.018 * s, 0.0135 * s, g);   // counter sign
-  const awning = box(0.048 * s, 0.004 * s, 0.024 * s, col, 0, 0.03 * s, 0.012 * s, g);
-  awning.rotation.x = 0.35;                                                  // tilted down toward the trail
-  if (lv >= 2) box(0.004, 0.02 * s, 0.004, wood, -0.022 * s, 0.04 * s, -0.01 * s, g);   // a flag pole for Shops and Lodges
-  if (lv >= 3) box(0.012 * s, 0.008 * s, 0.002, col, -0.016 * s, 0.047 * s, -0.01 * s, g);
-  const item = sizedJobModel(job, 0.022 * s);
-  item.position.y = 0.026 * s;
-  g.add(item);
-  const p = spotPos[k];
-  const th = Math.atan2(p.x, p.z);
-  const r = Math.hypot(p.x, p.z) - 0.04;
-  g.position.set(Math.sin(th) * r, TABLE_Y + mtnHeightAt(th, r) - 0.003, Math.cos(th) * r);   // sitting on the slope
-  g.rotation.y = th;   // facing out toward the trail
+  const mat = std(new THREE.Color(RAINBOW[c]), 0.5);
+  const edge = std(new THREE.Color(GROUPS[GROUP_OF[k]].color), 0.6);
+  const H = 0.012;
+  for (let i = 0; i <= lv; i++) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.044 - i * 0.003, H, 0.044 - i * 0.003), i === 0 ? edge : mat);
+    b.position.y = H * (i + 0.5);
+    b.castShadow = true; b.receiveShadow = true;
+    g.add(b);
+  }
+  if (lv === 0) {   // a Cart: one block in the group's color with a stripe of the owner's color
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.046, 0.004, 0.046), mat);
+    stripe.position.y = H; g.add(stripe);
+  }
+  const icon = new THREE.Sprite(iconMaterial(jobInfo(job).icon));
+  icon.scale.set(0.034, 0.034, 1); icon.position.y = H * (lv + 1) + 0.022;
+  g.add(icon);
+  g.position.copy(onRing(spotAng[k], R_STALL, TOP));
+  g.rotation.y = spotAng[k];
   trailGroup.add(g);
   return g;
 }
-function syncBooths() {
+function syncStalls() {
   const want = {};
-  for (let k = 0; k < SPOTS; k++) {
+  for (let k = 1; k < SPOTS; k++) {
     const st = stallOwner(trail, k);
-    if (st) {
-      const p = trail.players[st.o];
-      want[k] = `${st.o}|${st.lv}|${colorIndex(p)}|${p.job}`;
-    }
+    if (st) { const p = trail.players[st.o]; want[k] = `${st.o}|${st.lv}|${colorIndex(p)}|${p.job}`; }
   }
-  for (const k of Object.keys(booths)) {
-    if (booths[k].key !== want[k]) { trailGroup.remove(booths[k].g); delete booths[k]; }
-  }
+  for (const k of Object.keys(stacks)) if (stacks[k].key !== want[k]) { trailGroup.remove(stacks[k].g); delete stacks[k]; }
   for (const k of Object.keys(want)) {
-    if (!booths[k]) {
-      const st = stallOwner(trail, +k), p = trail.players[st.o];
-      booths[k] = { g: makeBooth(colorIndex(p), p.job, st.lv, +k), key: want[k] };
-    }
+    if (isStation(+k)) continue;
+    if (!stacks[k]) { const st = stallOwner(trail, +k), p = trail.players[st.o]; stacks[k] = { g: makeStack(colorIndex(p), p.job, st.lv, +k), key: want[k] }; }
   }
-}
-
-// ---------- Weather deck: 8 good, 8 bad, shuffled; every card comes up once before a reshuffle ----------
-const WEATHER = [
-  { text: 'Sunny day! +100', kind: 'coins', n: 100 },
-  { text: 'Busy weekend! +150', kind: 'coins', n: 150 },
-  { text: 'Found a lost wallet! +75', kind: 'coins', n: 75 },
-  { text: 'Tip jar is full! +50', kind: 'coins', n: 50 },
-  { text: 'Tailwind! Move ahead 3', kind: 'move', n: 3 },
-  { text: `Chairlift pass! Ride to the Trailhead, +${LAP_PAY}`, kind: 'goto', to: 0, lap: true },
-  { text: 'Hot Spring pass! Off to the Hot Spring', kind: 'goto', to: HOT_SPRING },
-  { text: 'Festival! Everyone gives 25 to whoever has the fewest coins', kind: 'festival' },
-  { text: 'Thunderstorm! −100', kind: 'coins', n: -100 },
-  { text: 'Hail! −75', kind: 'coins', n: -75 },
-  { text: 'Flat tire! −50', kind: 'coins', n: -50 },
-  { text: 'Muddy trail! −50', kind: 'coins', n: -50 },
-  { text: 'Mudslide! Move back 3', kind: 'move', n: -3 },
-  { text: 'Rockslide! Go to the Ranger Station', kind: 'goto', to: RANGER },
-  { text: 'Windstorm! Pay 25 to each other player', kind: 'windstorm' },
-  { text: 'Repairs! Pay 25 for each booth level you own', kind: 'repairs' }
-];
-function newDeck() {
-  const a = WEATHER.map((_, i) => i);
-  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-  return a.join(',');
+  for (const k of STATIONS) {   // station roofs
+    const st = stallOwner(trail, k);
+    stationHouses[k].roofMat.color.set(st ? RAINBOW[colorIndex(trail.players[st.o])] : 0x7a7f88);
+  }
 }
 
 // ---------- Players, turns and rules (these work on a copy of the shared state) ----------
@@ -407,7 +439,9 @@ function trailIds(t = trail) {
 }
 function validTrailIds(t = trail) { return trailIds(t).filter(id => S.presence[id]); }               // still in the room
 function activeIds(t = trail) { return validTrailIds(t).filter(id => !t.players[id].out); }         // still in the game
-function gameIsDead(t = trail) { return !!t && t.phase === 'play' && activeIds(t).length < 2; }    // everyone left mid-game
+function gameIsDead(t = trail) {   // everyone left mid-game, or it's a game from the old board
+  return !!t && t.phase === 'play' && (activeIds(t).length < 2 || t.ver !== VER);
+}
 function nextAfter(t, id) {
   const all = trailIds(t);
   const i = all.indexOf(id);
@@ -424,28 +458,38 @@ function effectiveTurn(t = trail) {   // whose turn it really is (skips anyone w
   if (ids.includes(t.turn)) return t.turn;
   return nextAfter(t, t.turn) || ids[0];
 }
-function areaOf(k) { return Math.floor(k / 4); }
-function stallOwner(t, k) {   // the stall's owner, if they're still playing
+function stallOwner(t, k) {   // the stall's (or station's) owner, if they're still playing
   const st = t && t.stalls && t.stalls['s' + k];
   if (!st || !t.players || !t.players[st.o] || !S.presence[st.o] || t.players[st.o].out) return null;
   return st;
 }
-function ownsArea(t, id, a) {
-  return [1, 2, 3].every(i => { const st = stallOwner(t, a * 4 + i); return st && st.o === id; });
+function ownsGroup(t, id, gi) { return GROUPS[gi].spots.every(k => { const st = stallOwner(t, k); return st && st.o === id; }); }
+function sectionCount(t, id, k) {   // how many OTHER stalls this owner has in the same section
+  let n = 0;
+  for (let j = 12 * sectionOf(k); j < 12 * sectionOf(k) + 12; j++) {
+    if (j === k || j === 0 || isStation(j)) continue;
+    const st = stallOwner(t, j);
+    if (st && st.o === id) n++;
+  }
+  return n;
 }
 function rentFor(t, k) {
   const st = stallOwner(t, k);
   if (!st) return 0;
-  let r = AREAS[areaOf(k)].rent[st.lv];
-  if (st.lv === 0 && ownsArea(t, st.o, areaOf(k))) r *= 2;   // own the whole area: Cart rent doubles
+  if (isStation(k)) return STATION_RENT[STATIONS.filter(s => { const o = stallOwner(t, s); return o && o.o === st.o; }).length - 1];
+  const g = GROUPS[GROUP_OF[k]];
+  let r = g.rent[st.lv];
+  if (st.lv === 0 && ownsGroup(t, st.o, GROUP_OF[k])) r *= 2;      // own the whole color group: Cart rent doubles
+  r = Math.round(r * (1 + SECTION_BONUS * sectionCount(t, st.o, k)) / 5) * 5;   // section bonus
   return r;
 }
-function worth(t, id) {   // coins plus what you paid for your stalls and upgrades
+function worth(t, id) {   // coins plus what you paid for your stalls, stations and upgrades
   let w = t.players[id].coins || 0;
   for (const [key, st] of Object.entries(t.stalls || {})) {
     if (st.o !== id) continue;
-    const a = AREAS[areaOf(+key.slice(1))];
-    w += a.buy + st.lv * a.up;
+    const k = +key.slice(1);
+    if (isStation(k)) w += STATION_BUY;
+    else { const g = GROUPS[GROUP_OF[k]]; if (g) w += g.buy + st.lv * g.up; }
   }
   return w;
 }
@@ -457,14 +501,6 @@ function goBroke(t, id, log, why) {
   for (const key of Object.keys(t.stalls || {})) if (t.stalls[key].o === id) delete t.stalls[key];   // stalls go back up for sale
   if (log) log.push(why || `${p.name} ran out of coins and is out of the game!`);
 }
-function payUpTo(t, id, n, log) {   // pay what you can; hitting 0 puts you out
-  const p = t.players[id];
-  if (p.out || n <= 0) return 0;
-  const paid = Math.min(n, p.coins);
-  p.coins -= paid;
-  if (p.coins <= 0) goBroke(t, id, log);
-  return paid;
-}
 function payRent(t, id, ownerId, rent, log) {
   const p = t.players[id], o = t.players[ownerId];
   if (p.coins > rent) {
@@ -475,61 +511,32 @@ function payRent(t, id, ownerId, rent, log) {
     goBroke(t, id, log, `${p.name} couldn't pay ${rent} rent to ${o.name} and is out of the game!`);
   }
 }
-function moveBy(t, id, n, log) {
+function moveBy(t, id, n) {
   const p = t.players[id];
   const raw = p.pos + n;
-  if (raw >= SPOTS) { p.coins += LAP_PAY; log.push(`${p.name} passed the Trailhead (+${LAP_PAY})`); }
+  if (raw >= SPOTS) p.coins += LAP_PAY;
   p.pos = ((raw % SPOTS) + SPOTS) % SPOTS;
 }
-function drawWeather(t, id, log, depth) {
-  if (!t.deck || (t.deckPos || 0) >= WEATHER.length) { t.deck = newDeck(); t.deckPos = 0; }
-  const card = WEATHER[+t.deck.split(',')[t.deckPos]];
-  t.deckPos++;
-  const p = t.players[id];
-  log.push(`🌦 ${p.name} drew: ${card.text}`);
-  const others = activeIds(t).filter(q => q !== id);
-  if (card.kind === 'coins') {
-    if (card.n > 0) p.coins += card.n; else payUpTo(t, id, -card.n, log);
-  } else if (card.kind === 'move') {
-    moveBy(t, id, card.n, log);
-    if (depth < 2) landOn(t, id, log, depth + 1);
-  } else if (card.kind === 'goto') {
-    p.pos = card.to;
-    if (card.lap) p.coins += LAP_PAY;
-    if (depth < 2) landOn(t, id, log, depth + 1);
-  } else if (card.kind === 'festival') {
-    const ids = activeIds(t);
-    const poorest = ids.reduce((a, b) => (t.players[b].coins < t.players[a].coins ? b : a), ids[0]);
-    let got = 0;
-    for (const q of ids) if (q !== poorest) got += payUpTo(t, q, 25, log);
-    t.players[poorest].coins += got;
-    log.push(`${t.players[poorest].name} collected ${got} from the Festival`);
-  } else if (card.kind === 'windstorm') {
-    for (const q of others) t.players[q].coins += payUpTo(t, id, 25, log);
-  } else if (card.kind === 'repairs') {
-    let levels = 0;
-    for (const st of Object.values(t.stalls || {})) if (st.o === id) levels += st.lv + 1;
-    if (levels) log.push(`${p.name} paid ${payUpTo(t, id, 25 * levels, log)} for repairs`);
-  }
-}
 // What happens on the stone you land on
-function landOn(t, id, log, depth = 0) {
+function landOn(t, id, log) {
   const p = t.players[id], k = p.pos;
-  if (p.out) return;
-  if (k === HOT_SPRING) { p.coins += HOT_SPRING_PAY; log.push(`${p.name} rested at the Hot Spring (+${HOT_SPRING_PAY})`); return; }
-  if (k === ROCKSLIDE) {
-    p.pos = RANGER;
-    log.push(`${p.name} got caught in a Rockslide and slid down to the Ranger Station (−${ROCKSLIDE_FEE})`);
-    payUpTo(t, id, ROCKSLIDE_FEE, log);
+  if (p.out || k === 0) return;
+  const st = stallOwner(t, k);
+  if (isStation(k)) {
+    if (st && st.o !== id) payRent(t, id, st.o, rentFor(t, k), log);
+    if (p.out) return;
+    const fare = st && st.o === id ? 0 : FARE;
+    const canBuy = !st && p.coins > STATION_BUY;
+    const canRide = p.coins > fare;
+    if (canBuy || canRide) t.pending = { who: id, k, type: 'station', buy: canBuy ? 1 : 0, fare };
     return;
   }
-  if (SPECIALS[k]) { if (SPECIALS[k].weather) drawWeather(t, id, log, depth); return; }
-  const a = AREAS[areaOf(k)], st = stallOwner(t, k);
+  const g = GROUPS[GROUP_OF[k]];
   if (!st) {
-    if (p.coins > a.buy) t.pending = { who: id, k, type: 'buy' };
-    else log.push(`${p.name} can't afford the ${a.name} stall (${a.buy})`);
+    if (p.coins > g.buy) t.pending = { who: id, k, type: 'buy' };
+    else log.push(`${p.name} can't afford the ${g.name} stall (${g.buy})`);
   } else if (st.o === id) {
-    if (st.lv < 3 && p.coins > a.up) t.pending = { who: id, k, type: 'up' };
+    if (st.lv < 3 && p.coins > g.up) t.pending = { who: id, k, type: 'up' };
   } else {
     payRent(t, id, st.o, rentFor(t, k), log);
   }
@@ -565,7 +572,7 @@ function resetPlayers(t) {
     p.pos = 0; p.coins = START_COINS; p.out = false;
   }
   delete t.stalls; delete t.pending; delete t.dice; delete t.deck; delete t.endsAt;
-  t.deckPos = 0; t.note = ''; t.mover = ''; t.winner = ''; t.passed = false;
+  t.note = ''; t.mover = ''; t.winner = ''; t.passed = false;
 }
 
 function syncPawns() {
@@ -582,14 +589,14 @@ function syncPawns() {
     if (!pawns[id]) {
       const p = players[id], c = colorIndex(p);
       pawns[id] = { g: makePawn(c, p.job), c, job: p.job, anim: null };
-      pawns[id].g.position.copy(pawnSpotPos(p.pos || 0, rank));
+      pawns[id].g.position.copy(pawnSpotPos(Math.min(p.pos || 0, SPOTS - 1), rank));
     }
   });
 }
 function placeAllPawns() {
   const players = (trail && trail.players) || {};
   activeIds().forEach((id, rank) => {
-    if (pawns[id]) { pawns[id].anim = null; pawns[id].g.position.copy(pawnSpotPos(players[id].pos || 0, rank)); }
+    if (pawns[id]) { pawns[id].anim = null; pawns[id].g.position.copy(pawnSpotPos(Math.min(players[id].pos || 0, SPOTS - 1), rank)); }
   });
 }
 
@@ -599,9 +606,8 @@ function playLineSounds(lines) {
   lines.forEach((line, i) => setTimeout(() => {
     if (/🏆|🌅/.test(line)) sfx.win();
     else if (/out of the game/.test(line)) sfx.out();
-    else if (/🌦/.test(line)) sfx.card();
-    else if (/opened|upgraded/.test(line)) sfx.buy();
-    else if (/rent|Hot Spring|Trailhead|Festival/.test(line)) sfx.coin();
+    else if (/opened|upgraded|bought/.test(line)) sfx.buy();
+    else if (/rent|Trailhead/.test(line)) sfx.coin();
   }, i * 350));
 }
 
@@ -620,7 +626,7 @@ const diceMats = [3, 4, 1, 6, 2, 5].map(n => std(0xffffff, 0.4, { map: paintText
   g.fillStyle = n === 1 ? '#b3261e' : '#222222';
   for (const [x, y] of PIPS[n]) { g.beginPath(); g.arc(x * w, y * h, n === 1 ? 14 : 11, 0, Math.PI * 2); g.fill(); }
 }) }));
-const DIE = 0.055;
+const DIE = 0.05;
 const dice = [0, 1].map(() => {
   const m = new THREE.Mesh(new THREE.BoxGeometry(DIE, DIE, DIE), diceMats);
   m.castShadow = true;
@@ -639,10 +645,10 @@ function startRoll(t) {
   const rank = activeIds(t).indexOf(t.mover);
   if (pawns[t.mover] && rank >= 0) pawns[t.mover].g.position.copy(pawnSpotPos(t.from, rank));   // start from where they were
   rollAnim = { t: 0, dur: 0.9, items: [] };
-  [-0.33, 0.33].forEach((off, i) => {
+  [-0.3, 0.3].forEach((off, i) => {
     const ang = a + off;
-    const land = new THREE.Vector3(Math.sin(ang) * 0.91, TABLE_Y + DIE / 2, Math.cos(ang) * 0.91);
-    const start = land.clone().multiplyScalar(1.06); start.y = land.y + 0.35;
+    const land = new THREE.Vector3(Math.sin(ang) * 0.92, TABLE_Y + DIE / 2, Math.cos(ang) * 0.92);
+    const start = land.clone().multiplyScalar(1.05); start.y = land.y + 0.35;
     const axis = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
     rollAnim.items.push({ mesh: dice[i], start, land, qFinal: diceFinalQuat(t.dice[i], Math.random() * Math.PI * 2), axis });
     dice[i].visible = true;
@@ -661,9 +667,17 @@ function startHop(t) {
   if (!pw) { moveDone(); return; }
   const path = [];
   for (let s = 1; s <= t.steps; s++) path.push({ k: (t.from + s) % SPOTS });
-  const finalPos = t.players[t.mover].pos;
-  if (path[path.length - 1].k !== finalPos) path.push({ k: finalPos, jump: true });   // a Weather card or Rockslide moved them on
   pw.anim = { path, i: 0, t: 0, prev: t.from, rank: activeIds(t).indexOf(t.mover) };
+}
+// Riding the train: the train pulls into the station, your piece climbs aboard, and off it goes
+let rideAnim = null;
+function startRide(t) {
+  const pw = pawns[t.mover];
+  if (!pw) { moveDone(); return; }
+  let a0 = spotAng[t.rideFrom], a1 = spotAng[t.rideTo];
+  while (a1 <= a0) a1 += Math.PI * 2;
+  rideAnim = { id: t.mover, a0, a1, t: 0, dur: 3.2, rank: activeIds(t).indexOf(t.mover), from: t.rideFrom, to: t.rideTo };
+  if (S.activeGame === 'trail') sfx.whoosh();
 }
 function finishTrailAnims() {
   if (rollAnim) {
@@ -671,6 +685,7 @@ function finishTrailAnims() {
     rollAnim = null;
   }
   for (const id of Object.keys(pawns)) pawns[id].anim = null;
+  rideAnim = null;
   trailBusy = false;
   if (queuedLines) { playLineSounds(queuedLines); queuedLines = null; }
 }
@@ -697,15 +712,21 @@ function applyTrail(t) {
   const prev = trail;
   trail = t || { phase: 'lobby', rollNo: 0 };
   syncPawns();
-  syncBooths();
+  syncStalls();
   const players = trail.players || {};
   const isNextRoll = prev && trail.rollNo === (prev.rollNo || 0) + 1 && trail.mover && players[trail.mover] && trail.dice;
+  const isNextRide = prev && (trail.rideNo || 0) === (prev.rideNo || 0) + 1 && trail.mover && players[trail.mover];
   const lines = prev && (trail.ev || 0) > (prev.ev || 0) && trail.note ? trail.note.split('\n') : [];
   if (isNextRoll && S.activeGame === 'trail') {
     finishTrailAnims();
     trailBusy = true;
     if (lines.length) queuedLines = lines;   // play these once the pawn arrives
     startRoll(trail);
+  } else if (isNextRide && S.activeGame === 'trail') {
+    finishTrailAnims();
+    trailBusy = true;
+    if (lines.length) queuedLines = lines;
+    startRide(trail);
   } else {
     if (!trailBusy) placeAllPawns();
     if (lines.length && S.activeGame === 'trail') playLineSounds(lines);
@@ -716,7 +737,7 @@ function applyTrail(t) {
 }
 
 // ---------- Actions ----------
-let chosenMins = 60;   // the game length you picked
+let chosenMins = 40;   // the game length you picked
 function trailJoin(job) {
   if (!trail || S.seated < 0) return;
   const seat = S.seated;
@@ -744,12 +765,12 @@ function trailLeave() {
 function trailStart() {
   const mins = chosenMins;
   runTransaction(trailRef, t => {
-    if (!t || t.phase === 'play' || !t.players || !t.players[myId]) return;
+    if (!t || (t.phase === 'play' && !gameIsDead(t)) || !t.players || !t.players[myId]) return;
     for (const id of Object.keys(t.players)) if (!S.presence[id]) delete t.players[id];
     const ids = trailIds(t);
     if (ids.length < 2) return;
     resetPlayers(t);
-    t.phase = 'play'; t.turn = ids[0];
+    t.phase = 'play'; t.turn = ids[0]; t.ver = VER;
     t.mins = mins; t.endsAt = serverNow() + mins * 60000;
     return t;
   });
@@ -765,7 +786,7 @@ function trailEnd() {
 function trailRoll() {
   if (trailBusy || effectiveTurn() !== myId) return;
   runTransaction(trailRef, t => {
-    if (!t || t.phase !== 'play' || effectiveTurn(t) !== myId) return;
+    if (!t || t.phase !== 'play' || gameIsDead(t) || effectiveTurn(t) !== myId) return;
     const log = [];
     if (sunsetPassed(t)) { sunsetEnd(t, log); postLog(t, log); return t; }
     if (t.pending) {
@@ -777,31 +798,54 @@ function trailRoll() {
     const a = 1 + Math.floor(Math.random() * 6), b = 1 + Math.floor(Math.random() * 6);
     t.dice = [a, b]; t.rollNo = (t.rollNo || 0) + 1; t.mover = myId; t.from = p.pos || 0; t.steps = a + b;
     t.passed = t.from + a + b >= SPOTS;
-    moveBy(t, myId, a + b, []);            // the status line already says when you pass the Trailhead
-    landOn(t, myId, log, 0);
+    moveBy(t, myId, a + b);            // the status line already says when you pass the Trailhead
+    landOn(t, myId, log);
     checkWin(t, log);
     finishTurn(t, myId);
     postLog(t, log);
     return t;
   });
 }
-function trailDecide(yes) {
+function trailDecide(choice) {   // 'yes' (buy or upgrade), 'ride' (take the train), or 'no'
   if (trailBusy) return;
   runTransaction(trailRef, t => {
     if (!t || t.phase !== 'play' || !t.pending || t.pending.who !== myId) return;
     const { k, type } = t.pending;
-    const p = t.players[myId], a = AREAS[areaOf(k)], log = [];
+    const p = t.players[myId], log = [];
     t.stalls = t.stalls || {};
-    if (yes && type === 'buy' && !stallOwner(t, k) && p.coins > a.buy) {
-      p.coins -= a.buy;
-      t.stalls['s' + k] = { o: myId, lv: 0 };
-      const jn = jobInfo(p.job).name;
-      log.push(`${p.name} opened ${/^[AEIOU]/.test(jn) ? 'an' : 'a'} ${jn} Cart at ${a.name} (−${a.buy})`);
-    } else if (yes && type === 'up') {
-      const st = t.stalls['s' + k];
-      if (st && st.o === myId && st.lv < 3 && p.coins > a.up) {
-        p.coins -= a.up; st.lv++;
-        log.push(`${p.name} upgraded to a ${LEVELS[st.lv]} at ${a.name} (−${a.up})`);
+    if (type === 'station') {
+      const name = SECTIONS[sectionOf(k)].station;
+      if (choice === 'yes' && t.pending.buy && !stallOwner(t, k) && p.coins > STATION_BUY) {
+        p.coins -= STATION_BUY;
+        t.stalls['s' + k] = { o: myId, lv: 0 };
+        log.push(`${p.name} bought ${name} (−${STATION_BUY})`);
+      } else if (choice === 'ride') {
+        const st = stallOwner(t, k);
+        const fare = st && st.o === myId ? 0 : FARE;
+        if (p.coins > fare) {
+          p.coins -= fare;
+          if (st && st.o !== myId) t.players[st.o].coins += fare;
+          const to = STATIONS[(STATIONS.indexOf(k) + 1) % STATIONS.length];
+          const passed = to < k;
+          if (passed) p.coins += LAP_PAY;
+          p.pos = to;
+          t.rideNo = (t.rideNo || 0) + 1; t.rideFrom = k; t.rideTo = to; t.mover = myId;
+          log.push(`🚂 ${p.name} rode the train to ${SECTIONS[sectionOf(to)].station}${fare ? ` (−${fare}${st && st.o !== myId ? ' to ' + t.players[st.o].name : ''})` : ' (free, it\'s theirs)'}${passed ? ` and passed the Trailhead (+${LAP_PAY})` : ''}`);
+        }
+      }
+    } else {
+      const g = GROUPS[GROUP_OF[k]];
+      if (choice === 'yes' && type === 'buy' && !stallOwner(t, k) && p.coins > g.buy) {
+        p.coins -= g.buy;
+        t.stalls['s' + k] = { o: myId, lv: 0 };
+        const jn = jobInfo(p.job).name;
+        log.push(`${p.name} opened ${/^[AEIOU]/.test(jn) ? 'an' : 'a'} ${jn} Cart at ${g.name} (−${g.buy})`);
+      } else if (choice === 'yes' && type === 'up') {
+        const st = t.stalls['s' + k];
+        if (st && st.o === myId && st.lv < 3 && p.coins > g.up) {
+          p.coins -= g.up; st.lv++;
+          log.push(`${p.name} upgraded to a ${LEVELS[st.lv]} at ${g.name} (−${g.up})`);
+        }
       }
     }
     delete t.pending;
@@ -833,6 +877,7 @@ const tJobBtns = document.getElementById('tJobBtns');
 const tLength = document.getElementById('tLength');
 const tRoll = document.getElementById('tRoll');
 const tBuy = document.getElementById('tBuy');
+const tRide = document.getElementById('tRide');
 const tPass = document.getElementById('tPass');
 const tStart = document.getElementById('tStart');
 const tMore = document.getElementById('tMore');
@@ -861,8 +906,9 @@ for (const m of LENGTHS) {
   lengthButtons[m] = b;
 }
 tRoll.addEventListener('click', trailRoll);
-tBuy.addEventListener('click', () => trailDecide(true));
-tPass.addEventListener('click', () => trailDecide(false));
+tBuy.addEventListener('click', () => trailDecide('yes'));
+tRide.addEventListener('click', () => trailDecide('ride'));
+tPass.addEventListener('click', () => trailDecide('no'));
 tStart.addEventListener('click', trailStart);
 
 // The ⋯ button hides Leave and End game; each asks you to click twice so nobody ends a game by accident
@@ -890,6 +936,12 @@ function liveTrailPending(t = trail) {
   if (!pd || !S.presence[pd.who] || !t.players[pd.who] || t.players[pd.who].out) return null;
   return pd;
 }
+function rentPreview(t, k, lv, ownerId) {   // what a stall would charge at a level, with your bonuses
+  const g = GROUPS[GROUP_OF[k]];
+  let r = g.rent[lv];
+  const others = sectionCount(t, ownerId, k);
+  return Math.round(r * (1 + SECTION_BONUS * others) / 5) * 5;
+}
 function refreshTrailUI() {
   if (!trail) return;
   const ids = validTrailIds();
@@ -897,17 +949,24 @@ function refreshTrailUI() {
   const me = !!(players[myId] && S.presence[myId]);
   const turnId = effectiveTurn();
   const dead = gameIsDead();
-  const pd = trail.phase === 'play' ? liveTrailPending() : null;
+  const pd = trail.phase === 'play' && !dead ? liveTrailPending() : null;
   let st;
   if (trail.phase === 'play') {
-    if (dead) st = me ? 'Not enough players left · open ⋯ and click End game' : 'The last game emptied out · sit and pick a job to start a new one';
+    if (dead) st = me ? 'This game can\'t continue · open ⋯ and click End game' : 'The last game emptied out · sit and pick a job to start a new one';
     else if (pd) {
-      const a = AREAS[areaOf(pd.k)];
-      if (pd.who !== myId) st = `${players[pd.who].name} is deciding about ${a.name}…`;
-      else if (pd.type === 'buy') st = `Open a stall at ${a.name} for ${a.buy}? Rent starts at ${a.rent[0]}.`;
-      else {
+      const info = spotInfo(pd.k);
+      if (pd.who !== myId) st = `${players[pd.who].name} is deciding at ${info.name}…`;
+      else if (pd.type === 'station') {
+        const own = stallOwner(trail, pd.k);
+        st = `🚂 ${info.name}! ` + (pd.buy ? `Buy it for ${STATION_BUY}, ` : '') +
+             `ride to the next station${pd.fare ? ` for ${pd.fare}` : ' for free'}, or stay?` + (own && own.o !== myId ? '' : '');
+      } else if (pd.type === 'buy') {
+        const g = GROUPS[GROUP_OF[pd.k]];
+        st = `Open a stall at ${g.name} for ${g.buy}? Rent starts at ${rentPreview(trail, pd.k, 0, myId)}.`;
+      } else {
+        const g = GROUPS[GROUP_OF[pd.k]];
         const lv = trail.stalls['s' + pd.k].lv;
-        st = `Upgrade your ${LEVELS[lv]} at ${a.name} to a ${LEVELS[lv + 1]} for ${a.up}? Rent goes ${a.rent[lv]} → ${a.rent[lv + 1]}.`;
+        st = `Upgrade your ${LEVELS[lv]} at ${g.name} to a ${LEVELS[lv + 1]} for ${g.up}? Rent goes ${rentFor(trail, pd.k)} → ${rentPreview(trail, pd.k, lv + 1, myId)}.`;
       }
     } else {
       const last = trail.mover && players[trail.mover] && trail.dice
@@ -930,7 +989,7 @@ function refreshTrailUI() {
     dot.textContent = '● ';
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
-    const where = p.out ? 'out' : `${(p.coins || 0).toLocaleString()} · ${spotInfo(p.pos || 0).name}`;
+    const where = p.out ? 'out' : `${(p.coins || 0).toLocaleString()} · ${spotInfo(Math.min(p.pos || 0, SPOTS - 1)).name}`;
     div.appendChild(document.createTextNode(`${trail.phase === 'play' && id === turnId ? '▶ ' : ''}${jobInfo(p.job).icon} ${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
     tPlayers.appendChild(div);
   });
@@ -944,14 +1003,19 @@ function refreshTrailUI() {
   tLength.style.display = me && trail.phase !== 'play' ? '' : 'none';
   tRoll.style.display = me && trail.phase === 'play' && !pd && !dead ? '' : 'none';
   tRoll.disabled = !(turnId === myId && !trailBusy);
-  tBuy.style.display = tPass.style.display = mine ? '' : 'none';
+  tBuy.style.display = mine && (pd.type !== 'station' || pd.buy) ? '' : 'none';
+  tRide.style.display = mine && pd.type === 'station' && trail.players[myId].coins > pd.fare ? '' : 'none';
+  tPass.style.display = mine ? '' : 'none';
   if (mine) {
-    const a = AREAS[areaOf(pd.k)];
-    tBuy.textContent = pd.type === 'buy' ? `Buy (${a.buy})` : `Upgrade (${a.up})`;
-    tPass.textContent = pd.type === 'buy' ? 'Pass' : 'Not now';
+    if (pd.type === 'station') { tBuy.textContent = `Buy (${STATION_BUY})`; tRide.textContent = `🚂 Ride (${pd.fare || 'free'})`; tPass.textContent = 'Stay'; }
+    else {
+      const g = GROUPS[GROUP_OF[pd.k]];
+      tBuy.textContent = pd.type === 'buy' ? `Buy (${g.buy})` : `Upgrade (${g.up})`;
+      tPass.textContent = pd.type === 'buy' ? 'Pass' : 'Not now';
+    }
   }
-  tBuy.disabled = tPass.disabled = trailBusy;
-  tStart.style.display = me && trail.phase !== 'play' && ids.length >= 2 ? '' : 'none';
+  tBuy.disabled = tRide.disabled = tPass.disabled = trailBusy;
+  tStart.style.display = me && (trail.phase !== 'play' || dead) && ids.length >= 2 ? '' : 'none';
   tMore.style.display = me ? '' : 'none';
   if (!me) menuOpen = false;
   tMenu.style.display = me && menuOpen ? '' : 'none';
@@ -966,7 +1030,11 @@ export function showSpotInfo(k) {
   const info = spotInfo(k);
   let desc = info.desc;
   const st = stallOwner(trail, k);
-  if (st) desc = `${trail.players[st.o].name}'s ${jobInfo(trail.players[st.o].job).name} ${LEVELS[st.lv]} · rent ${rentFor(trail, k)}`;
+  if (st && isStation(k)) desc = `${trail.players[st.o].name}'s station · rent ${rentFor(trail, k)} · ride ${FARE}`;
+  else if (st) {
+    const bonus = sectionCount(trail, st.o, k);
+    desc = `${trail.players[st.o].name}'s ${jobInfo(trail.players[st.o].job).name} ${LEVELS[st.lv]} · rent ${rentFor(trail, k)}${bonus ? ` (+${Math.round(bonus * SECTION_BONUS * 100)}% section bonus)` : ''}`;
+  }
   const here = activeIds().filter(id => (trail.players[id].pos || 0) === k).map(id => trail.players[id].name);
   tInfo.textContent = `${info.name} · ${desc}${here.length ? ' · here: ' + here.join(', ') : ''}`;
 }
@@ -974,7 +1042,7 @@ export function showSpotInfo(k) {
 // ---------- Called by the room ----------
 export function refreshTrail() {   // after anything changes (people, seats, games)
   syncPawns();
-  syncBooths();
+  syncStalls();
   if (!trailBusy) placeAllPawns();
   refreshTrailUI();
   refreshTrailCounters();
@@ -1005,29 +1073,64 @@ export function updateTrail(dt) {
     }
     if (p >= 1) { const after = rollAnim.after; rollAnim = null; after(); }
   }
-  // Pawns hopping
+  // Pawns hopping from stone to stone (the hop through the tunnel takes a little longer)
   for (const id of Object.keys(pawns)) {
     const pw = pawns[id], a = pw.anim;
     if (!a) continue;
     const step = a.path[a.i];
-    const lift = !step.jump && a.prev === SPOTS - 1 && step.k === 0;   // the chairlift ride down
-    const long = lift || step.jump;
-    const dur = long ? 1.0 : 0.22;
-    if (a.t === 0 && S.activeGame === 'trail') { if (long) sfx.whoosh(); else sfx.hop(); }
+    const tunnel = a.prev === TUNNEL_AFTER && step.k === TUNNEL_AFTER + 1;
+    const dur = tunnel ? 0.6 : 0.22;
+    if (a.t === 0 && S.activeGame === 'trail') sfx.hop();
     a.t += dt;
     const p = Math.min(a.t / dur, 1);
     const from = pawnSpotPos(a.prev, Math.max(a.rank, 0)), to = pawnSpotPos(step.k, Math.max(a.rank, 0));
-    pw.g.position.lerpVectors(from, to, long ? easeInOut(p) : p);
-    pw.g.position.y += Math.sin(p * Math.PI) * (long ? 0.16 : 0.04);
+    if (tunnel) {   // walk along the curve through the mountain instead of hopping over it
+      let a0 = spotAng[a.prev], a1 = spotAng[step.k];
+      if (a1 < a0) a1 += Math.PI * 2;
+      pw.g.position.copy(onRing(a0 + (a1 - a0) * p, R_PATH, TOP + 0.01));
+    } else {
+      pw.g.position.lerpVectors(from, to, p);
+      pw.g.position.y += Math.sin(p * Math.PI) * 0.035;
+    }
     if (p >= 1) {
       a.prev = step.k; a.i++; a.t = 0;
       if (a.i >= a.path.length) { pw.anim = null; moveDone(); }
     }
   }
-  // Chairlift chairs
-  for (const c of liftChairs) {
-    c.t = (c.t + dt * 0.05) % 1;
-    c.g.position.copy(liftA).lerp(liftB, c.t);
+  // The train: chugging around, or carrying a rider from one station to the next
+  if (rideAnim) {
+    const r = rideAnim, pw = pawns[r.id];
+    r.t += dt;
+    const p = Math.min(r.t / r.dur, 1);
+    const k = 0.18;   // the first and last bits are climbing on and off
+    if (pw) {
+      if (p < k) {
+        pw.g.position.lerpVectors(pawnSpotPos(r.from, Math.max(r.rank, 0)), onRing(r.a0, R_TRACK, TOP + 0.03), p / k);
+        trainAng = r.a0 + 0.06;
+      } else if (p < 1 - k) {
+        const u = easeInOut((p - k) / (1 - 2 * k));
+        const a = r.a0 + (r.a1 - r.a0) * u;
+        pw.g.position.copy(onRing(a, R_TRACK, TOP + 0.03));
+        trainAng = a + 0.06;
+      } else {
+        pw.g.position.lerpVectors(onRing(r.a1, R_TRACK, TOP + 0.03), pawnSpotPos(r.to, Math.max(r.rank, 0)), (p - 1 + k) / k);
+        trainAng = r.a1 + 0.06;
+      }
+    }
+    if (p >= 1) { rideAnim = null; moveDone(); }
+  } else {
+    trainAng += TRAIN_SPEED * dt;
+  }
+  trainAng %= Math.PI * 2;
+  placeTrain(trainAng);
+  // Smoke puffs from the chimney
+  const chimneyTop = onRing(trainAng + 0.03, R_TRACK, TOP + 0.06);
+  for (const s of smoke) {
+    s.t += dt * 0.6;
+    if (s.t >= 1) { s.t -= 1; s.from.copy(chimneyTop); }
+    s.m.position.copy(s.from).add(new THREE.Vector3(0, s.t * 0.08, 0));
+    s.m.scale.setScalar(1 + s.t * 2.5);
+    s.m.material.opacity = 0.5 * (1 - s.t);
   }
   // Coin counters
   const players = (trail && trail.players) || {};
@@ -1036,10 +1139,10 @@ export function updateTrail(dt) {
     if (cnt.outer.visible && players[id]) drawCounter(cnt, players[id].coins || 0);
     animateCounter(cnt, dt);
   }
-  // Sunset clock and the light on the hill
+  // Sunset clock and the light on the board
   let text = '';
   if (trail && trail.phase === 'play' && trail.endsAt && !gameIsDead()) {
-    const total = (trail.mins || 60) * 60000;
+    const total = (trail.mins || 40) * 60000;
     const left = trail.endsAt - serverNow();
     const prog = Math.min(Math.max(1 - left / total, 0), 1);
     if (prog < 0.6) trailSun.color.copy(SUN_DAY).lerp(SUN_GOLD, prog / 0.6);
