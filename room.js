@@ -138,38 +138,6 @@ function makeChair(i) {
 }
 for (let i = 0; i < SEATS; i++) makeChair(i);
 
-// ---------- Bookshelf full of board games ----------
-(function bookshelf() {
-  const shelf = new THREE.Group();
-  const wood = std(0x3e2716, 0.75);
-  const W = 2.2, H = 2.2, D = 0.4;
-  box(0.05, H, D, wood, -W / 2, H / 2, 0, shelf);
-  box(0.05, H, D, wood, W / 2, H / 2, 0, shelf);
-  box(W, 0.05, D, wood, 0, H, 0, shelf);
-  box(W, H, 0.03, wood, 0, H / 2, -D / 2 + 0.015, shelf);
-  const palette = [0x2a5d8f, 0x8f2a2a, 0xd9a521, 0x2f7a4a, 0x6a3d8f, 0xe07b39, 0x1d1d1d, 0xe8d5b0, 0x3aa0a0];
-  const levels = 4;
-  for (let l = 0; l < levels; l++) {
-    const y = 0.08 + l * (H / levels);
-    box(W, 0.04, D, wood, 0, y, 0, shelf);
-    let x = -W / 2 + 0.1;
-    while (x < W / 2 - 0.35) {
-      const w = 0.25 + rnd() * 0.12;
-      let stackY = y + 0.02;
-      const count = 1 + Math.floor(rnd() * 4);
-      for (let s = 0; s < count; s++) {
-        const bh = 0.05 + rnd() * 0.05;
-        const b = box(w, bh, 0.3, std(palette[Math.floor(rnd() * palette.length)], 0.6), x + w / 2, stackY + bh / 2, 0.02, shelf);
-        b.rotation.y = (rnd() - 0.5) * 0.08;
-        stackY += bh;
-      }
-      x += w + 0.06;
-    }
-  }
-  shelf.position.set(-2, 0, -ROOM / 2 + 0.22);
-  scene.add(shelf);
-})();
-
 // ---------- Two windows whose sky follows your own clock ----------
 const skyCanvas = document.createElement('canvas');
 skyCanvas.width = 256; skyCanvas.height = 192;
@@ -242,8 +210,8 @@ function makeWindow(x, z, rotY) {
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWindow(-ROOM / 2 + 0.02, 1.2, Math.PI / 2);    // left wall
-makeWindow(ROOM / 2 - 0.02, -0.6, -Math.PI / 2);   // right wall
+makeWindow(-ROOM / 2 + 0.02, 0, Math.PI / 2);     // left wall, centered
+makeWindow(ROOM / 2 - 0.02, 0, -Math.PI / 2);     // right wall, centered
 
 // ---------- Two green dot-matrix wall clocks (your local time, with A or P) ----------
 const CLK_FONT = {
@@ -267,12 +235,12 @@ function makeWallClock(x, z, rotY) {
   const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: clockTex, toneMapped: false }));
   face.position.z = 0.026;
   g.add(face);
-  g.position.set(x, 2.25, z);
+  g.position.set(x, 2.0, z);
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(1.3, -ROOM / 2 + 0.03, 0);         // back wall, beside the bookshelf
-makeWallClock(-0.9, ROOM / 2 - 0.03, Math.PI);   // front wall, beside the door
+makeWallClock(-ROOM / 2 + 0.03, -1.5, Math.PI / 2);   // left wall, beside the window on the side away from the lamp
+makeWallClock(ROOM / 2 - 0.03, 1.5, -Math.PI / 2);     // right wall, beside the window on the side away from the lamp
 
 function updateClock() {
   const d = new Date();
@@ -312,38 +280,6 @@ function updateClock() {
   g.add(knob);
   g.position.set(1.5, 0, ROOM / 2 - 0.03);
   g.rotation.y = Math.PI;
-  scene.add(g);
-})();
-
-// ---------- Pictures ----------
-function makePicture(colA, colB, x, z, rotY) {
-  const art = paintTexture(128, 160, (g, w, h) => {
-    g.fillStyle = colB; g.fillRect(0, 0, w, h);
-    g.fillStyle = colA; g.beginPath(); g.arc(w / 2, h / 2, w / 3, 0, Math.PI * 2); g.fill();
-  });
-  const pic = new THREE.Group();
-  box(0.75, 0.95, 0.04, std(0x2e1d12, 0.6), 0, 0, 0, pic);
-  const canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.82), std(0xffffff, 0.9, { map: art }));
-  canvasMesh.position.z = 0.025; pic.add(canvasMesh);
-  pic.position.set(x, 1.9, z);
-  pic.rotation.y = rotY;
-  scene.add(pic);
-}
-makePicture('#d9a521', '#8f2a2a', ROOM / 2 - 0.03, 1.6, -Math.PI / 2);   // right wall, beside the window
-makePicture('#2a5d8f', '#e8d5b0', -2.4, ROOM / 2 - 0.03, Math.PI);       // front wall
-
-// ---------- Plant ----------
-(function plant() {
-  const g = new THREE.Group();
-  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.18, 0.45, 24), std(0xa0522d, 0.8));
-  pot.position.y = 0.225; pot.castShadow = true; g.add(pot);
-  const leaf = std(0x2f6b3a, 0.8);
-  for (let i = 0; i < 9; i++) {
-    const s = new THREE.Mesh(new THREE.SphereGeometry(0.16 + rnd() * 0.1, 12, 10), leaf);
-    s.position.set((rnd() - 0.5) * 0.4, 0.6 + rnd() * 0.6, (rnd() - 0.5) * 0.4);
-    s.castShadow = true; g.add(s);
-  }
-  g.position.set(-ROOM / 2 + 0.6, 0, -ROOM / 2 + 0.6);
   scene.add(g);
 })();
 
@@ -561,6 +497,25 @@ whoBtn.addEventListener('click', () => {
   document.body.classList.remove('chatOpen');
 });
 setupMute(document.getElementById('mute'));
+
+// Phones: the ▾ button shrinks the game panel to just its status line
+const collapseBtn = document.getElementById('collapse');
+function setPanelSmall(small) {
+  document.body.classList.toggle('panelSmall', small);
+  collapseBtn.textContent = small ? '▴' : '▾';
+  collapseBtn.title = small ? 'Show the whole panel' : 'Shrink the panel';
+  try { localStorage.setItem('hangoutPanelSmall', small ? '1' : '0'); } catch (e) {}
+}
+let startSmall = false;
+try { startSmall = localStorage.getItem('hangoutPanelSmall') === '1'; } catch (e) {}
+setPanelSmall(startSmall);
+collapseBtn.addEventListener('click', () => setPanelSmall(!document.body.classList.contains('panelSmall')));
+
+// Keep the action buttons just above the game panel on phones, however tall the panel gets
+const gamePanel = document.getElementById('game');
+function trackPanelHeight() { document.documentElement.style.setProperty('--panelH', gamePanel.offsetHeight + 'px'); }
+if (window.ResizeObserver) new ResizeObserver(trackPanelHeight).observe(gamePanel);
+trackPanelHeight();
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
