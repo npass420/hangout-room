@@ -58,12 +58,12 @@ export function chipsOf(name) { const c = chips[chipKey(name)]; return c && type
 function occupant(i) { const u = machines[i] && machines[i].user; return u && S.presence[u] ? u : ''; }
 export function slotOccupantOf(id) { for (let i = 0; i < 3; i++) if (occupant(i) === id) return i; return -1; }
 export function slotName(i) { return MACHINES[i].name; }
-export function slotStandSpot(i) { return { x: [-1.2, 0, 1.2][i], z: -ROOM / 2 + 0.36 + 0.62 }; }   // where a player's snowman stands
+export const MACHINE_X = [-3.6, -2.7, -1.8];   // the Lucky Corner: back wall, left side
+export function slotStandSpot(i) { return { x: MACHINE_X[i], z: -ROOM / 2 + 0.36 + 0.62 }; }   // where a player's snowman stands
 
 // ---------- Building the machines ----------
 export const slotsGroup = new THREE.Group();
 scene.add(slotsGroup);
-const MACHINE_X = [-1.2, 0, 1.2];
 const MACHINE_Z = -ROOM / 2 + 0.36;
 const SCREEN_Y = 1.32;
 const CELL_W = 128, CELL_H = 80;

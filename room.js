@@ -287,6 +287,69 @@ const doorGroup = (function door() {
   return g;
 })();
 
+// ---------- The Lucky Corner: red carpet, rope posts and a neon sign around the slot machines ----------
+const luckySign = (function luckyCorner() {
+  const CX = -2.7, WALL = -ROOM / 2;
+  // Red carpet with a gold border
+  const carpetTex = paintTexture(512, 256, (g, w, h) => {
+    g.fillStyle = '#7a1424'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(${rnd() < 0.5 ? '255,120,140' : '40,0,10'},0.08)`; g.fillRect(rnd() * w, rnd() * h, 3, 3); }
+    g.strokeStyle = '#d4a63c'; g.lineWidth = 10; g.strokeRect(14, 14, w - 28, h - 28);
+    g.strokeStyle = '#a3192e'; g.lineWidth = 4; g.strokeRect(30, 30, w - 60, h - 60);
+  });
+  const carpet = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.7), std(0xffffff, 1, { map: carpetTex }));
+  carpet.rotation.x = -Math.PI / 2; carpet.position.set(CX, 0.008, WALL + 0.85); carpet.receiveShadow = true;
+  scene.add(carpet);
+  // Brass posts with velvet rope along the front, with a gap in the middle to walk through
+  const brass = std(0xd4a63c, 0.25, { metalness: 0.9 });
+  const velvet = std(0x9c1530, 0.8);
+  const postAt = (x, z) => {
+    const p = new THREE.Group();
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.04, 20), brass); base.position.y = 0.02;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.86, 12), brass); pole.position.y = 0.45;
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), brass); ball.position.y = 0.9;
+    [base, pole, ball].forEach(m => { m.castShadow = true; p.add(m); });
+    p.position.set(x, 0, z); scene.add(p);
+    return new THREE.Vector3(x, 0.84, z);
+  };
+  const rope = (a, b) => {
+    const mid = a.clone().add(b).multiplyScalar(0.5); mid.y -= 0.18;   // a gentle sag
+    const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+    const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, 0.018, 8, false), velvet);
+    m.castShadow = true; scene.add(m);
+  };
+  const FZ = WALL + 1.75;   // front line of the corner
+  const p1 = postAt(-4.3, FZ), p2 = postAt(-3.3, FZ), p3 = postAt(-2.1, FZ), p4 = postAt(-1.1, FZ), p5 = postAt(-1.1, WALL + 0.9);
+  rope(p1, p2); rope(p3, p4); rope(p4, p5);   // the gap between posts 2 and 3 is the way in
+  // Neon "Lucky Corner" sign on the wall above the machines
+  const signTex = paintTexture(1024, 256, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = 'italic bold 120px Georgia';
+    g.shadowColor = '#ff3d7f'; g.shadowBlur = 40;
+    g.strokeStyle = '#ff7aa8'; g.lineWidth = 10; g.strokeText('Lucky Corner', w / 2, h / 2 + 6);
+    g.shadowBlur = 12; g.fillStyle = '#ffe3ee'; g.fillText('Lucky Corner', w / 2, h / 2 + 6);
+    g.font = '80px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+    g.shadowBlur = 20; g.shadowColor = '#ffd54f';
+    g.fillText('🍀', 70, h / 2 + 6); g.fillText('🍀', w - 70, h / 2 + 6);
+  });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: signTex, transparent: true, toneMapped: false, depthWrite: false }));
+  sign.position.set(CX, 2.62, WALL + 0.02);
+  scene.add(sign);
+  // A soft pink glow over the corner (no shadows, so it stays cheap)
+  const glow = new THREE.PointLight(0xff5c8a, 2.2, 4.5, 1.5);
+  glow.position.set(CX, 2.3, WALL + 0.9);
+  scene.add(glow);
+  return { sign, glow };
+})();
+function updateLuckySign() {   // the neon hums along and blinks off for a moment now and then
+  const t = performance.now() / 1000;
+  const blink = (Math.sin(t * 0.37) > 0.995 || Math.sin(t * 0.91 + 2) > 0.997) ? 0.25 : 1;
+  const hum = 0.92 + 0.08 * Math.sin(t * 9);
+  luckySign.sign.material.color.setScalar(blink * hum);
+  luckySign.glow.intensity = 2.2 * blink * hum;
+}
+
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.75));
 
@@ -949,6 +1012,7 @@ renderer.setAnimationLoop(() => {
   updateTrail(dt);
   updateStack(dt);
   updateSlots(dt);
+  updateLuckySign();
   updateClock();
   updateSky();
   renderer.render(scene, camera);
