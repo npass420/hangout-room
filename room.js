@@ -338,18 +338,13 @@ const luckySign = (function luckyCorner() {
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: signTex, transparent: true, toneMapped: false, depthWrite: false }));
   sign.position.set(CX, 2.62, WALL + 0.02);
   scene.add(sign);
-  // A soft pink glow over the corner (no shadows, so it stays cheap)
-  const glow = new THREE.PointLight(0xff5c8a, 2.2, 4.5, 1.5);
-  glow.position.set(CX, 2.3, WALL + 0.9);
-  scene.add(glow);
-  return { sign, glow };
+  return { sign };
 })();
 function updateLuckySign() {   // the neon hums along and blinks off for a moment now and then
   const t = performance.now() / 1000;
   const blink = (Math.sin(t * 0.37) > 0.995 || Math.sin(t * 0.91 + 2) > 0.997) ? 0.25 : 1;
   const hum = 0.92 + 0.08 * Math.sin(t * 9);
   luckySign.sign.material.color.setScalar(blink * hum);
-  luckySign.glow.intensity = 2.2 * blink * hum;
 }
 
 // ---------- Lights ----------

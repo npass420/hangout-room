@@ -234,7 +234,7 @@ function drawCube(L, c, rem, color, dy = 0, alpha = 1) {
     sg.stroke();
   } else if (c.t === 'p') {
     poly(topPts, '#1f8a96');
-    const glow = 0.6 + 0.4 * Math.sin(performance.now() / 250);
+    const glow = fancy ? 0.6 + 0.4 * Math.sin(performance.now() / 250) : 0.85;
     sg.strokeStyle = `rgba(150,250,255,${glow})`; sg.lineWidth = Math.max(2, a * 0.09);
     sg.beginPath(); sg.ellipse(cx, cy, a * 0.5, a * 0.25, 0, 0, Math.PI * 2); sg.stroke();
   } else {
@@ -265,9 +265,11 @@ function drawHopper(x, y, a, color, face) {
     sg.fillStyle = '#111'; sg.beginPath(); sg.arc(x + s * r * 0.32 + lx, y - r * 0.08 + ly, r * 0.11, 0, Math.PI * 2); sg.fill();
   }
 }
+let fancy = false;   // glow effects only while you're standing at the cabinet; lighter from across the room
 function neonText(text, x, y, size, color, align = 'center') {
   sg.font = `bold ${size}px ${FONT}`; sg.textAlign = align; sg.textBaseline = 'middle';
-  sg.shadowColor = color; sg.shadowBlur = 12; sg.fillStyle = color; sg.fillText(text, x, y);
+  if (fancy) { sg.shadowColor = color; sg.shadowBlur = 12; }
+  sg.fillStyle = color; sg.fillText(text, x, y);
   sg.shadowBlur = 0;
 }
 function background() {
@@ -335,12 +337,13 @@ function drawIdle() {
   neonText('PEAK HOP', CW / 2, 46, 52, '#ff4fd8');
   if (idlePage === 0) topList(scores, (p, q) => q.score - p.score, r => String(r.score), 'HIGH SCORES', 110);
   else topList(daily, (p, q) => p.undos - q.undos || p.secs - q.secs, r => `${r.undos} UNDO`, "TODAY'S DAILY", 110);
-  const blink = Math.floor(performance.now() / 600) % 2 === 0;
+  const blink = !fancy || Math.floor(performance.now() / 600) % 2 === 0;
   const who = occupant();
   if (who && live.name) neonText(`${String(live.name).toUpperCase()} IS PICKING A GAME`, CW / 2, CH - 26, 18, '#ffffff');
   else if (blink) neonText('CLICK THE CABINET TO PLAY', CW / 2, CH - 26, 20, '#ffffff');
 }
 function drawScreen() {
+  fancy = !!S.atArcade;
   if (game && occupant() && live.mode) drawGame(); else drawIdle();
   scrTex.needsUpdate = true;
 }
@@ -543,23 +546,29 @@ export function startArcade() {
 }
 
 // ---------- Every frame ----------
-let idleT = 0;
+let idleT = 0, lastDraw = 0, wasNear = false;
 export function updateArcade(dt) {
-  const t = performance.now();
+  const t = performance.now(), near = !!S.atArcade;
+  let moving = false;
   if (anim.segs) {
     anim.t += dt;
-    if (anim.t >= anim.segs.length * 0.17) { anim.segs = null; refreshArcadeUI(); }
-    dirty = true;
+    if (anim.t >= anim.segs.length * 0.17) { anim.segs = null; refreshArcadeUI(); dirty = true; }
+    moving = true;
   }
   if (anim.sinking.length) {
     anim.sinking.forEach(s => { s.t += dt; });
     anim.sinking = anim.sinking.filter(s => s.t < 0.4);
-    dirty = true;
+    if (!anim.sinking.length) dirty = true;
+    moving = true;
   }
-  if (t - lastIdleFlip > 6000) { lastIdleFlip = t; idlePage = 1 - idlePage; dirty = true; }
-  idleT += dt;
-  if (idleT > 0.3) { idleT = 0; if (!game || [...game.level.cells.values()].some(c => c.t === 'p')) dirty = true; }   // blinking text and glowing pads
-  if (dirty) { dirty = false; drawScreen(); }
+  if (t - lastIdleFlip > 6000) { lastIdleFlip = t; idlePage = 1 - idlePage; if (!game) dirty = true; }
+  if (near) {   // up close: blinking text and glowing pads
+    idleT += dt;
+    if (idleT > 0.3) { idleT = 0; if (!game || [...game.level.cells.values()].some(c => c.t === 'p')) dirty = true; }
+  }
+  if (near !== wasNear) { wasNear = near; dirty = true; }
+  // hops animate smoothly up close and at a lighter rate from across the room; otherwise only redraw when something changed
+  if (dirty || (moving && t - lastDraw > (near ? 0 : 66))) { dirty = false; lastDraw = t; drawScreen(); }
   // the marquee and neon strips hum a little
   const hum = 0.9 + 0.1 * Math.sin(t / 110);
   if (marqueeMat) marqueeMat.color.setScalar(hum);

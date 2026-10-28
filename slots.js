@@ -116,12 +116,17 @@ function signTexture() {
   add(new THREE.BoxGeometry(0.7, 0.74, 0.02), dark, 0, SCREEN_Y, 0.125);               // screen bezel
   const screen = add(new THREE.PlaneGeometry(SCREEN_W, SCREEN_W * cv.height / cv.width), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }), 0, SCREEN_Y, 0.137);
   screen.castShadow = false;
-  // Glowing light strips up the front edges, and a big lit spin button
+  // Glowing light strips on the front corners of the cabinet (lower part and upper part), and a big lit spin button
+  const stripMats = [new THREE.MeshBasicMaterial({ color: M.glow, toneMapped: false }), new THREE.MeshBasicMaterial({ color: M.glow, toneMapped: false })];
   for (const sx of [-1, 1]) {
-    const st = new THREE.Mesh(new THREE.BoxGeometry(0.018, 2.0, 0.018), new THREE.MeshBasicMaterial({ color: M.glow, toneMapped: false }));
-    st.position.set(sx * 0.425, 1.05, 0.31);
-    g.add(st); strips.push(st);
+    const k = sx < 0 ? 0 : 1;
+    const low = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.94, 0.02), stripMats[k]);
+    low.position.set(sx * 0.42, 0.48, 0.3);
+    const high = new THREE.Mesh(new THREE.BoxGeometry(0.02, 1.04, 0.02), stripMats[k]);
+    high.position.set(sx * 0.42, 1.5, 0.12);
+    g.add(low, high);
   }
+  strips.push({ material: stripMats[0] }, { material: stripMats[1] });
   spinBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.055, 0.03, 24), new THREE.MeshBasicMaterial({ color: 0x5cffb0, toneMapped: false }));
   spinBtn.position.set(0.2, 1.07, 0.22); spinBtn.rotation.x = -0.35;
   g.add(spinBtn);
@@ -164,18 +169,34 @@ const EMOJI = '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-seri
 function ledText(text, x, y, size, color, align = 'center') {
   const g = g2;
   g.font = `bold ${size}px "Courier New", monospace`; g.textAlign = align; g.textBaseline = 'middle';
-  g.shadowColor = color; g.shadowBlur = 14; g.fillStyle = color; g.fillText(text, x, y); g.shadowBlur = 0;
+  if (fancy) { g.shadowColor = color; g.shadowBlur = 14; }
+  g.fillStyle = color; g.fillText(text, x, y); g.shadowBlur = 0;
 }
 const X0 = 16, Y0 = 70, CWD = 121.6, RH = 104;   // reel area: 5 columns × 5 rows
+// Each symbol is drawn once into its own little picture and then copied, which is much faster than drawing emoji every time
+const SYM_PX = 96;
+function symPic(e, glow) {
+  const c = document.createElement('canvas'); c.width = c.height = SYM_PX;
+  const g = c.getContext('2d');
+  g.font = `64px ${EMOJI}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (glow) { g.shadowColor = '#ffe36b'; g.shadowBlur = 22; }
+  g.fillText(e, SYM_PX / 2, SYM_PX / 2 + 4);
+  return c;
+}
+const symPics = M.syms.map(e => symPic(e, false));
+const symGlows = M.syms.map(e => symPic(e, true));   // the same symbols with a golden glow, for winning lines
+let fancy = false;   // full effects only while you're standing at the machine; a lighter screen from across the room
 function cellCenter(r, row) { return { x: X0 + r * CWD + CWD / 2 - 2, y: Y0 + RH * (row + 0.5) }; }
 function drawScreen() {
-  const g = g2, W = cv.width, H = cv.height, t = performance.now() / 1000, v = view;
+  const g = g2, W = cv.width, H = cv.height, v = view;
+  fancy = S.atSlot >= 0;
+  const t = fancy ? performance.now() / 1000 : 0;   // from across the room nothing wiggles
   // pond background with rising bubbles
   const bg = g.createLinearGradient(0, 0, 0, H);
   bg.addColorStop(0, '#04261a'); bg.addColorStop(1, '#0b4a3a');
   g.fillStyle = bg; g.fillRect(0, 0, W, H);
   g.strokeStyle = 'rgba(160,255,220,0.25)'; g.lineWidth = 2;
-  for (const b of BUBBLES) { const y = ((b.y - t * b.s) % 1 + 1) % 1; g.beginPath(); g.arc(b.x * W, y * H, b.r, 0, Math.PI * 2); g.stroke(); }
+  if (fancy) for (const b of BUBBLES) { const y = ((b.y - t * b.s) % 1 + 1) % 1; g.beginPath(); g.arc(b.x * W, y * H, b.r, 0, Math.PI * 2); g.stroke(); }
   // Hop Meter across the top
   const who = occupant() ? machine.name : '';
   const hop = !v.done && v.spin && v.spin.leap ? HOP_MAX : hopOf(who);
@@ -183,7 +204,7 @@ function drawScreen() {
   for (let k = 0; k < HOP_MAX; k++) {
     const lit = k < hop, x = 250 + k * 62, y = 36;
     g.fillStyle = lit ? '#3ddc84' : 'rgba(61,220,132,0.18)';
-    if (lit) { g.shadowColor = '#7dffc0'; g.shadowBlur = 16; }
+    if (lit && fancy) { g.shadowColor = '#7dffc0'; g.shadowBlur = 16; }
     g.beginPath(); g.ellipse(x, y, 24, 15, 0, 0.35, Math.PI * 2 - 0.35); g.lineTo(x, y); g.closePath(); g.fill();
     g.shadowBlur = 0;
   }
@@ -192,10 +213,9 @@ function drawScreen() {
   g.fillText('🐸', 250 + HOP_MAX * 62, 34 - bounce);
   // the reels
   g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(X0 - 4, Y0 - 4, CWD * REELS + 8, RH * ROWS + 8);
-  const winning = !v.done || !v.wins.length ? null : v.wins[Math.floor((t - v.winAt) / 1.1) % v.wins.length];
+  const winning = !v.done || !v.wins.length ? null : v.wins[fancy ? Math.floor((t - v.winAt) / 1.1) % v.wins.length : 0];
   const winCells = new Set();
   if (winning) LINES[winning.line].slice(0, winning.n).forEach((row, r) => winCells.add(r * ROWS + row));
-  g.font = `64px ${EMOJI}`;
   for (let r = 0; r < REELS; r++) {
     const strip = M.strips[r], L = strip.length, p = v.pos[r], base = Math.floor(p), frac = p - base;
     const moving = !v.done && v.pos[r] !== v.to[r];
@@ -210,17 +230,15 @@ function drawScreen() {
       const row = k + 2, isWin = !moving && frac === 0 && winCells.has(r * ROWS + row);
       const sc = isWin ? 1 + 0.12 * Math.sin(t * 9) : 1;
       g.globalAlpha = moving ? 0.55 : 1;
-      g.save(); g.translate(X0 + r * CWD + CWD / 2 - 2, y + 4); g.scale(sc, moving ? 1.25 : sc);
-      if (isWin) { g.shadowColor = '#ffe36b'; g.shadowBlur = 25; }
-      g.fillText(M.syms[sym], 0, 0);
-      g.restore();
+      const cx = X0 + r * CWD + CWD / 2 - 2, w = SYM_PX * sc, h = SYM_PX * (moving ? 1.25 : sc);
+      g.drawImage(isWin ? symGlows[sym] : symPics[sym], cx - w / 2, y - h / 2, w, h);
     }
     g.globalAlpha = 1;
     g.restore();
   }
   if (winning) {   // glowing line through the winning symbols, in that line's color
     const col = LINE_COLORS[winning.line];
-    g.strokeStyle = col; g.lineWidth = 5; g.shadowColor = col; g.shadowBlur = 18; g.globalAlpha = 0.85;
+    g.strokeStyle = col; g.lineWidth = 5; if (fancy) { g.shadowColor = col; g.shadowBlur = 18; } g.globalAlpha = 0.85;
     g.beginPath();
     LINES[winning.line].forEach((row, r) => { const c = cellCenter(r, row); r ? g.lineTo(c.x, c.y) : g.moveTo(c.x, c.y); });
     g.stroke(); g.shadowBlur = 0; g.globalAlpha = 1;
@@ -232,11 +250,11 @@ function drawScreen() {
   // big message over the reels
   let msg = '';
   if (!v.done && v.spin && v.spin.leap) msg = '🐸 FROG LEAP! 🐸';
-  else if (v.done && v.spin && v.spin.win > 0 && t - v.winAt < 2.5) {
+  else if (fancy && v.done && v.spin && v.spin.win > 0 && t - v.winAt < 2.5) {
     const mult = v.spin.win / (v.spin.lineBet || v.spin.bet || 1);
     msg = mult >= 20 ? 'BIG WIN!' : v.spin.leap ? 'LEAP WIN!' : '';
-  } else if (v.done && full && who) msg = 'FREE LEAP READY!';
-  if (msg && (msg !== 'FREE LEAP READY!' || Math.floor(t * 2) % 2 === 0)) {
+  } else if (v.done && full && who && fancy) msg = 'FREE LEAP READY!';
+  if (msg && (msg !== 'FREE LEAP READY!' || !fancy || Math.floor(t * 2) % 2 === 0)) {
     g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(0, Y0 + RH * 2.5 - 36, W, 72);
     ledText(msg, W / 2, Y0 + RH * 2.5, 46, '#ffe36b');
   }
@@ -352,8 +370,9 @@ function finishSpin() {
 }
 
 // ---------- Every frame ----------
+let redraw = true, wasNear = false;
 export function updateSlots(dt) {
-  const now = serverNow(), t = performance.now(), v = view;
+  const now = serverNow(), t = performance.now(), v = view, near = S.atSlot >= 0;
   if (!v.done) {
     const el = (now - v.at) / 1000;
     let allDone = true;
@@ -366,12 +385,17 @@ export function updateSlots(dt) {
       else if (before !== v.to[r] && mine) sound('reel');
       if (u >= 1) v.pos[r] = v.to[r];
     }
-    if (allDone) { v.pos = v.pos.map((p, r) => { const L = M.strips[r].length; return ((Math.round(p) % L) + L) % L; }); finishSpin(); }
-    drawScreen();
-  } else {   // the screen keeps moving: bubbles, win lines and the WIN counter
-    if (v.spin && v.shownWin < v.spin.win) v.shownWin = Math.min(v.spin.win, v.shownWin + Math.max(1, v.spin.win) * dt * 1.2);
-    if (t - v.lastDraw > 50) { v.lastDraw = t; drawScreen(); }
+    if (allDone) { v.pos = v.pos.map((p, r) => { const L = M.strips[r].length; return ((Math.round(p) % L) + L) % L; }); finishSpin(); redraw = true; }
+    if (redraw || t - v.lastDraw > (near ? 33 : 100)) { v.lastDraw = t; redraw = false; drawScreen(); }   // smooth up close, lighter from afar
+  } else {
+    if (v.spin && v.shownWin < v.spin.win) {   // the WIN counter counts up
+      v.shownWin = near ? Math.min(v.spin.win, v.shownWin + Math.max(1, v.spin.win) * dt * 1.2) : v.spin.win;
+      redraw = true;
+    }
+    // up close the screen keeps moving (bubbles, win lines); from across the room it only redraws when something changes
+    if ((near && t - v.lastDraw > 50) || (redraw && t - v.lastDraw > 100) || near !== wasNear) { v.lastDraw = t; redraw = false; drawScreen(); }
   }
+  wasNear = near;
   // light strips and the spin button glow, brighter while it spins or after a win
   const hot = !v.done || t < v.flashUntil;
   const lvl = hot ? 0.6 + 0.4 * Math.abs(Math.sin(t / 90)) : 0.55 + 0.25 * Math.sin(t / 700);
@@ -418,6 +442,7 @@ export function startSlots() {
     const d = snap.val() || {};
     const prevUser = occupant();
     machine = d;
+    redraw = true;
     const fits = d.spin && d.spin.v === 2 && Array.isArray(d.spin.stops) && d.spin.stops.length === REELS;   // skip spins saved by older machines
     if (fits && d.spin.n !== view.spinN) {
       const live = !first && serverNow() - d.spin.at < SPIN_TIME * 1000 + 2000;
@@ -430,6 +455,7 @@ export function startSlots() {
   });
   onValue(ref(db, 'room/slots/chips'), snap => {
     chips = snap.val() || {};
+    redraw = true;
     refreshSlotUI();
     if (hooks.refreshWho) hooks.refreshWho();
   });
