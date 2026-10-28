@@ -7,10 +7,12 @@ import { ref, set, get, update, remove, push, onValue, onDisconnect,
 import { db, myId, S, hooks, ROOM, HEIGHT, SEATS, CHAIR_R, TABLE_Y, seatAngle, rnd,
          renderer, scene, camera, controls, canvas, BASE_FOV,
          paintTexture, box, std, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, FONT } from './core.js';
-import { felt, HALF, CELL, BOARD_TOP, canPlayAt, play, refreshPanel, refreshCounters,
+import { othelloGroup, validPlayer, felt, HALF, CELL, BOARD_TOP, canPlayAt, play, refreshPanel, refreshCounters,
          othelloSeatChanged, startOthello, updateOthello } from './othello.js';
-import { mountainMesh, spotMeshes, MTN_TARGET, showSpotInfo, refreshTrail,
+import { trailGroup, trailInUse, hideTrail, mountainMesh, spotMeshes, MTN_TARGET, showSpotInfo, refreshTrail,
          trailSeatChanged, startTrail, updateTrail } from './trail.js';
+import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackHover, stackGrab, stackDrag,
+         stackRelease, stackPlace, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -447,8 +449,44 @@ function refreshAll() {
   refreshAvatars();
   refreshWho();
   refreshTrail();
+  refreshStack();
+  refreshSwitch();
 }
 hooks.refreshAll = refreshAll;
+
+// ---------- Switching which game is on the table ----------
+const GAMES = {
+  othello: { group: othelloGroup, ui: 'othelloUI', btn: 'swOthello', hide() {} },
+  trail:   { group: trailGroup,   ui: 'trailUI',   btn: 'swTrail',   hide: hideTrail },
+  stack:   { group: stackGroup,   ui: 'stackUI',   btn: 'swStack',   hide: hideStack }
+};
+function tableIsFree() {   // you can only switch games when nobody is playing one
+  return !(validPlayer(1) || validPlayer(2)) && !trailInUse() && !stackInUse();
+}
+function refreshSwitch() {
+  const free = tableIsFree();
+  for (const [name, g] of Object.entries(GAMES)) {
+    const b = document.getElementById(g.btn);
+    b.classList.toggle('on', S.activeGame === name);
+    b.disabled = S.activeGame !== name && !free;
+  }
+}
+hooks.refreshSwitch = refreshSwitch;
+function applyActive(name) {
+  S.activeGame = GAMES[name] ? name : 'othello';
+  for (const [n, g] of Object.entries(GAMES)) {
+    g.group.visible = S.activeGame === n;
+    document.getElementById(g.ui).style.display = S.activeGame === n ? '' : 'none';
+    if (S.activeGame !== n) g.hide();
+  }
+  refreshAll();
+}
+for (const [name, g] of Object.entries(GAMES)) {
+  document.getElementById(g.btn).addEventListener('click', () => {
+    if (name === S.activeGame || !tableIsFree()) return;
+    set(ref(db, 'room/active'), name);
+  });
+}
 
 // ---------- Chat ----------
 const msgs = document.getElementById('msgs');
@@ -552,8 +590,10 @@ function enterRoom() {
     refreshAll();
   });
 
-  startTrail();     // which game is on the table, and LittleTrail
+  onValue(ref(db, 'room/active'), s => applyActive(s.val()));   // which game is on the table
   startOthello();   // the Othello game
+  startTrail();     // LittleTrail
+  startStack();     // LittleStack
 
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
@@ -583,7 +623,7 @@ let yaw = 0, pitch = 0;
 const baseQuat = new THREE.Quaternion();
 const savedView = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
 const boardSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
-const mtnView = { pos: new THREE.Vector3(), yaw: 0 };
+const mtnView = { pos: new THREE.Vector3(), yaw: 0, target: MTN_TARGET };
 
 function seatEye(i) {
   const a = seatAngle(i);
@@ -616,6 +656,7 @@ function sit(i) {
   setMySeat(i);
   othelloSeatChanged(i);
   trailSeatChanged(i);
+  stackSeatChanged(i);
   refreshAll();
 }
 
@@ -645,11 +686,13 @@ function toggleBoardView() {
     if (S.seated >= 0) { const a = seatAngle(S.seated); side.set(Math.sin(a), 0, Math.cos(a)); }
     else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
     setFov(BASE_FOV);
-    if (S.activeGame === 'trail') {
-      // Up above the hill, drag left and right to walk around it
-      mtnView.pos.copy(side).multiplyScalar(1.15); mtnView.pos.y = TABLE_Y + 1.3;
+    if (S.activeGame === 'trail' || S.activeGame === 'stack') {
+      // Up above the hill or tower, drag left and right to walk around it
+      const stack = S.activeGame === 'stack';
+      mtnView.target = stack ? STACK_TARGET : MTN_TARGET;
+      mtnView.pos.copy(side).multiplyScalar(stack ? 0.95 : 1.15); mtnView.pos.y = TABLE_Y + (stack ? 0.75 : 1.3);
       mtnView.yaw = 0;
-      moveCamera(mtnView.pos.clone(), lookQuat(mtnView.pos, MTN_TARGET), null);
+      moveCamera(mtnView.pos.clone(), lookQuat(mtnView.pos, mtnView.target), null);
     } else {
       const pos = side.clone().multiplyScalar(0.85);
       pos.y = BOARD_TOP + 1.0;
@@ -692,14 +735,22 @@ let hovered = null;
 let down = null;
 let lastX = 0, lastY = 0;
 
-// What's under the pointer: a chair, a square on the board, or a trail stone
-function pickUnder(e) {
+// Aim the pointer ray at where the mouse or finger is
+function aim(e) {
   pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  const targets = S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes] : [...chairs, felt];
+  return raycaster.ray;
+}
+// What's under the pointer: a chair, a square on the board, a trail stone, or a tower block
+function pickUnder(e) {
+  aim(e);
+  const targets = S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
+    : S.activeGame === 'stack' ? [...chairs, ...stackPickables()] : [...chairs, felt];
   const hits = raycaster.intersectObjects(targets, true);
   if (!hits.length) return null;
   const h = hits[0];
+  if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
+  if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
   if (h.object.userData.spot !== undefined) return { spot: h.object.userData.spot };
   if (h.object.userData.mountain) return null;
   if (h.object.userData.isBoard) {
@@ -721,6 +772,7 @@ function setHover(chair) {
 // Two-finger pinch zooms while seated or in board view (phones)
 const touchPts = new Map();
 let pinchDist = 0;
+let grabbing = false;   // holding a tower block
 function pinchSpread() {
   const [a, b] = [...touchPts.values()];
   return Math.hypot(a.x - b.x, a.y - b.y);
@@ -728,7 +780,11 @@ function pinchSpread() {
 canvas.addEventListener('pointerdown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
   touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
+  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; if (grabbing) { stackRelease(); grabbing = false; } return; }   // a pinch, not a tap
+  if (S.activeGame === 'stack') {   // grab a tower block on your turn
+    const p = pickUnder(e);
+    if (p && p.block !== undefined && stackGrab(p.block, raycaster.ray)) { grabbing = true; down = null; canvas.style.cursor = 'grabbing'; return; }
+  }
   down = { x: e.clientX, y: e.clientY };
   lastX = e.clientX; lastY = e.clientY;
 });
@@ -736,14 +792,15 @@ function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinc
 window.addEventListener('pointercancel', endTouch);
 window.addEventListener('pointermove', e => {
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (grabbing) { stackDrag(aim(e)); return; }
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();
     if ((S.seated >= 0 || S.boardView) && d > 0) setFov(camera.fov * pinchDist / d);
     pinchDist = d;
     return;
   }
-  if (down && S.boardView && S.activeGame === 'trail' && !anim) {
-    mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the hill
+  if (down && S.boardView && (S.activeGame === 'trail' || S.activeGame === 'stack') && !anim) {
+    mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the hill or tower
   }
   if (down && S.seated >= 0 && !S.boardView && !anim) {
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
@@ -759,14 +816,18 @@ window.addEventListener('pointermove', e => {
     const chair = free ? p.chair : null;
     setHover(chair);
     const legal = p && p.cell !== undefined && canPlayAt(p.cell);
-    canvas.style.cursor = (chair || legal) ? 'pointer' : 'grab';
+    const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
+    const slot = p && p.slot !== undefined;
+    canvas.style.cursor = (chair || legal || grabbable || slot) ? 'pointer' : 'grab';
     if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
 window.addEventListener('pointerup', e => {
+  if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
-    if (p && p.cell !== undefined) play(p.cell);
+    if (p && p.slot !== undefined) stackPlace(p.slot);
+    else if (p && p.cell !== undefined) play(p.cell);
     else if (p && p.spot !== undefined) showSpotInfo(p.spot);
     else if (p && p.chair && p.chair.userData.seat !== S.seated) { setHover(null); sit(p.chair.userData.seat); }
   }
@@ -796,9 +857,9 @@ renderer.setAnimationLoop(() => {
     camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
   } else if (S.boardView) {
-    if (S.activeGame === 'trail') {   // circle the hill as you drag
+    if (S.activeGame === 'trail' || S.activeGame === 'stack') {   // circle the hill or tower as you drag
       camera.position.copy(mtnView.pos).applyAxisAngle(UP, mtnView.yaw);
-      camera.quaternion.copy(lookQuat(camera.position, MTN_TARGET));
+      camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
     }
   } else if (S.seated >= 0) {
     lookEuler.set(pitch, yaw, 0);
@@ -809,6 +870,7 @@ renderer.setAnimationLoop(() => {
   }
   updateOthello(dt);
   updateTrail(dt);
+  updateStack(dt);
   updateClock();
   updateSky();
   renderer.render(scene, camera);

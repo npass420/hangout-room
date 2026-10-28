@@ -18,7 +18,8 @@
   #switchRow { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(243,230,207,0.2); }
   .panel button.sw { background: rgba(233,201,143,0.25); color: #f3e6cf; }
   .panel button.sw.on { background: #e9c98f; color: #2a1c10; }
-  #tStatus { font-size: 16px; margin-bottom: 4px; }
+  #tStatus, #sStatus { font-size: 16px; margin-bottom: 4px; }
+  #sPlayers { font-size: 13px; margin-bottom: 8px; }
   #tTimer { font-size: 13px; color: #ffb36b; margin-bottom: 4px; }
   #tPlayers { font-size: 13px; margin-bottom: 4px; }
   #tInfo { font-size: 12px; opacity: 0.7; font-style: italic; margin-bottom: 8px; }
@@ -59,8 +60,8 @@
     body.chatOpen #chat { display: block; }
     #msgs { height: 110px; }
     #game { left: 8px; right: 8px; bottom: 8px; max-width: none; padding: 8px 10px; }
-    #status, #tStatus { font-size: 14px; }
-    #players, #tPlayers { font-size: 12px; margin-bottom: 6px; }
+    #status, #tStatus, #sStatus { font-size: 14px; }
+    #players, #tPlayers, #sPlayers { font-size: 12px; margin-bottom: 6px; }
     #switchRow { margin-bottom: 4px; padding-bottom: 4px; }
     .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
     #stand { top: 48px; bottom: auto; font-size: 14px; padding: 6px 16px; }
@@ -75,7 +76,7 @@
 </div>
 <button id="stand">Stand up</button>
 <div id="game" class="panel">
-  <div id="switchRow"><button id="swOthello" class="sw on">Othello</button><button id="swTrail" class="sw">LittleTrail</button></div>
+  <div id="switchRow"><button id="swOthello" class="sw on">Othello</button><button id="swTrail" class="sw">LittleTrail</button><button id="swStack" class="sw">LittleStack</button></div>
   <div id="othelloUI">
     <div id="status">Connecting…</div>
     <div id="players">Black: open &middot; White: open</div>
@@ -91,6 +92,12 @@
     <div id="tLength" style="display:none"><div class="tLabel">Game length (until sunset):</div></div>
     <button id="tRoll" style="display:none">🎲 Roll</button><button id="tBuy" style="display:none">Buy</button><button id="tPass" style="display:none">Pass</button><button id="tStart" style="display:none">Start</button><button id="tMore" style="display:none" title="More">⋯</button>
     <div id="tMenu" style="display:none"><button id="tLeave">Leave game</button><button id="tEnd">End game</button></div>
+  </div>
+  <div id="stackUI" style="display:none">
+    <div id="sStatus">Connecting…</div>
+    <div id="sPlayers"></div>
+    <button id="sJoin" style="display:none">Join game</button><button id="sStart" style="display:none">Start</button><button id="sRebuild" style="display:none">🔨 Rebuild</button><button id="sMore" style="display:none" title="More">⋯</button>
+    <div id="sMenu" style="display:none"><button id="sLeave">Leave game</button><button id="sEnd">End game</button><button id="sReset">Reset losses</button></div>
   </div>
   <div id="bottomRow"><button id="boardView">Board view</button><button id="mute" title="Sound">🔊</button></div>
 </div>
@@ -119,7 +126,7 @@
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 } }
 </script>
-<!-- The room's code lives in room.js, which loads core.js, othello.js, trail.js and sounds.js -->
+<!-- The room's code lives in room.js, which loads core.js, othello.js, trail.js, stack.js and sounds.js -->
 <script type="module" src="room.js"></script>
 </body>
 </html>

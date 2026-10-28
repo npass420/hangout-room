@@ -6,7 +6,6 @@ import { ref, set, get, update, onValue, runTransaction } from 'https://www.gsta
 import { db, myId, S, hooks, serverNow, scene, TABLE_Y, seatAngle, rnd, paintTexture, box, std, easeInOut,
          RAINBOW, RAINBOW_CSS, colorIndex, makeLabel,
          makeCounter, drawCounter, placeCounter, sinkCounter, animateCounter } from './core.js';
-import { validPlayer, othelloGroup } from './othello.js';
 import { sfx } from './sounds.js';
 
 export const trailGroup = new THREE.Group();   // the hill and everything on it, hidden while Othello is on the table
@@ -957,7 +956,7 @@ function refreshTrailUI() {
   if (!me) menuOpen = false;
   tMenu.style.display = me && menuOpen ? '' : 'none';
   tEnd.style.display = trail.phase !== 'lobby' ? '' : 'none';
-  refreshSwitch();
+  if (hooks.refreshSwitch) hooks.refreshSwitch();
 }
 
 // Point at (or tap) a stone to see what it is
@@ -972,35 +971,6 @@ export function showSpotInfo(k) {
   tInfo.textContent = `${info.name} · ${desc}${here.length ? ' · here: ' + here.join(', ') : ''}`;
 }
 
-// ---------- Switching which game is on the table ----------
-const swOthello = document.getElementById('swOthello');
-const swTrail = document.getElementById('swTrail');
-function tableIsFree() {
-  return !(validPlayer(1) || validPlayer(2)) && validTrailIds().length === 0;
-}
-function refreshSwitch() {
-  swOthello.classList.toggle('on', S.activeGame === 'othello');
-  swTrail.classList.toggle('on', S.activeGame === 'trail');
-  const free = tableIsFree();
-  swOthello.disabled = S.activeGame !== 'othello' && !free;
-  swTrail.disabled = S.activeGame !== 'trail' && !free;
-}
-function switchTo(name) {
-  if (name === S.activeGame || !tableIsFree()) return;
-  set(ref(db, 'room/active'), name);
-}
-swOthello.addEventListener('click', () => switchTo('othello'));
-swTrail.addEventListener('click', () => switchTo('trail'));
-function applyActive(name) {
-  S.activeGame = name === 'trail' ? 'trail' : 'othello';
-  othelloGroup.visible = S.activeGame === 'othello';
-  trailGroup.visible = S.activeGame === 'trail';
-  document.getElementById('othelloUI').style.display = S.activeGame === 'othello' ? '' : 'none';
-  document.getElementById('trailUI').style.display = S.activeGame === 'trail' ? '' : 'none';
-  if (S.activeGame !== 'trail') finishTrailAnims();
-  hooks.refreshAll();
-}
-
 // ---------- Called by the room ----------
 export function refreshTrail() {   // after anything changes (people, seats, games)
   syncPawns();
@@ -1008,13 +978,13 @@ export function refreshTrail() {   // after anything changes (people, seats, gam
   if (!trailBusy) placeAllPawns();
   refreshTrailUI();
   refreshTrailCounters();
-  refreshSwitch();
 }
+export function trailInUse() { return validTrailIds().length > 0; }   // someone is in the game, so the table can't switch
+export function hideTrail() { finishTrailAnims(); }
 export function trailSeatChanged(seat) {   // your counter and dice follow you to a new seat
   if (trail && trail.players && trail.players[myId]) update(ref(db, 'room/trail/players/' + myId), { seat });
 }
 export function startTrail() {   // start listening when you enter the room
-  onValue(ref(db, 'room/active'), s => applyActive(s.val()));
   get(trailRef).then(s => {
     if (!s.exists()) set(trailRef, { phase: 'lobby', rollNo: 0 });
   });
