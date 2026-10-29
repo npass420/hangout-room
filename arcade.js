@@ -1,7 +1,8 @@
 // =====================================================================
-// arcade.js — the arcade cabinet on the back wall, playing Peak Hop
+// arcade.js — three arcade cabinets on the back wall, all playing Peak Hop
 // Peak Hop: hop from cube to cube and light them all up. A cube sinks after you hop off it,
 // so every map is a little path puzzle. No enemies and no clock: take your time.
+// Each cabinet has its own player; the high scores and the daily map are shared by all three.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, runTransaction, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -11,7 +12,6 @@ function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[n
 
 export const ARCADE_NAME = 'Peak Hop';
 const RUN_LEVELS = 10;
-const liveRef = ref(db, 'room/arcade/live');
 
 // ---------- Making the maps ----------
 // The four hops, as they look on the screen: ↖ ↗ ↙ ↘
@@ -117,40 +117,49 @@ function levelScore(targets, undos, restarts) {
 }
 
 // ---------- Shared state ----------
-let live = {};          // room/arcade/live: who's playing and every hop of their current map
-let scores = {};        // room/arcade/scores: best run per name
-let daily = {};         // room/arcade/daily/<today>: best daily result per name
+let scores = {};        // room/arcade/scores: best run per name (shared by all three cabinets)
+let daily = {};         // room/arcade/daily/<today>: best daily result per name (shared too)
 let dailyDay = '';
-let mine = false;       // I'm at the cabinet
-let game = null, gameKey = '', levelCache = { key: '', level: null };
+let focus = -1;         // the cabinet you're standing at (playing or watching), or -1
 const keyOf = name => String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?';
 function dayKey() { return new Date(serverNow()).toISOString().slice(0, 10); }   // the same day for everyone, wherever they are
-function occupant() { const u = live && live.user; return u && S.presence[u] ? u : ''; }
-export function arcadeOccupant() { return occupant(); }
-function levelFor(l) {
+function occupant(cab) { const u = cab.live && cab.live.user; return u && S.presence[u] ? u : ''; }
+export function arcadeCabOf(id) { for (const c of cabs) if (occupant(c) === id) return c.i; return -1; }   // which cabinet someone is playing, or -1
+export function arcadeFocus(i) { focus = i; for (const c of cabs) c.dirty = true; }   // the room tells us which cabinet you walked up to
+function levelFor(cab) {
+  const l = cab.live;
   const key = l.mode + '|' + l.seed + '|' + l.level;
-  if (levelCache.key !== key) levelCache = { key, level: genLevel(l.mode === 'daily' ? l.seed : l.seed + l.level * 1000, l.mode === 'daily' ? DAILY_RULES : levelRules(l.level)) };
-  return levelCache.level;
+  if (cab.levelCache.key !== key) cab.levelCache = { key, level: genLevel(l.mode === 'daily' ? l.seed : l.seed + l.level * 1000, l.mode === 'daily' ? DAILY_RULES : levelRules(l.level)) };
+  return cab.levelCache.level;
 }
 function banner(text, secs) { if (hooks.banner) hooks.banner(text, secs); }
+function myCab() { return cabs.find(c => c.mine) || null; }
 
-// ---------- The cabinet ----------
+// ---------- The cabinets ----------
 export const arcadeGroup = new THREE.Group();
 scene.add(arcadeGroup);
-const AX = 2.6, AZ = -ROOM / 2 + 0.38;     // back wall, right side
+const AXS = [2.6, 1.7, 0.8];                // across the back wall, right side (the first one is the original)
+const AZ = -ROOM / 2 + 0.38;
+const LIVE_PATHS = ['room/arcade/live', 'room/arcade/live2', 'room/arcade/live3'];
+const BODY_COLS = [0x1d1640, 0x10343a, 0x3a1424];   // purple, teal and red cabinets
 const SCREEN_Y = 1.42, SCREEN_W = 0.6, SCREEN_H = 0.5;
-const CW = 576, CH = 480;                   // the screen's pixels
-const scr = document.createElement('canvas');
-scr.width = CW; scr.height = CH;
-const sg = scr.getContext('2d');
-const scrTex = new THREE.CanvasTexture(scr);
-scrTex.colorSpace = THREE.SRGBColorSpace;
-let marqueeMat = null;
-const sideGlow = [];
-(function cabinet() {
-  const g = arcadeGroup;
-  g.position.set(AX, 0, AZ);
-  const body = std(0x1d1640, 0.5, { metalness: 0.2 });
+const CW = 576, CH = 480;                   // each screen's pixels
+function makeCabinet(i) {
+  const cab = {
+    i, x: AXS[i], liveRef: ref(db, LIVE_PATHS[i]), live: {}, mine: false,
+    game: null, gameKey: '', levelCache: { key: '', level: null },
+    anim: { segs: null, t: 0, sinking: [] }, face: [1, 1],
+    dirty: true, lastDraw: 0, idleT: 0, wasNear: false, nextTimer: 0, sideGlow: [], marqueeMat: null
+  };
+  cab.scr = document.createElement('canvas');
+  cab.scr.width = CW; cab.scr.height = CH;
+  cab.sg = cab.scr.getContext('2d');
+  cab.tex = new THREE.CanvasTexture(cab.scr);
+  cab.tex.colorSpace = THREE.SRGBColorSpace;
+  const g = new THREE.Group();
+  cab.group = g;
+  g.position.set(cab.x, 0, AZ);
+  const body = std(BODY_COLS[i], 0.5, { metalness: 0.2 });
   const dark = std(0x0d0b14, 0.6);
   const add = (geo, mat, x, y, z, rx = 0) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.rotation.x = rx; o.castShadow = true; o.receiveShadow = true; g.add(o); return o; };
   add(new THREE.BoxGeometry(0.76, 0.9, 0.62), body, 0, 0.45, 0);                         // lower cabinet
@@ -160,7 +169,7 @@ const sideGlow = [];
   add(new THREE.BoxGeometry(0.8, 0.08, 0.34), std(0x2a2160, 0.5), 0, 0.97, 0.2, -0.25);   // control panel
   add(new THREE.BoxGeometry(0.76, 0.84, 0.44), body, 0, 1.43, -0.1);                      // upper cabinet
   add(new THREE.BoxGeometry(0.68, 0.58, 0.02), dark, 0, SCREEN_Y, 0.125);                 // screen bezel
-  const screen = add(new THREE.PlaneGeometry(SCREEN_W, SCREEN_H), new THREE.MeshBasicMaterial({ map: scrTex, toneMapped: false }), 0, SCREEN_Y, 0.137);
+  const screen = add(new THREE.PlaneGeometry(SCREEN_W, SCREEN_H), new THREE.MeshBasicMaterial({ map: cab.tex, toneMapped: false }), 0, SCREEN_Y, 0.137);
   screen.castShadow = false;
   screen.userData.arcadeScreen = true;
   // Joystick and two buttons
@@ -169,7 +178,7 @@ const sideGlow = [];
   add(new THREE.SphereGeometry(0.025, 12, 10), std(0xe53935, 0.3), -0.16, 1.09, 0.21);
   add(new THREE.CylinderGeometry(0.022, 0.022, 0.02, 14), std(0x43a047, 0.3), 0.08, 1.01, 0.22, -0.25);
   add(new THREE.CylinderGeometry(0.022, 0.022, 0.02, 14), std(0x1e88e5, 0.3), 0.18, 1.0, 0.24, -0.25);
-  // Lit marquee on top
+  // Lit marquee on top, with the cabinet's number
   const mc = document.createElement('canvas'); mc.width = 512; mc.height = 144;
   const m = mc.getContext('2d');
   const grad = m.createLinearGradient(0, 0, 512, 0);
@@ -179,34 +188,39 @@ const sideGlow = [];
   m.textAlign = 'center'; m.textBaseline = 'middle';
   m.font = 'bold 74px Georgia';
   m.shadowColor = '#ff4fd8'; m.shadowBlur = 22;
-  m.fillStyle = '#ffe36b'; m.fillText('PEAK HOP', 256, 78);
-  m.shadowBlur = 0; m.lineWidth = 2; m.strokeStyle = '#ff4fd8'; m.strokeText('PEAK HOP', 256, 78);
+  m.fillStyle = '#ffe36b'; m.fillText('PEAK HOP', 240, 78);
+  m.shadowBlur = 0; m.lineWidth = 2; m.strokeStyle = '#ff4fd8'; m.strokeText('PEAK HOP', 240, 78);
+  m.font = 'bold 40px Georgia'; m.fillStyle = '#7af0ff'; m.fillText(String(i + 1), 470, 80);
   const mTex = new THREE.CanvasTexture(mc); mTex.colorSpace = THREE.SRGBColorSpace;
   add(new THREE.BoxGeometry(0.8, 0.24, 0.48), dark, 0, 1.97, -0.08);
-  marqueeMat = new THREE.MeshBasicMaterial({ map: mTex, toneMapped: false });
-  add(new THREE.PlaneGeometry(0.78, 0.22), marqueeMat, 0, 1.97, 0.161).castShadow = false;
+  cab.marqueeMat = new THREE.MeshBasicMaterial({ map: mTex, toneMapped: false });
+  add(new THREE.PlaneGeometry(0.78, 0.22), cab.marqueeMat, 0, 1.97, 0.161).castShadow = false;
   // Neon strips down the front edges of the sides
   for (const sx of [-1, 1]) {
     const strip = new THREE.Mesh(new THREE.BoxGeometry(0.014, 1.95, 0.014), new THREE.MeshBasicMaterial({ color: sx < 0 ? 0xff4fd8 : 0x7af0ff, toneMapped: false }));
     strip.position.set(sx * 0.385, 1.06, 0.13);
-    g.add(strip); sideGlow.push(strip);
+    g.add(strip); cab.sideGlow.push(strip);
   }
-  g.traverse(o => { if (o.isMesh) o.userData.arcade = true; });
-})();
+  g.traverse(o => { if (o.isMesh) { o.userData.arcade = true; o.userData.cab = i; } });
+  arcadeGroup.add(g);
+  return cab;
+}
+const cabs = [0, 1, 2].map(makeCabinet);
 export function arcadePickables() { return [arcadeGroup]; }
-export function arcadeStandSpot() { return { x: AX, z: AZ + 0.95 }; }
+export function arcadeStandSpot(i) { const c = cabs[i] || cabs[0]; return { x: c.x, z: AZ + 0.95 }; }
 // Where you stand to play (the room moves the camera there); aimed a bit low so the screen sits above the buttons
-export function arcadeViewPose(aspect) {
+export function arcadeViewPose(i, aspect) {
+  const c = cabs[i] || cabs[0];
   const halfH = Math.tan(Math.PI / 6);
   const dist = Math.max(0.85, Math.min(1.6, 0.72 / 2 / (halfH * Math.max(0.3, aspect))));
-  const target = new THREE.Vector3(AX, SCREEN_Y - 0.15, AZ + 0.14);
-  const pos = new THREE.Vector3(AX, SCREEN_Y - 0.1, AZ + 0.14 + dist);
+  const target = new THREE.Vector3(c.x, SCREEN_Y - 0.15, AZ + 0.14);
+  const pos = new THREE.Vector3(c.x, SCREEN_Y - 0.1, AZ + 0.14 + dist);
   return { pos, target };
 }
 
-// ---------- Drawing the screen ----------
-const anim = { segs: null, t: 0, sinking: [] };   // the hop in progress, and cubes sinking away
-let dirty = true, lastIdleFlip = 0, idlePage = 0;
+// ---------- Drawing a screen (C is the cabinet being drawn) ----------
+let C = cabs[0], sg = C.sg;
+let lastIdleFlip = 0, idleFlips = 0;
 const FONT = '"Courier New", monospace';
 function layout(level) {   // fit the map onto the screen
   let minD = 99, maxD = -99, minS = 99, maxS = -99;
@@ -265,7 +279,7 @@ function drawHopper(x, y, a, color, face) {
     sg.fillStyle = '#111'; sg.beginPath(); sg.arc(x + s * r * 0.32 + lx, y - r * 0.08 + ly, r * 0.11, 0, Math.PI * 2); sg.fill();
   }
 }
-let fancy = false;   // glow effects only while you're standing at the cabinet; lighter from across the room
+let fancy = false;   // glow effects only on the cabinet you're standing at; lighter from across the room
 function neonText(text, x, y, size, color, align = 'center') {
   sg.font = `bold ${size}px ${FONT}`; sg.textAlign = align; sg.textBaseline = 'middle';
   if (fancy) { sg.shadowColor = color; sg.shadowBlur = 12; }
@@ -280,9 +294,8 @@ function background() {
   for (const [x, y] of STARS) sg.fillRect(x * CW, y * CH, 1.5, 1.5);
 }
 const STARS = Array.from({ length: 40 }, () => [Math.random(), Math.random()]);
-let face = [1, 1];
 function drawGame() {
-  const g = game, l = live, L = layout(g.level);
+  const g = C.game, l = C.live, anim = C.anim, L = layout(g.level);
   const color = RAINBOW_CSS[colorIndex(l)];
   background();
   const order = [...g.level.cells.values()].sort((p, q) => (p.x + p.y) - (q.x + q.y) || p.x - q.x);
@@ -303,7 +316,7 @@ function drawGame() {
     if (g.sunk.has(k)) continue;
     drawCube(L, c, c.t === 'c' ? g.rem.get(k) : 0, color);
   }
-  if (!hidden) drawHopper(hx, hy, L.a, color, face);
+  if (!hidden) drawHopper(hx, hy, L.a, color, C.face);
   // Top line: level and score, or the daily map
   if (l.mode === 'daily') {
     neonText('DAILY MAP', 16, 24, 22, '#7af0ff', 'left');
@@ -335,41 +348,44 @@ function topList(obj, better, fmt, title, y0) {
 function drawIdle() {
   background();
   neonText('PEAK HOP', CW / 2, 46, 52, '#ff4fd8');
-  if (idlePage === 0) topList(scores, (p, q) => q.score - p.score, r => String(r.score), 'HIGH SCORES', 110);
+  const page = (idleFlips + C.i) % 2;   // the screens take turns, so one shows high scores while the next shows the daily
+  if (page === 0) topList(scores, (p, q) => q.score - p.score, r => String(r.score), 'HIGH SCORES', 110);
   else topList(daily, (p, q) => p.undos - q.undos || p.secs - q.secs, r => `${r.undos} UNDO`, "TODAY'S DAILY", 110);
   const blink = !fancy || Math.floor(performance.now() / 600) % 2 === 0;
-  const who = occupant();
-  if (who && live.name) neonText(`${String(live.name).toUpperCase()} IS PICKING A GAME`, CW / 2, CH - 26, 18, '#ffffff');
+  const who = occupant(C);
+  if (who && C.live.name) neonText(`${String(C.live.name).toUpperCase()} IS PICKING A GAME`, CW / 2, CH - 26, 18, '#ffffff');
   else if (blink) neonText('CLICK THE CABINET TO PLAY', CW / 2, CH - 26, 20, '#ffffff');
 }
-function drawScreen() {
-  fancy = !!S.atArcade;
-  if (game && occupant() && live.mode) drawGame(); else drawIdle();
-  scrTex.needsUpdate = true;
+function drawScreen(cab) {
+  C = cab; sg = cab.sg;
+  fancy = !!S.atArcade && focus === cab.i;
+  if (cab.game && occupant(cab) && cab.live.mode) drawGame(); else drawIdle();
+  cab.tex.needsUpdate = true;
 }
 
 // ---------- Applying the shared state ----------
-function syncGame(animate) {
-  if (!occupant() || !live.mode) { game = null; gameKey = ''; dirty = true; return; }
-  const level = levelFor(live);
+function syncGame(cab, animate) {
+  if (!occupant(cab) || !cab.live.mode) { cab.game = null; cab.gameKey = ''; cab.dirty = true; return; }
+  const level = levelFor(cab);
   if (!level) return;
-  const key = levelCache.key;
-  const moves = live.moves || '';
-  if (game && gameKey === key && moves === game.moves) return;
-  if (animate && game && gameKey === key && moves.length === game.moves.length + 1 && moves.startsWith(game.moves)) {
-    playMove(+moves[moves.length - 1]);
+  const key = cab.levelCache.key;
+  const moves = cab.live.moves || '';
+  const g = cab.game;
+  if (g && cab.gameKey === key && moves === g.moves) return;
+  if (animate && g && cab.gameKey === key && moves.length === g.moves.length + 1 && moves.startsWith(g.moves)) {
+    playMove(cab, +moves[moves.length - 1]);
   } else {
-    game = replay(level, moves);
-    gameKey = key;
-    anim.segs = null; anim.sinking = [];
+    cab.game = replay(level, moves);
+    cab.gameKey = key;
+    cab.anim.segs = null; cab.anim.sinking = [];
   }
-  dirty = true;
+  cab.dirty = true;
 }
-function playMove(d) {   // hop on the screen, with sounds for whoever is watching closely
-  const from = [game.x, game.y];
-  const L = doMove(game, d);
+function playMove(cab, d) {   // hop on the screen, with sounds for whoever is standing at that cabinet
+  const g = cab.game, from = [g.x, g.y];
+  const L = doMove(g, d);
   if (!L) return null;
-  face = [DIRS[d][0] - DIRS[d][1], DIRS[d][0] + DIRS[d][1]];
+  cab.face = [DIRS[d][0] - DIRS[d][1], DIRS[d][0] + DIRS[d][1]];
   const segs = [];
   let prev = from;
   L.hops.forEach((h, i) => {
@@ -377,9 +393,9 @@ function playMove(d) {   // hop on the screen, with sounds for whoever is watchi
     segs.push({ from: prev, to: [h[0], h[1]], spring: i > 0 && L.hops[i - 1][2] === 's', tele });
     prev = [h[0], h[1]];
   });
-  anim.segs = segs; anim.t = 0;
-  if (L.sank) anim.sinking.push({ k: L.sank, t: 0 });
-  const near = mine || S.atArcade;
+  cab.anim.segs = segs; cab.anim.t = 0;
+  if (L.sank) cab.anim.sinking.push({ k: L.sank, t: 0 });
+  const near = cab.mine || (S.atArcade && focus === cab.i);
   if (near) {
     sound('hop');
     if (L.hops.some(h => h[2] === 's')) setTimeout(() => sound('clack', 0.8), 170);
@@ -388,89 +404,100 @@ function playMove(d) {   // hop on the screen, with sounds for whoever is watchi
   }
   return L;
 }
-function applyLive(v) {
-  const before = occupant();
-  live = v || {};
-  if (mine && live.user && live.user !== myId) { mine = false; if (hooks.arcadeKicked) hooks.arcadeKicked(); }
-  syncGame(true);
-  if (occupant() !== before && hooks.refreshAll) hooks.refreshAll();
+function applyLive(cab, v) {
+  const before = occupant(cab);
+  cab.live = v || {};
+  if (cab.mine && cab.live.user && cab.live.user !== myId) { cab.mine = false; if (hooks.arcadeKicked) hooks.arcadeKicked(); }
+  syncGame(cab, true);
+  if (occupant(cab) !== before && hooks.refreshAll) hooks.refreshAll();
   refreshArcadeUI();
 }
 
 // ---------- Playing ----------
-export function arcadeEnter() {   // take the cabinet; resolves true if it's yours
-  if (!S.myName) return Promise.resolve(false);
-  return runTransaction(liveRef, d => {
+export function arcadeEnter(i) {   // take a cabinet; resolves true if it's yours
+  const cab = cabs[i];
+  if (!S.myName || !cab) return Promise.resolve(false);
+  if (myCab() && myCab() !== cab) arcadeLeave();   // you can only play one at a time
+  return runTransaction(cab.liveRef, d => {
     d = d || {};
     if (d.user && d.user !== myId && S.presence[d.user]) return;   // someone else is playing
     return { user: myId, name: S.myName, c: S.myHue, mode: '', at: serverNow() };
   }).then(r => {
-    if (!r.committed) { banner(`${ARCADE_NAME} is being played by ${live.name || 'someone'}`, 2.5); return false; }
-    mine = true;
-    onDisconnect(liveRef).remove();
+    if (!r.committed) return false;   // the room walks you up to watch instead
+    cab.mine = true;
+    onDisconnect(cab.liveRef).remove();
     refreshArcadeUI();
     return true;
   }).catch(e => { console.warn('Arcade enter', e); return false; });
 }
 export function arcadeLeave() {
-  if (!mine) return;
-  mine = false;
-  runTransaction(liveRef, d => (d && d.user === myId ? null : undefined)).catch(() => {});
-  try { onDisconnect(liveRef).cancel(); } catch (e) {}
+  const cab = myCab();
+  if (!cab) return;
+  cab.mine = false;
+  clearTimeout(cab.nextTimer);
+  runTransaction(cab.liveRef, d => (d && d.user === myId ? null : undefined)).catch(() => {});
+  try { onDisconnect(cab.liveRef).cancel(); } catch (e) {}
   refreshArcadeUI();
 }
-function writeLive(changes) {
-  Object.assign(live, changes);
-  update(liveRef, changes).catch(e => console.warn('Arcade write', e));
+function writeLive(cab, changes) {
+  Object.assign(cab.live, changes);
+  update(cab.liveRef, changes).catch(e => console.warn('Arcade write', e));
 }
-let nextTimer = 0;
 function startRun() {
-  if (!mine) return;
-  clearTimeout(nextTimer);
-  writeLive({ mode: 'run', seed: Math.floor(Math.random() * 1e9), level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
-  syncGame(false);
+  const cab = myCab();
+  if (!cab) return;
+  clearTimeout(cab.nextTimer);
+  writeLive(cab, { mode: 'run', seed: Math.floor(Math.random() * 1e9), level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
+  syncGame(cab, false);
   refreshArcadeUI();
 }
 function startDaily() {
-  if (!mine) return;
-  clearTimeout(nextTimer);
+  const cab = myCab();
+  if (!cab) return;
+  clearTimeout(cab.nextTimer);
   const day = dayKey();
-  writeLive({ mode: 'daily', seed: hashText('peakhop' + day), day, level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
-  syncGame(false);
+  writeLive(cab, { mode: 'daily', seed: hashText('peakhop' + day), day, level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
+  syncGame(cab, false);
   refreshArcadeUI();
 }
 export function arcadeHop(d) {
-  if (!mine || !game || live.phase !== 'play' || anim.segs) return;
-  if (!landing(game, d)) { sound('disc'); return; }
-  playMove(d);
-  const changes = { moves: game.moves };
-  if (cleared(game)) {
-    const gain = live.mode === 'daily' ? 0 : levelScore(game.level.targets, live.undos || 0, live.restarts || 0);
+  const cab = myCab();
+  if (!cab) return;
+  const g = cab.game, live = cab.live;
+  if (!g || live.phase !== 'play' || cab.anim.segs) return;
+  if (!landing(g, d)) { sound('disc'); return; }
+  playMove(cab, d);
+  const changes = { moves: g.moves };
+  if (cleared(g)) {
+    const gain = live.mode === 'daily' ? 0 : levelScore(g.level.targets, live.undos || 0, live.restarts || 0);
     Object.assign(changes, { phase: live.mode === 'daily' || live.level >= RUN_LEVELS ? 'done' : 'clear', gain, score: (live.score || 0) + gain });
-    writeLive(changes);
+    writeLive(cab, changes);
     setTimeout(() => sound(changes.phase === 'done' ? 'win' : 'buy'), 400);
-    if (live.mode === 'daily') saveDaily();
+    if (live.mode === 'daily') saveDaily(cab);
     else saveScore(changes.score);
-    if (changes.phase === 'clear') nextTimer = setTimeout(() => {
-      if (!mine || live.phase !== 'clear') return;
-      writeLive({ level: live.level + 1, moves: '', undos: 0, restarts: 0, gain: 0, phase: 'play' });
-      syncGame(false); refreshArcadeUI();
+    if (changes.phase === 'clear') cab.nextTimer = setTimeout(() => {
+      if (!cab.mine || cab.live.phase !== 'clear') return;
+      writeLive(cab, { level: cab.live.level + 1, moves: '', undos: 0, restarts: 0, gain: 0, phase: 'play' });
+      syncGame(cab, false); refreshArcadeUI();
     }, 1800);
   } else {
-    writeLive(changes);
-    if (stuck(game)) setTimeout(() => sound('out'), 450);
+    writeLive(cab, changes);
+    if (stuck(g)) setTimeout(() => sound('out'), 450);
   }
   refreshArcadeUI();
 }
 function undo() {
-  if (!mine || !game || live.phase !== 'play' || !game.moves.length) return;
-  writeLive({ moves: game.moves.slice(0, -1), undos: (live.undos || 0) + 1 });
-  syncGame(false); sound('disc'); refreshArcadeUI();
+  const cab = myCab();
+  if (!cab || !cab.game || cab.live.phase !== 'play' || !cab.game.moves.length) return;
+  writeLive(cab, { moves: cab.game.moves.slice(0, -1), undos: (cab.live.undos || 0) + 1 });
+  syncGame(cab, false); sound('disc'); refreshArcadeUI();
 }
 function restart() {
-  if (!mine || !game || live.phase !== 'play' || !game.moves.length) return;
-  writeLive({ moves: '', restarts: (live.restarts || 0) + 1, undos: live.mode === 'daily' ? (live.undos || 0) + 1 : (live.undos || 0) });
-  syncGame(false); sound('card'); refreshArcadeUI();
+  const cab = myCab();
+  if (!cab || !cab.game || cab.live.phase !== 'play' || !cab.game.moves.length) return;
+  const live = cab.live;
+  writeLive(cab, { moves: '', restarts: (live.restarts || 0) + 1, undos: live.mode === 'daily' ? (live.undos || 0) + 1 : (live.undos || 0) });
+  syncGame(cab, false); sound('card'); refreshArcadeUI();
 }
 function saveScore(score) {
   const r = ref(db, 'room/arcade/scores/' + keyOf(S.myName));
@@ -479,7 +506,8 @@ function saveScore(score) {
     return { name: S.myName, c: S.myHue, score, at: serverNow() };
   }).then(t => { if (t.committed) banner(`🏆 New best: ${score}`, 2.5); }).catch(e => console.warn('Arcade score', e));
 }
-function saveDaily() {
+function saveDaily(cab) {
+  const live = cab.live;
   const undos = live.undos || 0, secs = Math.round((serverNow() - (live.started || serverNow())) / 1000);
   const r = ref(db, `room/arcade/daily/${live.day || dayKey()}/${keyOf(S.myName)}`);
   runTransaction(r, d => {
@@ -492,24 +520,25 @@ function saveDaily() {
 }
 
 // Tapping the screen hops toward where you tapped (up-left, up-right, down-left or down-right of your hopper)
-export function arcadeTap(point) {
-  if (!mine || !game || live.phase !== 'play') return;
-  const u = ((point.x - AX) / SCREEN_W + 0.5) * CW, v = (0.5 - (point.y - SCREEN_Y) / SCREEN_H) * CH;
-  const L = layout(game.level), p = cubeTop(L, game.x, game.y);
+export function arcadeTap(point, i) {
+  const cab = myCab();
+  if (!cab || cab.i !== i || !cab.game || cab.live.phase !== 'play') return;
+  const u = ((point.x - cab.x) / SCREEN_W + 0.5) * CW, v = (0.5 - (point.y - SCREEN_Y) / SCREEN_H) * CH;
+  const L = layout(cab.game.level), p = cubeTop(L, cab.game.x, cab.game.y);
   const dx = u - p.x, dy = v - (p.y - L.a * 0.35);
   arcadeHop(dy < 0 ? (dx < 0 ? 0 : 1) : (dx < 0 ? 2 : 3));
 }
 // Keyboard: arrows (turned a quarter so ↑ hops up-right), Q W A S, or the number pad 7 9 1 3
 const KEYS = { ArrowLeft: 0, ArrowUp: 1, ArrowDown: 2, ArrowRight: 3, q: 0, w: 1, a: 2, s: 3, Q: 0, W: 1, A: 2, S: 3, '7': 0, '9': 1, '1': 2, '3': 3 };
 export function arcadeKey(key) {
-  if (!mine) return false;
+  if (!myCab()) return false;
   if (key in KEYS) { arcadeHop(KEYS[key]); return true; }
   if (key === 'z' || key === 'Z' || key === 'Backspace') { undo(); return true; }
   if (key === 'r' || key === 'R') { restart(); return true; }
   return false;
 }
 
-// ---------- The bottom bar while you're at the cabinet ----------
+// ---------- The bottom bar while you're at a cabinet ----------
 const aInfo = document.getElementById('arcadeInfo');
 const padBtns = ['aUL', 'aUR', 'aDL', 'aDR'].map((id, d) => { const b = document.getElementById(id); b.addEventListener('click', () => arcadeHop(d)); return b; });
 const aUndo = document.getElementById('aUndo'), aRestart = document.getElementById('aRestart');
@@ -519,58 +548,66 @@ aRestart.addEventListener('click', restart);
 aRun.addEventListener('click', startRun);
 aDaily.addEventListener('click', startDaily);
 export function refreshArcadeUI() {
-  if (!mine) return;
+  const cab = myCab();
+  if (!cab) return;
+  const live = cab.live, game = cab.game;
   const playing = !!(game && live.mode && live.phase === 'play');
   padBtns.forEach(b => { b.disabled = !playing; });
   aUndo.disabled = aRestart.disabled = !(playing && game.moves.length);
   aRun.textContent = live.mode === 'run' && live.phase !== 'done' ? '🎲 New run' : '🎲 Run';
-  if (!live.mode) aInfo.textContent = '🕹️ Pick 🎲 Run (10 levels) or 📅 Daily map';
+  if (!live.mode) aInfo.textContent = `🕹️ Cabinet ${cab.i + 1} · pick 🎲 Run (10 levels) or 📅 Daily map`;
   else if (live.mode === 'daily') aInfo.textContent = `📅 Daily map · undos ${live.undos || 0}`;
   else aInfo.textContent = `Level ${live.level}/${RUN_LEVELS} · score ${live.score || 0}${live.undos || live.restarts ? '' : ' · perfect so far'}`;
 }
 
 // ---------- Listening ----------
 let dailyOff = null;
+function allDirty() { for (const c of cabs) c.dirty = true; }
 function listenDaily() {
   const day = dayKey();
   if (day === dailyDay) return;
   dailyDay = day;
   if (dailyOff) dailyOff();
-  dailyOff = onValue(ref(db, 'room/arcade/daily/' + day), s => { daily = s.val() || {}; dirty = true; });
+  dailyOff = onValue(ref(db, 'room/arcade/daily/' + day), s => { daily = s.val() || {}; allDirty(); });
 }
 export function startArcade() {
-  onValue(liveRef, s => applyLive(s.val()));
-  onValue(ref(db, 'room/arcade/scores'), s => { scores = s.val() || {}; dirty = true; });
+  for (const cab of cabs) onValue(cab.liveRef, s => applyLive(cab, s.val()));
+  onValue(ref(db, 'room/arcade/scores'), s => { scores = s.val() || {}; allDirty(); });
   listenDaily();
   setInterval(listenDaily, 60000);
 }
 
 // ---------- Every frame ----------
-let idleT = 0, lastDraw = 0, wasNear = false;
 export function updateArcade(dt) {
-  const t = performance.now(), near = !!S.atArcade;
-  let moving = false;
-  if (anim.segs) {
-    anim.t += dt;
-    if (anim.t >= anim.segs.length * 0.17) { anim.segs = null; refreshArcadeUI(); dirty = true; }
-    moving = true;
-  }
-  if (anim.sinking.length) {
-    anim.sinking.forEach(s => { s.t += dt; });
-    anim.sinking = anim.sinking.filter(s => s.t < 0.4);
-    if (!anim.sinking.length) dirty = true;
-    moving = true;
-  }
-  if (t - lastIdleFlip > 6000) { lastIdleFlip = t; idlePage = 1 - idlePage; if (!game) dirty = true; }
-  if (near) {   // up close: blinking text and glowing pads
-    idleT += dt;
-    if (idleT > 0.3) { idleT = 0; if (!game || [...game.level.cells.values()].some(c => c.t === 'p')) dirty = true; }
-  }
-  if (near !== wasNear) { wasNear = near; dirty = true; }
-  // hops animate smoothly up close and at a lighter rate from across the room; otherwise only redraw when something changed
-  if (dirty || (moving && t - lastDraw > (near ? 0 : 66))) { dirty = false; lastDraw = t; drawScreen(); }
-  // the marquee and neon strips hum a little
+  const t = performance.now();
+  if (t - lastIdleFlip > 6000) { lastIdleFlip = t; idleFlips++; for (const c of cabs) if (!c.game) c.dirty = true; }
   const hum = 0.9 + 0.1 * Math.sin(t / 110);
-  if (marqueeMat) marqueeMat.color.setScalar(hum);
-  sideGlow.forEach((s, i) => s.material.color.set(i ? 0x7af0ff : 0xff4fd8).multiplyScalar(0.75 + 0.25 * Math.sin(t / 400 + i * 2)));
+  let drawn = 0;
+  for (const cab of cabs) {
+    const near = !!S.atArcade && focus === cab.i;
+    const anim = cab.anim;
+    let moving = false;
+    if (anim.segs) {
+      anim.t += dt;
+      if (anim.t >= anim.segs.length * 0.17) { anim.segs = null; if (cab.mine) refreshArcadeUI(); cab.dirty = true; }
+      moving = true;
+    }
+    if (anim.sinking.length) {
+      anim.sinking.forEach(s => { s.t += dt; });
+      anim.sinking = anim.sinking.filter(s => s.t < 0.4);
+      if (!anim.sinking.length) cab.dirty = true;
+      moving = true;
+    }
+    if (near) {   // up close: blinking text and glowing pads
+      cab.idleT += dt;
+      if (cab.idleT > 0.3) { cab.idleT = 0; if (!cab.game || [...cab.game.level.cells.values()].some(c => c.t === 'p')) cab.dirty = true; }
+    }
+    if (near !== cab.wasNear) { cab.wasNear = near; cab.dirty = true; }
+    // smooth up close; from across the room, hops redraw at a light rate, and at most one idle screen redraws per frame
+    const due = moving && t - cab.lastDraw > (near ? 0 : 100);
+    if (due || (cab.dirty && (near || moving || drawn === 0))) { cab.dirty = false; cab.lastDraw = t; drawScreen(cab); drawn++; }
+    // the marquee and neon strips hum a little
+    cab.marqueeMat.color.setScalar(hum);
+    cab.sideGlow.forEach((s, i) => s.material.color.set(i ? 0x7af0ff : 0xff4fd8).multiplyScalar(0.75 + 0.25 * Math.sin(t / 400 + i * 2 + cab.i)));
+  }
 }

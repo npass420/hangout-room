@@ -15,7 +15,7 @@ import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackH
          stackRelease, stackTap, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
 import { slotsGroup, slotPickables, slotViewPose, slotEnter, slotLeave, slotSpin, slotOccupantOf, slotStandSpot, slotName,
          chipsOf, startSlots, updateSlots, refreshSlotUI } from './slots.js';
-import { arcadeGroup, arcadePickables, arcadeViewPose, arcadeEnter, arcadeLeave, arcadeOccupant, arcadeStandSpot,
+import { arcadeGroup, arcadePickables, arcadeViewPose, arcadeEnter, arcadeLeave, arcadeCabOf, arcadeFocus, arcadeStandSpot,
          arcadeTap, arcadeKey, startArcade, updateArcade, refreshArcadeUI, ARCADE_NAME } from './arcade.js';
 import { sfx, setupMute } from './sounds.js';
 
@@ -406,7 +406,7 @@ function makeAvatar(name, c) {
 function refreshAvatars() {
   for (const id of Object.keys(avatars)) {
     const p = S.presence[id];
-    if (!p || (p.seat < 0 && slotOccupantOf(id) < 0 && arcadeOccupant() !== id) || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
+    if (!p || (p.seat < 0 && slotOccupantOf(id) < 0 && arcadeCabOf(id) < 0) || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
       scene.remove(avatars[id].g);
       delete avatars[id];
     }
@@ -414,13 +414,13 @@ function refreshAvatars() {
   for (const [id, p] of Object.entries(S.presence)) {
     if (id === myId) continue;
     const slot = p.seat < 0 ? slotOccupantOf(id) : -1;
-    const atCab = p.seat < 0 && arcadeOccupant() === id;
+    const cab = p.seat < 0 ? arcadeCabOf(id) : -1, atCab = cab >= 0;
     if (p.seat < 0 && slot < 0 && !atCab) continue;
     if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const g = avatars[id].g;
     g.visible = !S.trailFull;   // the big board hides the room
     if (slot >= 0 || atCab) {   // standing at a slot machine or the arcade, facing it
-      const spot = atCab ? arcadeStandSpot() : slotStandSpot(slot);
+      const spot = atCab ? arcadeStandSpot(cab) : slotStandSpot(slot);
       g.position.set(spot.x, -0.52, spot.z);
       g.rotation.y = 0;
       g.children[3].visible = g.children[4].visible = false;   // arms down (hidden) while standing
@@ -452,7 +452,7 @@ function refreshWho() {
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
     const slot = slotOccupantOf(id);
-    const where = p.seat >= 0 ? 'seat ' + (p.seat + 1) : slot >= 0 ? '🎰 ' + slotName(slot) : arcadeOccupant() === id ? '🕹️ ' + ARCADE_NAME : 'standing';
+    const where = p.seat >= 0 ? 'seat ' + (p.seat + 1) : slot >= 0 ? '🎰 ' + slotName(slot) : arcadeCabOf(id) >= 0 ? `🕹️ ${ARCADE_NAME} ${arcadeCabOf(id) + 1}` : 'standing';
     div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
     const chipSpan = document.createElement('span');
     chipSpan.style.opacity = '0.7';
@@ -774,8 +774,8 @@ watchBack.textContent = '← Back';
 watchBar.append(watchInfo, watchBack);
 document.body.appendChild(watchBar);
 watchBack.addEventListener('click', () => { if (S.atArcade) leaveArcade(); else leaveSlot(); });
-function whoIsAt(kind) {   // the name of whoever is playing the slot machine or the arcade
-  const id = Object.keys(S.presence).find(k => k !== myId && (kind === 'arcade' ? arcadeOccupant() === k : slotOccupantOf(k) >= 0));
+function whoIsAt(kind, i) {   // the name of whoever is playing the slot machine or that arcade cabinet
+  const id = Object.keys(S.presence).find(k => k !== myId && (kind === 'arcade' ? arcadeCabOf(k) === i : slotOccupantOf(k) >= 0));
   return id ? S.presence[id].name : '';
 }
 function stepUp(kind, i, watch) {   // move the camera up to the machine
@@ -789,16 +789,16 @@ function stepUp(kind, i, watch) {   // move the camera up to the machine
     slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
   }
   controls.enabled = false;
-  if (kind === 'arcade') S.atArcade = true; else S.atSlot = i;
+  if (kind === 'arcade') { S.atArcade = true; arcadeFocus(i); } else S.atSlot = i;
   setFov(BASE_FOV);
-  const v = kind === 'arcade' ? arcadeViewPose(camera.aspect) : slotViewPose(i, camera.aspect);
+  const v = kind === 'arcade' ? arcadeViewPose(i, camera.aspect) : slotViewPose(i, camera.aspect);
   if (watch) { v.pos.x += 0.35; v.pos.z += 0.3; }   // watchers stand just behind the player's shoulder
   moveCamera(v.pos, lookQuat(v.pos, v.target), null);
   document.body.classList.add(kind === 'arcade' ? 'atArcade' : 'atSlot');
   document.body.classList.toggle('watching', !!watch);
-  const game = kind === 'arcade' ? ARCADE_NAME : slotName(i);
+  const game = kind === 'arcade' ? `${ARCADE_NAME} ${i + 1}` : slotName(i);
   if (watch) {
-    watchInfo.textContent = `👀 Watching ${whoIsAt(kind) || 'someone'} play ${game}`;
+    watchInfo.textContent = `👀 Watching ${whoIsAt(kind, i) || 'someone'} play ${game}`;
     hint.textContent = `Watching ${game} · Esc or Back to step away`;
   } else {
     hint.textContent = kind === 'arcade' ? `Playing ${game} · tap the screen or use the arrows · Esc to step back`
@@ -835,19 +835,19 @@ function leaveSlotCamera() {
 }
 document.getElementById('slotBack').addEventListener('click', leaveSlot);
 
-// ---------- Walking up to the arcade cabinet (it uses the same saved view as the slots) ----------
-function enterArcade() {
+// ---------- Walking up to an arcade cabinet (it uses the same saved view as the slots) ----------
+function enterArcade(i) {
   if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || !S.myName) return;
-  arcadeEnter().then(ok => {
+  arcadeEnter(i).then(ok => {
     if (anim) { if (ok) arcadeLeave(); return; }
-    if (ok) stepUp('arcade', 0, false);
-    else if (whoIsAt('arcade')) stepUp('arcade', 0, true);   // someone's playing: watch them up close
+    if (ok) stepUp('arcade', i, false);
+    else if (whoIsAt('arcade', i)) stepUp('arcade', i, true);   // someone's playing that one: watch them up close
   });
 }
 function leaveArcade() {
   if (!S.atArcade || anim) return;
   arcadeLeave();
-  S.atArcade = false;
+  S.atArcade = false; arcadeFocus(-1);
   document.body.classList.remove('atArcade', 'watching');
   moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => {
     controls.target.copy(slotSaved.target);
@@ -857,7 +857,7 @@ function leaveArcade() {
   hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
   refreshAll();
 }
-hooks.arcadeKicked = () => { if (S.atArcade) { S.atArcade = false; document.body.classList.remove('atArcade'); leaveSlotCamera(); } };
+hooks.arcadeKicked = () => { if (S.atArcade) { S.atArcade = false; arcadeFocus(-1); document.body.classList.remove('atArcade'); leaveSlotCamera(); } };
 document.getElementById('aBack').addEventListener('click', leaveArcade);
 
 // ---------- LittleTrail's big board: the game fills the window and the room is hidden (and not drawn) ----------
@@ -1016,7 +1016,7 @@ function pickUnder(e) {
     : [...targets, ...slotPickables(), ...arcadePickables(), doorGroup], true);
   if (!hits.length) return null;
   const h = hits[0];
-  if (h.object.userData.arcade) return S.boardView ? null : { arcade: true, screen: !!h.object.userData.arcadeScreen, point: h.point };
+  if (h.object.userData.arcade) return S.boardView ? null : { arcade: true, cab: h.object.userData.cab || 0, screen: !!h.object.userData.arcadeScreen, point: h.point };
   if (h.object.userData.machine !== undefined) return S.boardView ? null : { machine: h.object.userData.machine, lever: !!h.object.userData.lever };
   if (h.object.userData.door) return S.boardView ? null : { door: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
@@ -1100,9 +1100,9 @@ window.addEventListener('pointerup', e => {
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
     if (S.trailFull) { if (p && p.spot !== undefined) showSpotInfo(p.spot); }   // big board: tap a stone to read about it
-    else if (S.atArcade) { if (p && p.screen) arcadeTap(p.point); }   // at the cabinet: tapping the screen hops that way
+    else if (S.atArcade) { if (p && p.screen) arcadeTap(p.point, p.cab); }   // at the cabinet: tapping the screen hops that way
     else if (S.atSlot >= 0) { if (p && p.machine === S.atSlot) slotSpin(); }   // at a machine: clicking it (or its lever) spins
-    else if (p && p.arcade) enterArcade();
+    else if (p && p.arcade) enterArcade(p.cab);
     else if (p && p.machine !== undefined) enterSlot(p.machine);
     else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
