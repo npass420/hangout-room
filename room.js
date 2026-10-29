@@ -17,6 +17,8 @@ import { slotsGroup, slotPickables, slotViewPose, slotEnter, slotLeave, slotSpin
          chipsOf, startSlots, updateSlots, refreshSlotUI } from './slots.js';
 import { arcadeGroup, arcadePickables, arcadeViewPose, arcadeEnter, arcadeLeave, arcadeCabOf, arcadeFocus, arcadeStandSpot,
          arcadeTap, arcadeKey, startArcade, updateArcade, refreshArcadeUI, ARCADE_NAME } from './arcade.js';
+import { checkersGroup, chessGroup, boardGamesInUse, boardGameTap, boardGameCanTap, boardGamePickables, refreshBoardGames,
+         hideBoardGames, startBoardGames, updateBoardGames } from './boardgames.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -470,6 +472,7 @@ function refreshAll() {
   refreshWho();
   refreshTrail();
   refreshStack();
+  refreshBoardGames();
   refreshSwitch();
 }
 hooks.refreshAll = refreshAll;
@@ -477,11 +480,13 @@ hooks.refreshAll = refreshAll;
 // ---------- Switching which game is on the table ----------
 const GAMES = {
   othello: { group: othelloGroup, ui: 'othelloUI', btn: 'swOthello', hide() {} },
+  checkers: { group: checkersGroup, ui: 'checkersUI', btn: 'swCheckers', hide: hideBoardGames },
+  chess:   { group: chessGroup,   ui: 'chessUI',   btn: 'swChess',   hide: hideBoardGames },
   trail:   { group: trailGroup,   ui: 'trailUI',   btn: 'swTrail',   hide: hideTrail },
   stack:   { group: stackGroup,   ui: 'stackUI',   btn: 'swStack',   hide: hideStack }
 };
 function tableIsFree() {   // you can only switch games when nobody is playing one
-  return !(validPlayer(1) || validPlayer(2)) && !trailInUse() && !stackInUse();
+  return !(validPlayer(1) || validPlayer(2)) && !trailInUse() && !stackInUse() && !boardGamesInUse();
 }
 function refreshSwitch() {
   const free = tableIsFree();
@@ -667,6 +672,7 @@ function enterRoom() {
   startOthello();   // the Othello game
   startTrail();     // LittleTrail
   startStack();     // LittleStack
+  startBoardGames(); // Checkers and Chess
   startSlots();     // the slot machines
   startArcade();    // the arcade cabinet
 
@@ -1011,7 +1017,8 @@ function pickUnder(e) {
     return hit && hit.object.userData.spot !== undefined ? { spot: hit.object.userData.spot } : null;
   }
   const targets = S.atSlot >= 0 ? [] : S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
-    : S.activeGame === 'stack' ? [...chairs, ...stackPickables()] : [...chairs, felt];
+    : S.activeGame === 'stack' ? [...chairs, ...stackPickables()]
+    : S.activeGame === 'checkers' || S.activeGame === 'chess' ? [...chairs, ...boardGamePickables()] : [...chairs, felt];
   const hits = raycaster.intersectObjects(S.atArcade ? arcadePickables() : S.atSlot >= 0 ? slotPickables()
     : [...targets, ...slotPickables(), ...arcadePickables(), doorGroup], true);
   if (!hits.length) return null;
@@ -1021,6 +1028,7 @@ function pickUnder(e) {
   if (h.object.userData.door) return S.boardView ? null : { door: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
   if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
+  if (h.object.userData.sq !== undefined) return { cell: h.object.userData.sq };   // a checkers or chess piece
   if (h.object.userData.spot !== undefined) return { spot: h.object.userData.spot };
   if (h.object.userData.mountain) return null;
   if (h.object.userData.isBoard) {
@@ -1087,7 +1095,7 @@ window.addEventListener('pointermove', e => {
     const free = p && p.chair && p.chair.userData.seat !== S.seated && !seatTakenByOther(p.chair.userData.seat);
     const chair = free ? p.chair : null;
     setHover(chair);
-    const legal = p && p.cell !== undefined && canPlayAt(p.cell);
+    const legal = p && p.cell !== undefined && (S.activeGame === 'othello' ? canPlayAt(p.cell) : boardGameCanTap(p.cell));
     const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
     const slot = p && p.slot !== undefined;
     const machine = p && p.machine !== undefined && (S.atSlot < 0 || p.lever);
@@ -1106,7 +1114,7 @@ window.addEventListener('pointerup', e => {
     else if (p && p.machine !== undefined) enterSlot(p.machine);
     else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
-    else if (p && p.cell !== undefined) play(p.cell);
+    else if (p && p.cell !== undefined) { if (S.activeGame === 'othello') play(p.cell); else boardGameTap(p.cell); }
     else if (p && p.spot !== undefined) showSpotInfo(p.spot);
     else if (p && p.chair && p.chair.userData.seat !== S.seated) { setHover(null); sit(p.chair.userData.seat); }
   }
@@ -1152,6 +1160,7 @@ renderer.setAnimationLoop(() => {
   updateOthello(dt);
   updateTrail(dt);
   updateStack(dt);
+  updateBoardGames(dt);
   updateSlots(dt);
   updateArcade(dt);
   updateLuckySign();

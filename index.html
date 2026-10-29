@@ -18,7 +18,10 @@
   #switchRow { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(243,230,207,0.2); }
   .panel button.sw { background: rgba(233,201,143,0.25); color: #f3e6cf; }
   .panel button.sw.on { background: #e9c98f; color: #2a1c10; }
-  #tStatus, #sStatus { font-size: 16px; margin-bottom: 4px; }
+  #tStatus, #sStatus, .bgStatus { font-size: 16px; margin-bottom: 4px; }
+  .bgPlayers { font-size: 13px; opacity: 0.8; margin-bottom: 8px; }
+  .bgPromo { margin-bottom: 4px; }
+  .panel .bgPromo button, .panel .bgAccept { background: #ffd54f; }
   #sPlayers { font-size: 13px; margin-bottom: 8px; }
   #sCount { font-size: 13px; color: #ffb36b; margin-bottom: 4px; }
   #sLength button { font-size: 13px; padding: 4px 8px; margin: 0 4px 4px 0; }
@@ -126,8 +129,8 @@
     body.chatOpen #chat { display: block; }
     #msgs { height: 110px; }
     #game { left: 8px; right: 8px; bottom: 8px; max-width: none; padding: 8px 10px; }
-    #status, #tStatus, #sStatus { font-size: 14px; }
-    #players, #tPlayers, #sPlayers { font-size: 12px; margin-bottom: 6px; }
+    #status, #tStatus, #sStatus, .bgStatus { font-size: 14px; }
+    #players, #tPlayers, #sPlayers, .bgPlayers { font-size: 12px; margin-bottom: 6px; }
     #switchRow { margin-bottom: 4px; padding-bottom: 4px; }
     .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
     #stand { top: 48px; bottom: auto; font-size: 14px; padding: 6px 16px; }
@@ -141,6 +144,7 @@
     body.panelSmall #game { padding-right: 44px; }
     body.panelSmall #switchRow, body.panelSmall #bottomRow,
     body.panelSmall #othelloUI > :not(#status), body.panelSmall #trailUI > :not(#tStatus),
+    body.panelSmall #checkersUI > :not(.bgStatus):not(.bgPromo), body.panelSmall #chessUI > :not(.bgStatus):not(.bgPromo),
     body.panelSmall #stackUI > :not(#sStatus):not(#sInfo) { display: none !important; }
     body.panelSmall #status, body.panelSmall #tStatus, body.panelSmall #sStatus { margin-bottom: 0; }
     #tTop { padding: 6px 8px; padding-right: 150px; gap: 8px; }
@@ -165,7 +169,7 @@
 <button id="stand">Stand up</button>
 <div id="game" class="panel">
   <button id="collapse" title="Shrink the panel">▾</button>
-  <div id="switchRow"><button id="swOthello" class="sw on">Othello</button><button id="swTrail" class="sw">LittleTrail</button><button id="swStack" class="sw">LittleStack</button></div>
+  <div id="switchRow"><button id="swOthello" class="sw on">Othello</button><button id="swCheckers" class="sw">Checkers</button><button id="swChess" class="sw">Chess</button><button id="swTrail" class="sw">LittleTrail</button><button id="swStack" class="sw">LittleStack</button></div>
   <div id="othelloUI">
     <div id="status">Connecting…</div>
     <div id="players">Black: open &middot; White: open</div>
@@ -182,6 +186,8 @@
     <button id="tStart" style="display:none">Start</button>
     <div id="tMenu" style="display:none"><button id="tLeave">Leave game</button><button id="tEnd">End game</button></div>
   </div>
+  <div id="checkersUI" style="display:none"></div>
+  <div id="chessUI" style="display:none"></div>
   <div id="stackUI" style="display:none">
     <div id="sStatus">Connecting…</div>
     <div id="sCount" style="display:none"></div>
@@ -229,7 +235,7 @@
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 } }
 </script>
-<!-- The room's code lives in room.js, which loads core.js, othello.js, trail.js, stack.js, slots.js, arcade.js and sounds.js -->
+<!-- The room's code lives in room.js, which loads core.js, othello.js, boardgames.js, trail.js, stack.js, slots.js, arcade.js and sounds.js -->
 <script type="module" src="room.js"></script>
 </body>
 </html>
