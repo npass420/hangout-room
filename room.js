@@ -10,7 +10,7 @@ import { db, myId, S, hooks, ROOM, HEIGHT, SEATS, CHAIR_R, TABLE_Y, seatAngle, r
 import { othelloGroup, validPlayer, felt, HALF, CELL, BOARD_TOP, canPlayAt, play, refreshPanel, refreshCounters,
          othelloSeatChanged, startOthello, updateOthello } from './othello.js';
 import { trailGroup, trailInUse, hideTrail, mountainMesh, spotMeshes, MTN_TARGET, showSpotInfo, refreshTrail,
-         trailSeatChanged, startTrail, updateTrail } from './trail.js';
+         trailSeatChanged, startTrail, updateTrail, trailFullChanged } from './trail.js';
 import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackHover, stackGrab, stackDrag,
          stackRelease, stackTap, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
 import { slotsGroup, slotPickables, slotViewPose, slotEnter, slotLeave, slotSpin, slotOccupantOf, slotStandSpot, slotName,
@@ -418,6 +418,7 @@ function refreshAvatars() {
     if (p.seat < 0 && slot < 0 && !atCab) continue;
     if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const g = avatars[id].g;
+    g.visible = !S.trailFull;   // the big board hides the room
     if (slot >= 0 || atCab) {   // standing at a slot machine or the arcade, facing it
       const spot = atCab ? arcadeStandSpot() : slotStandSpot(slot);
       g.position.set(spot.x, -0.52, spot.z);
@@ -493,6 +494,7 @@ function refreshSwitch() {
 hooks.refreshSwitch = refreshSwitch;
 function applyActive(name) {
   S.activeGame = GAMES[name] ? name : 'othello';
+  if (S.trailFull && S.activeGame !== 'trail') setTrailFull(false);
   document.body.dataset.game = S.activeGame;   // lets the page show only this game's ⋯ button
   for (const [n, g] of Object.entries(GAMES)) {
     g.group.visible = S.activeGame === n;
@@ -740,7 +742,7 @@ function sit(i) {
 }
 
 function stand() {
-  if (S.seated < 0 || anim || S.boardView || S.atSlot >= 0 || S.atArcade) return;
+  if (S.seated < 0 || anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.trailFull) return;
   S.seated = -1;
   setFov(BASE_FOV);
   moveCamera(savedView.pos.clone(), lookQuat(savedView.pos, savedView.target), () => {
@@ -754,37 +756,70 @@ function stand() {
   refreshAll();
 }
 
-// ---------- Walking up to a slot machine ----------
+// ---------- Walking up to a slot machine or the arcade (to play, or to watch someone else play) ----------
 const slotSaved = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+// A little "watching" bar with a Back button, shown instead of the game buttons while you watch
+const watchStyle = document.createElement('style');
+watchStyle.textContent = `#watchBar { display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+  body.watching #watchBar { display: block; }
+  body.watching #actionBar { display: none !important; }
+  #watchBar span { display: inline-block; font-size: 16px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 8px 14px; border-radius: 16px; margin: 4px; vertical-align: middle; }
+  #watchBar button { font-family: inherit; font-size: 16px; padding: 9px 18px; margin: 4px; border: none; border-radius: 20px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }`;
+document.head.appendChild(watchStyle);
+const watchBar = document.createElement('div');
+watchBar.id = 'watchBar';
+const watchInfo = document.createElement('span');
+const watchBack = document.createElement('button');
+watchBack.textContent = '← Back';
+watchBar.append(watchInfo, watchBack);
+document.body.appendChild(watchBar);
+watchBack.addEventListener('click', () => { if (S.atArcade) leaveArcade(); else leaveSlot(); });
+function whoIsAt(kind) {   // the name of whoever is playing the slot machine or the arcade
+  const id = Object.keys(S.presence).find(k => k !== myId && (kind === 'arcade' ? arcadeOccupant() === k : slotOccupantOf(k) >= 0));
+  return id ? S.presence[id].name : '';
+}
+function stepUp(kind, i, watch) {   // move the camera up to the machine
+  if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
+    slotSaved.pos.copy(savedView.pos); slotSaved.target.copy(savedView.target);
+    S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
+  } else {
+    slotSaved.pos.copy(camera.position); slotSaved.target.copy(controls.target);
+  }
+  if (Math.hypot(slotSaved.pos.x, slotSaved.pos.y, slotSaved.pos.z) < 0.1) {   // no saved view yet: use the starting view
+    slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
+  }
+  controls.enabled = false;
+  if (kind === 'arcade') S.atArcade = true; else S.atSlot = i;
+  setFov(BASE_FOV);
+  const v = kind === 'arcade' ? arcadeViewPose(camera.aspect) : slotViewPose(i, camera.aspect);
+  if (watch) { v.pos.x += 0.35; v.pos.z += 0.3; }   // watchers stand just behind the player's shoulder
+  moveCamera(v.pos, lookQuat(v.pos, v.target), null);
+  document.body.classList.add(kind === 'arcade' ? 'atArcade' : 'atSlot');
+  document.body.classList.toggle('watching', !!watch);
+  const game = kind === 'arcade' ? ARCADE_NAME : slotName(i);
+  if (watch) {
+    watchInfo.textContent = `👀 Watching ${whoIsAt(kind) || 'someone'} play ${game}`;
+    hint.textContent = `Watching ${game} · Esc or Back to step away`;
+  } else {
+    hint.textContent = kind === 'arcade' ? `Playing ${game} · tap the screen or use the arrows · Esc to step back`
+      : `Playing ${game} · press Spin or pull the lever · Esc to step back`;
+  }
+  if (kind === 'arcade') refreshArcadeUI(); else refreshSlotUI();
+  refreshAll();
+}
 function enterSlot(i) {
   if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || !S.myName) return;
   slotEnter(i).then(ok => {
-    if (!ok || anim) { if (ok) slotLeave(); return; }
-    if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
-      slotSaved.pos.copy(savedView.pos); slotSaved.target.copy(savedView.target);
-      S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
-    } else {
-      slotSaved.pos.copy(camera.position); slotSaved.target.copy(controls.target);
-    }
-    if (Math.hypot(slotSaved.pos.x, slotSaved.pos.y, slotSaved.pos.z) < 0.1) {   // no saved view yet: use the starting view
-      slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
-    }
-    controls.enabled = false;
-    S.atSlot = i;
-    setFov(BASE_FOV);
-    const v = slotViewPose(i, camera.aspect);
-    moveCamera(v.pos, lookQuat(v.pos, v.target), null);
-    document.body.classList.add('atSlot');
-    hint.textContent = `Playing ${slotName(i)} · press Spin or pull the lever · Esc to step back`;
-    refreshSlotUI();
-    refreshAll();
+    if (anim) { if (ok) slotLeave(); return; }
+    if (ok) stepUp('slot', i, false);
+    else if (whoIsAt('slot')) stepUp('slot', i, true);   // someone's playing: watch them up close
   });
 }
 function leaveSlot() {
   if (S.atSlot < 0 || anim) return;
   slotLeave();
   S.atSlot = -1;
-  document.body.classList.remove('atSlot');
+  document.body.classList.remove('atSlot', 'watching');
   moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => {
     controls.target.copy(slotSaved.target);
     controls.enabled = true;
@@ -804,32 +839,16 @@ document.getElementById('slotBack').addEventListener('click', leaveSlot);
 function enterArcade() {
   if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || !S.myName) return;
   arcadeEnter().then(ok => {
-    if (!ok || anim) { if (ok) arcadeLeave(); return; }
-    if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
-      slotSaved.pos.copy(savedView.pos); slotSaved.target.copy(savedView.target);
-      S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
-    } else {
-      slotSaved.pos.copy(camera.position); slotSaved.target.copy(controls.target);
-    }
-    if (Math.hypot(slotSaved.pos.x, slotSaved.pos.y, slotSaved.pos.z) < 0.1) {
-      slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
-    }
-    controls.enabled = false;
-    S.atArcade = true;
-    setFov(BASE_FOV);
-    const v = arcadeViewPose(camera.aspect);
-    moveCamera(v.pos, lookQuat(v.pos, v.target), null);
-    document.body.classList.add('atArcade');
-    hint.textContent = `Playing ${ARCADE_NAME} · tap the screen or use the arrows · Esc to step back`;
-    refreshArcadeUI();
-    refreshAll();
+    if (anim) { if (ok) arcadeLeave(); return; }
+    if (ok) stepUp('arcade', 0, false);
+    else if (whoIsAt('arcade')) stepUp('arcade', 0, true);   // someone's playing: watch them up close
   });
 }
 function leaveArcade() {
   if (!S.atArcade || anim) return;
   arcadeLeave();
   S.atArcade = false;
-  document.body.classList.remove('atArcade');
+  document.body.classList.remove('atArcade', 'watching');
   moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => {
     controls.target.copy(slotSaved.target);
     controls.enabled = true;
@@ -841,8 +860,77 @@ function leaveArcade() {
 hooks.arcadeKicked = () => { if (S.atArcade) { S.atArcade = false; document.body.classList.remove('atArcade'); leaveSlotCamera(); } };
 document.getElementById('aBack').addEventListener('click', leaveArcade);
 
+// ---------- LittleTrail's big board: the game fills the window and the room is hidden (and not drawn) ----------
+const fullSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), target: new THREE.Vector3(), hidden: [], bg: null };
+const fullLight = new THREE.DirectionalLight(0xfff4e0, 0);   // the lamps are hidden too, so the board gets its own light
+fullLight.position.set(1.2, 3, 1.6);
+scene.add(fullLight);
+const FULL_BG = new THREE.Color(0x141826);
+function fullDist() {   // far enough back to see the whole board
+  const halfH = Math.tan(Math.PI / 6);
+  return Math.max(1.7, Math.min(4.2, Math.max(1.2 / halfH, 1.2 / (halfH * Math.max(0.3, camera.aspect)))));
+}
+function setTrailFull(on) {
+  if (on === !!S.trailFull || anim) return;
+  if (on) {
+    if (S.activeGame !== 'trail' || S.atSlot >= 0 || S.atArcade || !S.myName) return;
+    if (S.boardView) { S.boardView = false; boardBtn.textContent = 'Board view'; }
+    fullSaved.pos.copy(camera.position); fullSaved.quat.copy(camera.quaternion); fullSaved.target.copy(controls.target);
+    fullSaved.hidden = scene.children.filter(c => c !== trailGroup && c !== fullLight && !c.isLight && c.visible);
+    fullSaved.hidden.forEach(c => { c.visible = false; });
+    fullSaved.bg = scene.background; scene.background = FULL_BG;
+    fullLight.intensity = 1.2;
+    controls.enabled = false;
+    S.trailFull = true;
+    document.body.classList.add('trailFull');
+    const side = new THREE.Vector3();
+    if (S.seated >= 0) { const a = seatAngle(S.seated); side.set(Math.sin(a), 0, Math.cos(a)); }
+    else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
+    mtnView.target = MTN_TARGET; mtnView.flat.copy(side); mtnView.yaw = 0;
+    mtnView.tilt = 0.95; mtnView.minTilt = 0.35; mtnView.dist = fullDist();
+    setFov(BASE_FOV);
+    const pos = mtnViewPos();
+    moveCamera(pos, lookQuat(pos, mtnView.target), null);
+    hint.textContent = 'LittleTrail · drag to turn the board · scroll to zoom · Esc for the room';
+  } else {
+    S.trailFull = false;
+    fullSaved.hidden.forEach(c => { c.visible = true; });
+    fullSaved.hidden = [];
+    scene.background = fullSaved.bg; fullLight.intensity = 0;
+    document.body.classList.remove('trailFull');
+    setFov(BASE_FOV);
+    if (S.seated >= 0) {   // back to your chair
+      yaw = 0; pitch = 0;
+      const pos = seatEye(S.seated);
+      baseQuat.copy(lookQuat(pos, TABLE_CENTER));
+      moveCamera(pos, baseQuat.clone(), null);
+      standBtn.style.display = 'block';
+      hint.textContent = `You're in seat ${S.seated + 1} · drag to look · scroll to zoom · B for board view`;
+    } else {
+      moveCamera(fullSaved.pos.clone(), fullSaved.quat.clone(), () => { controls.target.copy(fullSaved.target); controls.enabled = true; controls.update(); });
+      hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
+    }
+  }
+  trailFullChanged();
+  refreshAll();
+}
+hooks.setTrailFull = setTrailFull;
+hooks.quietSit = () => {   // joining from the big board: take the first free chair without moving the camera
+  if (S.seated >= 0) return S.seated;
+  for (let i = 0; i < SEATS; i++) {
+    if (seatTakenByOther(i)) continue;
+    savedView.pos.copy(fullSaved.pos); savedView.target.copy(fullSaved.target);
+    S.seated = i; yaw = 0; pitch = 0;
+    setMySeat(i);
+    othelloSeatChanged(i); trailSeatChanged(i); stackSeatChanged(i);
+    refreshAll();
+    return i;
+  }
+  return -1;
+};
+
 function toggleBoardView() {
-  if (anim || S.atSlot >= 0 || S.atArcade) return;
+  if (anim || S.atSlot >= 0 || S.atArcade || S.trailFull) return;
   if (!S.boardView) {
     boardSaved.pos.copy(camera.position);
     boardSaved.quat.copy(camera.quaternion);
@@ -888,7 +976,7 @@ standBtn.addEventListener('click', stand);
 boardBtn.addEventListener('click', toggleBoardView);
 window.addEventListener('keydown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat or name box
-  if (e.key === 'Escape') { if (S.atArcade) leaveArcade(); else if (S.atSlot >= 0) leaveSlot(); else if (S.boardView) toggleBoardView(); else stand(); }
+  if (e.key === 'Escape') { if (S.trailFull) setTrailFull(false); else if (S.atArcade) leaveArcade(); else if (S.atSlot >= 0) leaveSlot(); else if (S.boardView) toggleBoardView(); else stand(); }
   if (S.atArcade) { if (arcadeKey(e.key)) e.preventDefault(); return; }   // at the cabinet, keys play the game
   if ((e.key === ' ' || e.key === 'Enter') && S.atSlot >= 0) { e.preventDefault(); slotSpin(); }
   if (e.key === 'b' || e.key === 'B') toggleBoardView();
@@ -896,6 +984,7 @@ window.addEventListener('keydown', e => {
 
 // Scroll to zoom while seated or in board view (standing uses the normal zoom)
 canvas.addEventListener('wheel', e => {
+  if (S.trailFull) { e.preventDefault(); mtnView.dist = Math.max(0.9, Math.min(4.5, mtnView.dist * (1 + e.deltaY * 0.001))); return; }   // big board: zoom in and out
   if (S.seated < 0 && !S.boardView) return;
   e.preventDefault();
   setFov(camera.fov + e.deltaY * 0.03);
@@ -917,6 +1006,10 @@ function aim(e) {
 // What's under the pointer: a chair, a square on the board, a trail stone, or a tower block
 function pickUnder(e) {
   aim(e);
+  if (S.trailFull) {   // on the big board only the trail can be pointed at
+    const hit = raycaster.intersectObjects([mountainMesh, ...spotMeshes], true)[0];
+    return hit && hit.object.userData.spot !== undefined ? { spot: hit.object.userData.spot } : null;
+  }
   const targets = S.atSlot >= 0 ? [] : S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
     : S.activeGame === 'stack' ? [...chairs, ...stackPickables()] : [...chairs, felt];
   const hits = raycaster.intersectObjects(S.atArcade ? arcadePickables() : S.atSlot >= 0 ? slotPickables()
@@ -972,15 +1065,16 @@ window.addEventListener('pointermove', e => {
   if (grabbing) { stackDrag(aim(e)); return; }
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();
-    if ((S.seated >= 0 || S.boardView) && d > 0) setFov(camera.fov * pinchDist / d);
+    if (S.trailFull && d > 0) mtnView.dist = Math.max(0.9, Math.min(4.5, mtnView.dist * pinchDist / d));
+    else if ((S.seated >= 0 || S.boardView) && d > 0) setFov(camera.fov * pinchDist / d);
     pinchDist = d;
     return;
   }
-  if (down && S.boardView && (S.activeGame === 'trail' || S.activeGame === 'stack') && !anim) {
+  if (down && (S.trailFull || (S.boardView && (S.activeGame === 'trail' || S.activeGame === 'stack'))) && !anim) {
     mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the hill or tower
     mtnView.tilt = Math.max(mtnView.minTilt, Math.min(1.45, mtnView.tilt + (e.clientY - lastY) * 0.006));   // and tilt up or down
   }
-  if (down && S.seated >= 0 && !S.boardView && !anim) {
+  if (down && S.seated >= 0 && !S.boardView && !S.trailFull && !anim) {
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
     yaw += (e.clientX - lastX) * k;
     pitch += (e.clientY - lastY) * k;
@@ -1005,7 +1099,8 @@ window.addEventListener('pointerup', e => {
   if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
-    if (S.atArcade) { if (p && p.screen) arcadeTap(p.point); }   // at the cabinet: tapping the screen hops that way
+    if (S.trailFull) { if (p && p.spot !== undefined) showSpotInfo(p.spot); }   // big board: tap a stone to read about it
+    else if (S.atArcade) { if (p && p.screen) arcadeTap(p.point); }   // at the cabinet: tapping the screen hops that way
     else if (S.atSlot >= 0) { if (p && p.machine === S.atSlot) slotSpin(); }   // at a machine: clicking it (or its lever) spins
     else if (p && p.arcade) enterArcade();
     else if (p && p.machine !== undefined) enterSlot(p.machine);
@@ -1040,8 +1135,8 @@ renderer.setAnimationLoop(() => {
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
     camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
-  } else if (S.boardView) {
-    if (S.activeGame === 'trail' || S.activeGame === 'stack') {   // circle the hill or tower as you drag
+  } else if (S.boardView || S.trailFull) {
+    if (S.trailFull || S.activeGame === 'trail' || S.activeGame === 'stack') {   // circle the hill or tower as you drag
       camera.position.copy(mtnViewPos());
       camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
     }

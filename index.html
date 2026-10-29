@@ -82,6 +82,37 @@
   #nameBox button { margin: 0 0 0 6px; }
   #phoneBar { display: none; }
 
+  /* ---------- LittleTrail's big board (full window) ---------- */
+  #tFullUI { display: none; }
+  body.trailFull #tFullUI { display: block; }
+  body:not([data-game="trail"]) #tFull, body.trailFull #tFull { display: none !important; }
+  body.trailFull #who, body.trailFull #ui, body.trailFull #stand, body.trailFull #switchRow, body.trailFull #boardView, body.trailFull #tPlayers { display: none !important; }
+  #tTop { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: linear-gradient(rgba(10,12,20,0.9), rgba(10,12,20,0)); color: #f3e6cf; z-index: 3; }
+  #tTitle { font-size: 22px; letter-spacing: 1px; white-space: nowrap; }
+  #tTopTimer { font-size: 15px; color: #ffb36b; flex: 1; }
+  #tTop button { font-family: inherit; font-size: 15px; padding: 7px 14px; border: none; border-radius: 16px; background: #e9c98f; color: #2a1c10; cursor: pointer; white-space: nowrap; }
+  #tDash { position: fixed; top: 56px; left: 0; right: 0; display: flex; justify-content: center; gap: 10px; padding: 4px 12px; flex-wrap: wrap; z-index: 3; pointer-events: none; }
+  .tCard { position: relative; min-width: 150px; padding: 8px 12px; border-radius: 12px; background: rgba(20,16,12,0.88); color: #f3e6cf; border-left: 6px solid var(--c, #888); box-shadow: 0 3px 10px rgba(0,0,0,0.5); transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s; }
+  .tCard.turn { transform: translateY(3px) scale(1.05); box-shadow: 0 0 0 2px var(--c), 0 0 18px var(--c); }
+  .tCard.out { opacity: 0.45; }
+  .tCard.won { box-shadow: 0 0 0 3px #ffd54f, 0 0 22px #ffd54f; }
+  .tcName { font-size: 15px; font-weight: bold; color: var(--c); white-space: nowrap; }
+  .tcCoins { font-size: 20px; color: #ffe9a0; }
+  .tcMore { font-size: 12px; opacity: 0.8; white-space: nowrap; }
+  body.trailFull #tInfo { font-size: 14px; opacity: 1; font-style: normal; color: #ffe9a0; background: rgba(255,255,255,0.08); padding: 6px 8px; border-radius: 8px; }
+  #tPops { position: fixed; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+  .tPop { position: fixed; transform: translate(-50%, 0); font-family: Georgia, serif; font-weight: bold; font-size: 24px; white-space: nowrap; text-shadow: 0 2px 4px #000, 0 0 10px rgba(0,0,0,0.6); animation: tPopUp 1.8s ease-out forwards; }
+  .tPop.plus { color: #7dff8a; }
+  .tPop.minus { color: #ff6b6b; }
+  .tPop.onCard { position: absolute; left: auto; right: 6px; top: -4px; transform: none; font-size: 18px; animation-name: tPopCard; }
+  @keyframes tPopUp { 0% { opacity: 0; transform: translate(-50%, 12px) scale(0.7); } 15% { opacity: 1; transform: translate(-50%, 0) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -70px) scale(1); } }
+  @keyframes tPopCard { 0% { opacity: 0; transform: translateY(8px); } 15% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-30px); } }
+  #tWin { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 6; align-items: center; justify-content: center; }
+  .tWinBox { background: rgba(30,20,12,0.95); color: #f3e6cf; padding: 22px 30px; border-radius: 18px; box-shadow: 0 0 0 3px #ffd54f, 0 8px 30px rgba(0,0,0,0.7); text-align: center; min-width: 260px; }
+  #tWinTitle { font-size: 30px; color: #ffe9a0; margin-bottom: 12px; }
+  #tWinList div { display: flex; justify-content: space-between; gap: 24px; font-size: 17px; margin: 4px 0; }
+  #tWinOk { margin-top: 14px; font-family: inherit; font-size: 16px; padding: 8px 26px; border: none; border-radius: 16px; background: #e9c98f; color: #2a1c10; cursor: pointer; }
+
   /* ---------- Phones and narrow screens ---------- */
   @media (max-width: 700px) {
     #ui { top: 8px; text-align: left; left: 12px; }
@@ -112,6 +143,16 @@
     body.panelSmall #othelloUI > :not(#status), body.panelSmall #trailUI > :not(#tStatus),
     body.panelSmall #stackUI > :not(#sStatus):not(#sInfo) { display: none !important; }
     body.panelSmall #status, body.panelSmall #tStatus, body.panelSmall #sStatus { margin-bottom: 0; }
+    #tTop { padding: 6px 8px; padding-right: 150px; gap: 8px; }
+    #tTitle { font-size: 16px; }
+    #tTopTimer { font-size: 12px; }
+    #tTop button { font-size: 13px; padding: 5px 10px; }
+    #tDash { top: 44px; flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; pointer-events: auto; gap: 6px; padding: 4px 8px; }
+    .tCard { min-width: 118px; padding: 5px 8px; flex: none; }
+    .tcName { font-size: 13px; }
+    .tcCoins { font-size: 16px; }
+    .tcMore { font-size: 10px; }
+    #tWinTitle { font-size: 22px; }
   }
 </style>
 </head>
@@ -150,8 +191,11 @@
     <button id="sJoin" style="display:none">Join game</button><button id="sStart" style="display:none">Start</button>
     <div id="sMenu" style="display:none"><button id="sLeave">Leave game</button><button id="sReset">Reset losses</button></div>
   </div>
-  <div id="bottomRow"><button id="boardView">Board view</button><button id="mute" title="Sound">🔊</button><button id="tMore" style="display:none" title="More">⋯</button><button id="sMore" style="display:none" title="More">⋯</button></div>
+  <div id="bottomRow"><button id="tFull" title="Play LittleTrail on the big board">⛶ Big board</button><button id="boardView">Board view</button><button id="mute" title="Sound">🔊</button><button id="tMore" style="display:none" title="More">⋯</button><button id="sMore" style="display:none" title="More">⋯</button></div>
 </div>
+<div id="tFullUI"><div id="tTop"><span id="tTitle">🏔️ LittleTrail</span><span id="tTopTimer"></span><button id="tBack">← Back to room</button></div><div id="tDash"></div></div>
+<div id="tWin" style="display:none"><div class="tWinBox"><div id="tWinTitle"></div><div id="tWinList"></div><button id="tWinOk">OK</button></div></div>
+<div id="tPops"></div>
 <div id="banner"></div>
 <div id="actionBar">
   <div id="arcadeBar"><div id="arcadeInfo">🕹️ Peak Hop</div><br><div id="arcadePad"><button id="aUL" title="Hop up-left">↖</button><button id="aUR" title="Hop up-right">↗</button><br><button id="aDL" title="Hop down-left">↙</button><button id="aDR" title="Hop down-right">↘</button></div><div id="arcadeBtns"><button id="aUndo">↶ Undo</button><button id="aRestart">⟲ Restart</button><br><button id="aRun">🎲 Run</button><button id="aDaily">📅 Daily</button><button id="aBack">← Back</button></div></div>

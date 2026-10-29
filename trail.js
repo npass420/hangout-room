@@ -1,11 +1,11 @@
 // =====================================================================
 // trail.js — LittleTrail, the trail market game
 // A flat loop around a little mountain: open stalls, collect rent, ride the steam train,
-// and be the richest when the sun sets.
+// and be the richest when the sun sets. Played on the table, or full-window with the "Big board".
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, myId, S, hooks, serverNow, scene, TABLE_Y, seatAngle, rnd, paintTexture, box, std, easeInOut,
+import { db, myId, S, hooks, serverNow, scene, camera, TABLE_Y, seatAngle, rnd, paintTexture, box, std, easeInOut,
          RAINBOW, RAINBOW_CSS, colorIndex, makeLabel,
          makeCounter, drawCounter, placeCounter, sinkCounter, animateCounter } from './core.js';
 import { sfx } from './sounds.js';
@@ -16,15 +16,16 @@ scene.add(trailGroup);
 const trailRef = ref(db, 'room/trail');
 let trail = null;            // the shared LittleTrail state
 let trailBusy = false;       // dice, pawns or the train are moving
-const VER = 2;               // games saved by the old mountain board can't continue on this one
+const VER = 3;               // games saved by older boards can't continue on this one
 
 // ---------- Money and rules ----------
-const SPOTS = 48, START_COINS = 3000, LAP_PAY = 300, GOAL = 10000, MAX_TRAIL = 6;
+const SPOTS = 48, START_COINS = 5000, LAP_PAY = 400, GOAL = 20000, MAX_TRAIL = 6;
+const HALFWAY = 24, HALF_PAY = 200;   // Halfway Camp, across from the Trailhead: a second payday each lap
 const STATIONS = [6, 18, 30, 42];
 const STATION_BUY = 200, STATION_RENT = [25, 50, 100, 200], FARE = 40;
 const SECTION_BONUS = 0.15;     // each other stall you own in the same section adds 15% rent
-const RENT_MULT = [0.12, 0.45, 1.2, 2.8];   // rent at each level, as a share of the stall's price
-const LENGTHS = [20, 40, 60];   // game length choices, in minutes until sunset
+const RENT_MULT = [0.18, 0.7, 1.9, 4.2];   // rent at each level, as a share of the stall's price
+const LENGTHS = [30, 60, 0];   // game length choices, in minutes until sunset (0 = endless: first to the goal wins)
 const LEVELS = ['Cart', 'Stand', 'Shop', 'Lodge'];
 
 // Four sections, each with a train station in the middle and four color groups of stalls
@@ -46,7 +47,7 @@ const GROUP_OF = {};      // spot -> group index
   const runs = [];
   for (let q = 0; q < 4; q++) {
     const a = [], b = [];
-    for (let k = (q === 0 ? 1 : 12 * q); k < 12 * q + 6; k++) a.push(k);
+    for (let k = (q === 0 || q === 2 ? 12 * q + 1 : 12 * q); k < 12 * q + 6; k++) a.push(k);   // spots 0 and 24 are the paydays
     for (let k = 12 * q + 7; k < 12 * q + 12; k++) b.push(k);
     runs.push(a, b);
   }
@@ -64,6 +65,7 @@ function sectionOf(k) { return Math.floor(k / 12); }
 function isStation(k) { return STATIONS.includes(k); }
 function spotInfo(k) {
   if (k === 0) return { name: 'Trailhead', color: '#f5e6b8', desc: `Start · +${LAP_PAY} every time you pass` };
+  if (k === HALFWAY) return { name: 'Halfway Camp', color: '#f5d08a', desc: `Rest stop · +${HALF_PAY} every time you pass` };
   if (isStation(k)) {
     const sec = SECTIONS[sectionOf(k)];
     return { name: sec.station, color: '#5d5f66', station: true, desc: `🚂 Train station · buy ${STATION_BUY} · ride to the next station for ${FARE}` };
@@ -178,7 +180,7 @@ const SUN_DAY = new THREE.Color(0xfff4e0), SUN_GOLD = new THREE.Color(0xffc070),
 export const spotMeshes = [];
 spotPos.forEach((p, k) => {
   const info = spotInfo(k);
-  const big = k === 0 || info.station;
+  const big = k === 0 || k === HALFWAY || info.station;
   const m = new THREE.Mesh(new THREE.CylinderGeometry(big ? 0.042 : 0.034, big ? 0.045 : 0.037, 0.012, 24), std(new THREE.Color(info.color), 0.6));
   m.position.copy(p);
   m.castShadow = true; m.receiveShadow = true;
@@ -258,6 +260,10 @@ spotPos.forEach((p, k) => {
   th.position.copy(spotPos[0]).add(new THREE.Vector3(0, 0.09, 0));
   th.scale.set(0.28, 0.07, 1);
   trailGroup.add(th);
+  const hc = makeLabel('⛺ Halfway Camp', '#f5d08a');
+  hc.position.copy(spotPos[HALFWAY]).add(new THREE.Vector3(0, 0.09, 0));
+  hc.scale.set(0.3, 0.075, 1);
+  trailGroup.add(hc);
 })();
 
 // ---------- The railway: a track around the outside, four stations, and a little steam train ----------
@@ -467,7 +473,7 @@ function ownsGroup(t, id, gi) { return GROUPS[gi].spots.every(k => { const st = 
 function sectionCount(t, id, k) {   // how many OTHER stalls this owner has in the same section
   let n = 0;
   for (let j = 12 * sectionOf(k); j < 12 * sectionOf(k) + 12; j++) {
-    if (j === k || j === 0 || isStation(j)) continue;
+    if (j === k || j === 0 || j === HALFWAY || isStation(j)) continue;
     const st = stallOwner(t, j);
     if (st && st.o === id) n++;
   }
@@ -513,14 +519,15 @@ function payRent(t, id, ownerId, rent, log) {
 }
 function moveBy(t, id, n) {
   const p = t.players[id];
-  const raw = p.pos + n;
+  const from = p.pos, raw = from + n;
   if (raw >= SPOTS) p.coins += LAP_PAY;
+  if (from < HALFWAY && raw >= HALFWAY) p.coins += HALF_PAY;   // walked past (or onto) Halfway Camp
   p.pos = ((raw % SPOTS) + SPOTS) % SPOTS;
 }
 // What happens on the stone you land on
 function landOn(t, id, log) {
   const p = t.players[id], k = p.pos;
-  if (p.out || k === 0) return;
+  if (p.out || k === 0 || k === HALFWAY) return;
   const st = stallOwner(t, k);
   if (isStation(k)) {
     if (st && st.o !== id) payRent(t, id, st.o, rentFor(t, k), log);
@@ -551,12 +558,12 @@ function checkWin(t, log) {
     log.push(`🏆 ${t.players[w].name} wins LittleTrail!`);
   }
 }
-function sunsetEnd(t, log) {   // time's up: the richest player wins (coins + stalls)
+function sunsetEnd(t, log, early) {   // time's up (or someone counted early): the richest player wins (coins + stalls)
   const ids = activeIds(t);
   if (!ids.length) return;
   const w = ids.reduce((a, b) => (worth(t, b) > worth(t, a) ? b : a), ids[0]);
   t.phase = 'over'; t.winner = w; delete t.pending;
-  log.push(`🌅 The sun has set! ${t.players[w].name} wins with ${worth(t, w).toLocaleString()} (coins + stalls)`);
+  log.push(`${early ? '🏁 The game was counted early!' : '🌅 The sun has set!'} ${t.players[w].name} wins with ${worth(t, w).toLocaleString()} (coins + stalls)`);
 }
 function sunsetPassed(t) { return t.phase === 'play' && t.endsAt && serverNow() >= t.endsAt; }
 function finishTurn(t, id) {
@@ -572,7 +579,7 @@ function resetPlayers(t) {
     p.pos = 0; p.coins = START_COINS; p.out = false;
   }
   delete t.stalls; delete t.pending; delete t.dice; delete t.deck; delete t.endsAt;
-  t.note = ''; t.mover = ''; t.winner = ''; t.passed = false;
+  t.note = ''; t.mover = ''; t.winner = ''; t.passed = false; t.passedHalf = false;
 }
 
 function syncPawns() {
@@ -661,6 +668,7 @@ function moveDone() {
   placeAllPawns();
   refreshTrailUI();
   if (queuedLines) { playLineSounds(queuedLines); queuedLines = null; }
+  if (queuedPops) { showPops(queuedPops); queuedPops = null; }
 }
 function startHop(t) {
   const pw = pawns[t.mover];
@@ -688,6 +696,7 @@ function finishTrailAnims() {
   rideAnim = null;
   trailBusy = false;
   if (queuedLines) { playLineSounds(queuedLines); queuedLines = null; }
+  if (queuedPops) { showPops(queuedPops); queuedPops = null; }
 }
 
 // ---------- Coin counters in front of each player ----------
@@ -707,10 +716,58 @@ function refreshTrailCounters() {
   }
 }
 
+// ---------- Money pop-ups: +400 / −120 floating up from a player's piece and their card ----------
+let queuedPops = null;   // pop-ups waiting until the pawn finishes moving
+const popLayer = document.getElementById('tPops');
+const popStack = {};     // id -> how many pop-ups are already rising from that piece
+function showPops(pops) {
+  if (S.activeGame !== 'trail') return;
+  pops.forEach(([id, d]) => {
+    const text = (d > 0 ? '+' : '−') + Math.abs(d).toLocaleString();
+    const cls = 'tPop ' + (d > 0 ? 'plus' : 'minus');
+    // over the piece on the board
+    const pw = pawns[id];
+    if (pw && popLayer) {
+      const v = pw.g.position.clone();
+      v.y += 0.09;
+      if (typeof v.project === 'function') v.project(camera);
+      if (v.z < 1 && Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1) {
+        const n = popStack[id] = (popStack[id] || 0) + 1;
+        const el = document.createElement('div');
+        el.className = cls; el.textContent = text;
+        el.style.left = ((v.x + 1) / 2 * window.innerWidth) + 'px';
+        el.style.top = ((1 - v.y) / 2 * window.innerHeight - (n - 1) * 26) + 'px';
+        popLayer.appendChild(el);
+        setTimeout(() => { el.remove(); popStack[id] = Math.max(0, (popStack[id] || 1) - 1); }, 1900);
+      }
+    }
+    // and on their dashboard card (big board)
+    const card = dashCards[id];
+    if (card && S.trailFull) {
+      const el = document.createElement('div');
+      el.className = cls + ' onCard'; el.textContent = text;
+      card.el.appendChild(el);
+      setTimeout(() => el.remove(), 1900);
+    }
+  });
+}
+function coinChanges(prev, next) {   // who gained or lost coins between two states of the same game
+  if (!prev || !next || prev.phase !== 'play' || !prev.players || !next.players) return [];
+  const out = [];
+  for (const [id, p] of Object.entries(next.players)) {
+    const q = prev.players[id];
+    if (!q) continue;
+    const d = (p.coins || 0) - (q.coins || 0);
+    if (d) out.push([id, d]);
+  }
+  return out;
+}
+
 // ---------- Applying the shared state ----------
 function applyTrail(t) {
   const prev = trail;
   trail = t || { phase: 'lobby', rollNo: 0 };
+  const pops = coinChanges(prev, trail);
   syncPawns();
   syncStalls();
   const players = trail.players || {};
@@ -721,15 +778,18 @@ function applyTrail(t) {
     finishTrailAnims();
     trailBusy = true;
     if (lines.length) queuedLines = lines;   // play these once the pawn arrives
+    if (pops.length) queuedPops = pops;
     startRoll(trail);
   } else if (isNextRide && S.activeGame === 'trail') {
     finishTrailAnims();
     trailBusy = true;
     if (lines.length) queuedLines = lines;
+    if (pops.length) queuedPops = pops;
     startRide(trail);
   } else {
     if (!trailBusy) placeAllPawns();
     if (lines.length && S.activeGame === 'trail') playLineSounds(lines);
+    if (pops.length) { if (trailBusy) queuedPops = (queuedPops || []).concat(pops); else showPops(pops); }
   }
   lines.forEach(line => hooks.addSys(line));   // tell the chat what happened
   refreshTrailUI();
@@ -737,9 +797,11 @@ function applyTrail(t) {
 }
 
 // ---------- Actions ----------
-let chosenMins = 40;   // the game length you picked
+let chosenMins = 30;   // the game length you picked
 function trailJoin(job) {
-  if (!trail || S.seated < 0) return;
+  if (!trail) return;
+  if (S.seated < 0 && S.trailFull && hooks.quietSit) hooks.quietSit();   // on the big board: take a free chair for you
+  if (S.seated < 0) { if (hooks.banner) hooks.banner('No free chair at the table to join from', 2.5); return; }
   const seat = S.seated;
   runTransaction(trailRef, t => {
     t = t || { phase: 'lobby', rollNo: 0 };
@@ -771,13 +833,14 @@ function trailStart() {
     if (ids.length < 2) return;
     resetPlayers(t);
     t.phase = 'play'; t.turn = ids[0]; t.ver = VER;
-    t.mins = mins; t.endsAt = serverNow() + mins * 60000;
+    t.mins = mins; t.endsAt = mins ? serverNow() + mins * 60000 : 0;   // endless games have no sunset
     return t;
   });
 }
-function trailEnd() {
+function trailEnd() {   // during a game: count it now and the richest wins; otherwise clear the table
   runTransaction(trailRef, t => {
     if (!t || !t.players || !t.players[myId]) return;
+    if (t.phase === 'play' && !gameIsDead(t)) { const log = []; sunsetEnd(t, log, true); postLog(t, log); return t; }
     resetPlayers(t);
     t.phase = 'lobby'; t.turn = '';
     return t;
@@ -798,6 +861,7 @@ function trailRoll() {
     const a = 1 + Math.floor(Math.random() * 6), b = 1 + Math.floor(Math.random() * 6);
     t.dice = [a, b]; t.rollNo = (t.rollNo || 0) + 1; t.mover = myId; t.from = p.pos || 0; t.steps = a + b;
     t.passed = t.from + a + b >= SPOTS;
+    t.passedHalf = t.from < HALFWAY && t.from + a + b >= HALFWAY;
     moveBy(t, myId, a + b);            // the status line already says when you pass the Trailhead
     landOn(t, myId, log);
     checkWin(t, log);
@@ -826,11 +890,12 @@ function trailDecide(choice) {   // 'yes' (buy or upgrade), 'ride' (take the tra
           p.coins -= fare;
           if (st && st.o !== myId) t.players[st.o].coins += fare;
           const to = STATIONS[(STATIONS.indexOf(k) + 1) % STATIONS.length];
-          const passed = to < k;
+          const passed = to < k, passedHalf = k < HALFWAY && to > HALFWAY;
           if (passed) p.coins += LAP_PAY;
+          if (passedHalf) p.coins += HALF_PAY;
           p.pos = to;
           t.rideNo = (t.rideNo || 0) + 1; t.rideFrom = k; t.rideTo = to; t.mover = myId;
-          log.push(`🚂 ${p.name} rode the train to ${SECTIONS[sectionOf(to)].station}${fare ? ` (−${fare}${st && st.o !== myId ? ' to ' + t.players[st.o].name : ''})` : ' (free, it\'s theirs)'}${passed ? ` and passed the Trailhead (+${LAP_PAY})` : ''}`);
+          log.push(`🚂 ${p.name} rode the train to ${SECTIONS[sectionOf(to)].station}${fare ? ` (−${fare}${st && st.o !== myId ? ' to ' + t.players[st.o].name : ''})` : ' (free, it\'s theirs)'}${passed ? ` and passed the Trailhead (+${LAP_PAY})` : ''}${passedHalf ? ` and rested at Halfway Camp (+${HALF_PAY})` : ''}`);
         }
       }
     } else {
@@ -869,6 +934,7 @@ function trailSunset() {   // anyone playing can call the sunset once time is up
 // ---------- LittleTrail panel ----------
 const tStatus = document.getElementById('tStatus');
 const tTimer = document.getElementById('tTimer');
+const tTopTimer = document.getElementById('tTopTimer');
 const tPlayers = document.getElementById('tPlayers');
 const tNote = document.getElementById('tNote');
 const tInfo = document.getElementById('tInfo');
@@ -897,7 +963,7 @@ const lengthButtons = {};
 for (const m of LENGTHS) {
   const b = document.createElement('button');
   b.className = 'sw' + (m === chosenMins ? ' on' : '');
-  b.textContent = `${m} min`;
+  b.textContent = m ? `${m} min` : '♾ Endless';
   b.addEventListener('click', () => {
     chosenMins = m;
     for (const n of LENGTHS) lengthButtons[n].classList.toggle('on', n === m);
@@ -929,7 +995,7 @@ function armButton(btn, label, confirmLabel, action) {
   });
 }
 armButton(tLeave, 'Leave game', 'Sure? Click again', trailLeave);
-armButton(tEnd, 'End game', 'Sure? Click again', trailEnd);
+armButton(tEnd, 'End & count', 'Sure? Click again', trailEnd);
 
 function liveTrailPending(t = trail) {
   const pd = t && t.pending;
@@ -952,7 +1018,7 @@ function refreshTrailUI() {
   const pd = trail.phase === 'play' && !dead ? liveTrailPending() : null;
   let st;
   if (trail.phase === 'play') {
-    if (dead) st = me ? 'This game can\'t continue · open ⋯ and click End game' : 'The last game emptied out · sit and pick a job to start a new one';
+    if (dead) st = me ? 'This game can\'t continue · open ⋯ and click End & count' : 'The last game emptied out · sit and pick a job to start a new one';
     else if (pd) {
       const info = spotInfo(pd.k);
       if (pd.who !== myId) st = `${players[pd.who].name} is deciding at ${info.name}…`;
@@ -970,7 +1036,7 @@ function refreshTrailUI() {
       }
     } else {
       const last = trail.mover && players[trail.mover] && trail.dice
-        ? `${players[trail.mover].name} rolled ${trail.dice[0]} + ${trail.dice[1]}${trail.passed ? ` and passed the Trailhead (+${LAP_PAY})` : ''}. ` : '';
+        ? `${players[trail.mover].name} rolled ${trail.dice[0]} + ${trail.dice[1]}${trail.passed ? ` and passed the Trailhead (+${LAP_PAY})` : ''}${trail.passedHalf ? ` and rested at Halfway Camp (+${HALF_PAY})` : ''}. ` : '';
       st = last + (turnId === myId ? 'Your turn! Roll the dice' : `${players[turnId] ? players[turnId].name : '…'}'s turn`);
     }
   } else if (trail.phase === 'over') {
@@ -995,7 +1061,7 @@ function refreshTrailUI() {
   });
 
   const taken = new Set(dead ? [] : ids.filter(id => id !== myId).map(id => players[id].job));
-  const canJoin = !me && S.seated >= 0 && !S.boardView && (trail.phase !== 'play' || dead) && (dead || ids.length < MAX_TRAIL);
+  const canJoin = !me && (S.seated >= 0 || S.trailFull) && !S.boardView && (trail.phase !== 'play' || dead) && (dead || ids.length < MAX_TRAIL);
   tJobs.style.display = canJoin ? '' : 'none';
   for (const j of JOBS) jobButtons[j.id].disabled = taken.has(j.id);
 
@@ -1019,9 +1085,73 @@ function refreshTrailUI() {
   tMore.style.display = me ? '' : 'none';
   if (!me) menuOpen = false;
   tMenu.style.display = me && menuOpen ? '' : 'none';
-  tEnd.style.display = trail.phase !== 'lobby' ? '' : 'none';
+  tEnd.style.display = trail.phase === 'play' ? '' : 'none';
+  refreshDash(turnId, dead);
   if (hooks.refreshSwitch) hooks.refreshSwitch();
 }
+
+// ---------- The big board: a dashboard of player cards, and a winner screen ----------
+const tDash = document.getElementById('tDash');
+const tWin = document.getElementById('tWin');
+const tWinTitle = document.getElementById('tWinTitle');
+const tWinList = document.getElementById('tWinList');
+const tFull = document.getElementById('tFull');
+const tBack = document.getElementById('tBack');
+const dashCards = {};   // id -> { el, key }
+let winSeen = '';
+tFull.addEventListener('click', () => { if (hooks.setTrailFull) hooks.setTrailFull(true); });
+tBack.addEventListener('click', () => { if (hooks.setTrailFull) hooks.setTrailFull(false); });
+document.getElementById('tWinOk').addEventListener('click', () => { winSeen = winKey(); tWin.style.display = 'none'; });
+function winKey() { return trail && trail.phase === 'over' ? (trail.winner || '') + '|' + (trail.ev || 0) : ''; }
+function refreshDash(turnId, dead) {
+  const players = (trail && trail.players) || {};
+  const ids = validTrailIds();
+  for (const id of Object.keys(dashCards)) if (!ids.includes(id)) { dashCards[id].el.remove(); delete dashCards[id]; }
+  ids.forEach((id, i) => {
+    const p = players[id];
+    if (!dashCards[id]) {
+      const el = document.createElement('div');
+      el.className = 'tCard';
+      el.innerHTML = '<div class="tcName"></div><div class="tcCoins"></div><div class="tcMore"></div>';
+      dashCards[id] = { el, key: '' };
+    }
+    const c = dashCards[id];
+    if (tDash.children[i] !== c.el) tDash.insertBefore(c.el, tDash.children[i] || null);
+    let stalls = 0, stations = 0, top = 0;
+    for (const [key, st] of Object.entries(trail.stalls || {})) {
+      if (st.o !== id) continue;
+      if (isStation(+key.slice(1))) stations++; else { stalls++; top = Math.max(top, st.lv); }
+    }
+    const turn = trail.phase === 'play' && !dead && id === turnId;
+    const key = [p.name, p.job, colorIndex(p), p.coins, p.out, stalls, stations, turn, trail.winner === id && trail.phase === 'over'].join('|');
+    if (key === c.key) return;
+    c.key = key;
+    c.el.style.setProperty('--c', RAINBOW_CSS[colorIndex(p)]);
+    c.el.classList.toggle('turn', turn);
+    c.el.classList.toggle('out', !!p.out);
+    c.el.classList.toggle('won', trail.phase === 'over' && trail.winner === id);
+    c.el.querySelector('.tcName').textContent = `${turn ? '▶ ' : ''}${jobInfo(p.job).icon} ${p.name}${id === myId ? ' (you)' : ''}`;
+    c.el.querySelector('.tcCoins').textContent = p.out ? 'out' : `🪙 ${(p.coins || 0).toLocaleString()}`;
+    c.el.querySelector('.tcMore').textContent = p.out ? '' : `worth ${worth(trail, id).toLocaleString()} · 🏪 ${stalls}${top ? ' (' + LEVELS[top] + ')' : ''} · 🚉 ${stations}`;
+  });
+  // winner screen on the big board, once per finished game
+  const wk = winKey();
+  if (S.trailFull && wk && wk !== winSeen && players[trail.winner]) {
+    tWinTitle.textContent = `🏆 ${players[trail.winner].name} wins!`;
+    const rows = ids.map(id => [id, players[id].out ? -1 : worth(trail, id)]).sort((a, b) => b[1] - a[1]);
+    tWinList.textContent = '';
+    rows.forEach(([id, w], i) => {
+      const d = document.createElement('div');
+      d.innerHTML = '<span></span><b></b>';
+      d.firstChild.textContent = `${i + 1}. ${jobInfo(players[id].job).icon} ${players[id].name}`;
+      d.firstChild.style.color = RAINBOW_CSS[colorIndex(players[id])];
+      d.lastChild.textContent = w < 0 ? 'out' : w.toLocaleString();
+      tWinList.appendChild(d);
+    });
+    tWin.style.display = 'flex';
+  } else if (!wk || !S.trailFull) tWin.style.display = 'none';
+}
+export function trailFullChanged() { for (const id of Object.keys(dashCards)) dashCards[id].key = ''; refreshTrailUI(); }
 
 // Point at (or tap) a stone to see what it is
 export function showSpotInfo(k) {
@@ -1141,7 +1271,10 @@ export function updateTrail(dt) {
   }
   // Sunset clock and the light on the board
   let text = '';
-  if (trail && trail.phase === 'play' && trail.endsAt && !gameIsDead()) {
+  if (trail && trail.phase === 'play' && !trail.endsAt && !gameIsDead()) {   // endless: no sunset, first to the goal wins
+    trailSun.color.copy(SUN_DAY); trailSun.intensity = 0.3;
+    text = `♾ Endless · first to ${GOAL.toLocaleString()} coins wins`;
+  } else if (trail && trail.phase === 'play' && trail.endsAt && !gameIsDead()) {
     const total = (trail.mins || 40) * 60000;
     const left = trail.endsAt - serverNow();
     const prog = Math.min(Math.max(1 - left / total, 0), 1);
@@ -1156,5 +1289,5 @@ export function updateTrail(dt) {
   } else {
     trailSun.intensity = 0;
   }
-  if (text !== shownTimer) { shownTimer = text; tTimer.textContent = text; tTimer.style.display = text ? '' : 'none'; }
+  if (text !== shownTimer) { shownTimer = text; tTopTimer.textContent = text; tTimer.textContent = text; tTimer.style.display = text ? '' : 'none'; }
 }
