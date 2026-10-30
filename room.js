@@ -19,6 +19,7 @@ import { arcadeGroup, arcadePickables, arcadeViewPose, arcadeEnter, arcadeLeave,
          arcadeTap, arcadeKey, startArcade, updateArcade, refreshArcadeUI, ARCADE_NAME } from './arcade.js';
 import { checkersGroup, chessGroup, boardGamesInUse, boardGameTap, boardGameCanTap, boardGamePickables, refreshBoardGames,
          hideBoardGames, startBoardGames, updateBoardGames } from './boardgames.js';
+import { sketchPickables, sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME } from './sketch.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -144,7 +145,7 @@ function makeChair(i) {
 }
 for (let i = 0; i < SEATS; i++) makeChair(i);
 
-// ---------- Two windows whose sky follows your own clock ----------
+// ---------- Two windows whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
 const skyCanvas = document.createElement('canvas');
 skyCanvas.width = 256; skyCanvas.height = 192;
 const skyCtx = skyCanvas.getContext('2d');
@@ -178,22 +179,10 @@ function updateSky() {
   const grad = g.createLinearGradient(0, 0, 0, H);
   grad.addColorStop(0, s.top); grad.addColorStop(1, s.bottom);
   g.fillStyle = grad; g.fillRect(0, 0, W, H);
-  if (phase === 'night') {
+  if (phase === 'night') {                        // just stars at night
     g.fillStyle = '#ffffff';
     for (const [x, y, b] of STARS) { g.globalAlpha = 0.35 + b * 0.65; g.fillRect(x * W, y * H, 1 + b * 1.5, 1 + b * 1.5); }
     g.globalAlpha = 1;
-    const p = ((h < 5 ? h + 24 : h) - 21) / 8;   // moon crosses the window through the night
-    const mx = W * (0.15 + 0.7 * p), my = H * (0.6 - 0.4 * Math.sin(p * Math.PI));
-    g.fillStyle = '#f4f1d0'; g.beginPath(); g.arc(mx, my, 15, 0, Math.PI * 2); g.fill();
-    g.fillStyle = s.top; g.beginPath(); g.arc(mx + 7, my - 4, 13, 0, Math.PI * 2); g.fill();   // crescent
-  } else {
-    const p = (h - 5) / 16;                       // sun crosses from dawn to dusk
-    const sx = W * (0.1 + 0.8 * p), sy = H * (0.85 - 0.6 * Math.sin(p * Math.PI));
-    const glow = g.createRadialGradient(sx, sy, 4, sx, sy, 45);
-    glow.addColorStop(0, 'rgba(255,240,180,0.9)'); glow.addColorStop(1, 'rgba(255,240,180,0)');
-    g.fillStyle = glow; g.fillRect(0, 0, W, H);
-    g.fillStyle = phase === 'day' ? '#fff6c8' : '#ffcf6b';
-    g.beginPath(); g.arc(sx, sy, 16, 0, Math.PI * 2); g.fill();
   }
   skyTex.needsUpdate = true;
   for (const l of windowLights) { l.color.setHex(s.light); l.intensity = s.power; }
@@ -622,6 +611,7 @@ function leaveRoom() {
   // Leaving frees your chair and drops you out of any game; the page reloads to the name screen
   slotLeave();
   arcadeLeave();
+  sketchLeave();
   remove(ref(db, 'room/presence/' + myId)).finally(() => location.reload());
 }
 leaveBtn.addEventListener('click', leaveRoom);
@@ -675,6 +665,7 @@ function enterRoom() {
   startBoardGames(); // Checkers and Chess
   startSlots();     // the slot machines
   startArcade();    // the arcade cabinet
+  startSketch();    // LittleSketch, the drawing board by the door
 
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
@@ -748,7 +739,7 @@ function sit(i) {
 }
 
 function stand() {
-  if (S.seated < 0 || anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.trailFull) return;
+  if (S.seated < 0 || anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.atSketch || S.trailFull) return;
   S.seated = -1;
   setFov(BASE_FOV);
   moveCamera(savedView.pos.clone(), lookQuat(savedView.pos, savedView.target), () => {
@@ -814,7 +805,7 @@ function stepUp(kind, i, watch) {   // move the camera up to the machine
   refreshAll();
 }
 function enterSlot(i) {
-  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || !S.myName) return;
+  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.atSketch || !S.myName) return;
   slotEnter(i).then(ok => {
     if (anim) { if (ok) slotLeave(); return; }
     if (ok) stepUp('slot', i, false);
@@ -843,7 +834,7 @@ document.getElementById('slotBack').addEventListener('click', leaveSlot);
 
 // ---------- Walking up to an arcade cabinet (it uses the same saved view as the slots) ----------
 function enterArcade(i) {
-  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || !S.myName) return;
+  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.atSketch || !S.myName) return;
   arcadeEnter(i).then(ok => {
     if (anim) { if (ok) arcadeLeave(); return; }
     if (ok) stepUp('arcade', i, false);
@@ -866,6 +857,43 @@ function leaveArcade() {
 hooks.arcadeKicked = () => { if (S.atArcade) { S.atArcade = false; arcadeFocus(-1); document.body.classList.remove('atArcade'); leaveSlotCamera(); } };
 document.getElementById('aBack').addEventListener('click', leaveArcade);
 
+// ---------- Walking up to the LittleSketch board by the door (it uses the same saved view as the slots) ----------
+function enterSketch() {
+  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.atSketch || S.trailFull || !S.myName) return;
+  if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
+    slotSaved.pos.copy(savedView.pos); slotSaved.target.copy(savedView.target);
+    S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
+  } else {
+    slotSaved.pos.copy(camera.position); slotSaved.target.copy(controls.target);
+  }
+  if (Math.hypot(slotSaved.pos.x, slotSaved.pos.y, slotSaved.pos.z) < 0.1) {   // no saved view yet: use the starting view
+    slotSaved.pos.set(2.6, 2.6, 2.6); slotSaved.target.set(0, 0.8, 0);
+  }
+  controls.enabled = false;
+  S.atSketch = true;
+  setFov(BASE_FOV);
+  const v = sketchViewPose(camera.aspect);
+  moveCamera(v.pos, lookQuat(v.pos, v.target), null);
+  document.body.classList.add('atSketch');
+  hint.textContent = `${SKETCH_NAME} · Esc or Back to step away`;
+  sketchEnter();
+  refreshAll();
+}
+function leaveSketch() {
+  if (!S.atSketch || anim) return;
+  S.atSketch = false;
+  document.body.classList.remove('atSketch');
+  sketchLeave();
+  moveCamera(slotSaved.pos.clone(), lookQuat(slotSaved.pos, slotSaved.target), () => {
+    controls.target.copy(slotSaved.target);
+    controls.enabled = true;
+    controls.update();
+  });
+  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
+  refreshAll();
+}
+hooks.sketchBack = leaveSketch;
+
 // ---------- LittleTrail's big board: the game fills the window and the room is hidden (and not drawn) ----------
 const fullSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), target: new THREE.Vector3(), hidden: [], bg: null };
 const fullLight = new THREE.DirectionalLight(0xfff4e0, 0);   // the lamps are hidden too, so the board gets its own light
@@ -879,7 +907,7 @@ function fullDist() {   // far enough back to see the whole board
 function setTrailFull(on) {
   if (on === !!S.trailFull || anim) return;
   if (on) {
-    if (S.activeGame !== 'trail' || S.atSlot >= 0 || S.atArcade || !S.myName) return;
+    if (S.activeGame !== 'trail' || S.atSlot >= 0 || S.atArcade || S.atSketch || !S.myName) return;
     if (S.boardView) { S.boardView = false; boardBtn.textContent = 'Board view'; }
     fullSaved.pos.copy(camera.position); fullSaved.quat.copy(camera.quaternion); fullSaved.target.copy(controls.target);
     fullSaved.hidden = scene.children.filter(c => c !== trailGroup && c !== fullLight && !c.isLight && c.visible);
@@ -936,7 +964,7 @@ hooks.quietSit = () => {   // joining from the big board: take the first free ch
 };
 
 function toggleBoardView() {
-  if (anim || S.atSlot >= 0 || S.atArcade || S.trailFull) return;
+  if (anim || S.atSlot >= 0 || S.atArcade || S.atSketch || S.trailFull) return;
   if (!S.boardView) {
     boardSaved.pos.copy(camera.position);
     boardSaved.quat.copy(camera.quaternion);
@@ -982,7 +1010,7 @@ standBtn.addEventListener('click', stand);
 boardBtn.addEventListener('click', toggleBoardView);
 window.addEventListener('keydown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat or name box
-  if (e.key === 'Escape') { if (S.trailFull) setTrailFull(false); else if (S.atArcade) leaveArcade(); else if (S.atSlot >= 0) leaveSlot(); else if (S.boardView) toggleBoardView(); else stand(); }
+  if (e.key === 'Escape') { if (S.trailFull) setTrailFull(false); else if (S.atArcade) leaveArcade(); else if (S.atSlot >= 0) leaveSlot(); else if (S.atSketch) leaveSketch(); else if (S.boardView) toggleBoardView(); else stand(); }
   if (S.atArcade) { if (arcadeKey(e.key)) e.preventDefault(); return; }   // at the cabinet, keys play the game
   if ((e.key === ' ' || e.key === 'Enter') && S.atSlot >= 0) { e.preventDefault(); slotSpin(); }
   if (e.key === 'b' || e.key === 'B') toggleBoardView();
@@ -1012,6 +1040,7 @@ function aim(e) {
 // What's under the pointer: a chair, a square on the board, a trail stone, or a tower block
 function pickUnder(e) {
   aim(e);
+  if (S.atSketch) return null;   // at the LittleSketch board, its own pad and buttons handle everything
   if (S.trailFull) {   // on the big board only the trail can be pointed at
     const hit = raycaster.intersectObjects([mountainMesh, ...spotMeshes], true)[0];
     return hit && hit.object.userData.spot !== undefined ? { spot: hit.object.userData.spot } : null;
@@ -1020,12 +1049,13 @@ function pickUnder(e) {
     : S.activeGame === 'stack' ? [...chairs, ...stackPickables()]
     : S.activeGame === 'checkers' || S.activeGame === 'chess' ? [...chairs, ...boardGamePickables()] : [...chairs, felt];
   const hits = raycaster.intersectObjects(S.atArcade ? arcadePickables() : S.atSlot >= 0 ? slotPickables()
-    : [...targets, ...slotPickables(), ...arcadePickables(), doorGroup], true);
+    : [...targets, ...slotPickables(), ...arcadePickables(), ...sketchPickables(), doorGroup], true);
   if (!hits.length) return null;
   const h = hits[0];
   if (h.object.userData.arcade) return S.boardView ? null : { arcade: true, cab: h.object.userData.cab || 0, screen: !!h.object.userData.arcadeScreen, point: h.point };
   if (h.object.userData.machine !== undefined) return S.boardView ? null : { machine: h.object.userData.machine, lever: !!h.object.userData.lever };
   if (h.object.userData.door) return S.boardView ? null : { door: true };
+  if (h.object.userData.sketch) return S.boardView ? null : { sketch: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
   if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
   if (h.object.userData.sq !== undefined) return { cell: h.object.userData.sq };   // a checkers or chess piece
@@ -1099,7 +1129,7 @@ window.addEventListener('pointermove', e => {
     const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
     const slot = p && p.slot !== undefined;
     const machine = p && p.machine !== undefined && (S.atSlot < 0 || p.lever);
-    canvas.style.cursor = (chair || legal || grabbable || slot || machine || (p && p.door) || (p && p.arcade && (!S.atArcade || p.screen))) ? 'pointer' : 'grab';
+    canvas.style.cursor = (chair || legal || grabbable || slot || machine || (p && p.door) || (p && p.sketch) || (p && p.arcade && (!S.atArcade || p.screen))) ? 'pointer' : 'grab';
     if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
@@ -1112,6 +1142,7 @@ window.addEventListener('pointerup', e => {
     else if (S.atSlot >= 0) { if (p && p.machine === S.atSlot) slotSpin(); }   // at a machine: clicking it (or its lever) spins
     else if (p && p.arcade) enterArcade(p.cab);
     else if (p && p.machine !== undefined) enterSlot(p.machine);
+    else if (p && p.sketch) enterSketch();
     else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
     else if (p && p.cell !== undefined) { if (S.activeGame === 'othello') play(p.cell); else boardGameTap(p.cell); }
@@ -1148,8 +1179,8 @@ renderer.setAnimationLoop(() => {
       camera.position.copy(mtnViewPos());
       camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
     }
-  } else if (S.atSlot >= 0 || S.atArcade) {
-    // standing still in front of the machine
+  } else if (S.atSlot >= 0 || S.atArcade || S.atSketch) {
+    // standing still in front of the machine or the board
   } else if (S.seated >= 0) {
     lookEuler.set(pitch, yaw, 0);
     look.setFromEuler(lookEuler);
@@ -1163,6 +1194,7 @@ renderer.setAnimationLoop(() => {
   updateBoardGames(dt);
   updateSlots(dt);
   updateArcade(dt);
+  updateSketch(dt);
   updateLuckySign();
   updateClock();
   updateSky();

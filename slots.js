@@ -1,5 +1,7 @@
 // =====================================================================
-// slots.js — Lily Pad Leap, the frog video slot in the Lucky Corner, played with free chips
+// slots.js — Lily Pad Leap, the frog video slot in the Lucky Corner, played with room money
+// Room money: everyone starts with 5,000. The first time you join each day, if you're below 5,000
+// you get up to 1,000 back (never past 5,000), so you're never stuck broke but can still build a high score.
 // 5 reels × 5 rows, 10 lines, 🐸 is wild, and a Hop Meter: every losing spin lights a lily pad,
 // and when all 5 are lit your next spin is a free Frog Leap that pays at least your bet.
 // Pays back a little over 100% over time, so chips swing up and down but slowly grow.
@@ -21,7 +23,7 @@ const M = {
 };
 const WILD = 5, REELS = 5, ROWS = 5;
 const BETS = [10, 25, 50];
-const START_CHIPS = 1000, REFILL = 500;
+const START_CHIPS = 5000, DAILY = 1000;   // room money: the starting amount, and the daily allowance (only tops you back up to 5,000)
 const SPIN_FIRST = 0.9, REEL_GAP = 0.28;   // seconds until the first reel stops, and between reels
 const SPIN_TIME = SPIN_FIRST + REEL_GAP * (REELS - 1);
 const HOP_MAX = 5;                         // losing spins until the frog's free Leap
@@ -305,27 +307,23 @@ export function slotSpin() {
     res = pay(stops);
   } while (leap && res.units < LINES.length && ++tries < 2000);   // a Leap always pays at least your bet back
   const win = winFor(res.units, bet);
-  let refilled = false, broke = false, hopAfter = 0;
+  let broke = false, hopAfter = 0;
   runTransaction(ref(db, 'room/slots/chips/' + chipKey(S.myName)), c => {
-    c = c || { n: START_CHIPS, day: '', hop: 0 };
-    refilled = false; broke = false;
+    c = c || { n: START_CHIPS, day: today(), hop: 0, m: 1 };
+    broke = false;
     const hop = c.hop || 0;
     if ((hop >= HOP_MAX) !== leap) return;   // the meter changed under us; try again
     if (leap) { c.n += win; c.hop = 0; hopAfter = 0; return c; }
-    if (c.n < bet) {
-      if (c.n < BETS[0] && c.day !== today()) { c.n += REFILL; c.day = today(); refilled = true; }
-      else { broke = true; return; }
-    }
+    if (c.n < bet) { broke = true; return; }
     c.n = c.n - bet + win;
     c.hop = win > 0 ? hop : hop + 1;
     hopAfter = c.hop;
     return c;
   }).then(r => {
     if (!r.committed) {
-      banner(broke && chipsOf(S.myName) < BETS[0] ? '🪙 Out of chips · free refill tomorrow!' : broke ? `Not enough chips for a ${bet} bet` : 'Try that spin again', 2.5);
+      banner(broke && chipsOf(S.myName) < BETS[0] ? `🪙 Out of money · +${DAILY.toLocaleString()} allowance tomorrow!` : broke ? `Not enough money for a ${bet} bet` : 'Try that spin again', 2.5);
       return;
     }
-    if (refilled) banner(`🎁 Free refill! +${REFILL} chips`, 2.5);
     pendingWin = win; pendingUntil = serverNow() + SPIN_TIME * 1000 + 300;
     const n = ((machine.spin && machine.spin.n) || 0) + 1;
     update(ref(db, 'room/slots/m0'), { spin: { n, at: serverNow(), stops, bet: leap ? 0 : bet, lineBet: bet, win, name: S.myName, leap, hop: hopAfter, v: 2 } });
@@ -435,9 +433,43 @@ export function refreshSlotUI() {
     + ` · Pays (× line bet, 3/4/5 in a row): ${[5, 4, 3, 2, 1, 0].map(k => `${s[k]} ${M.pays[k].join('/')}`).join(' · ')}`;
 }
 
+// ---------- Room money: the 5,000 start and the daily allowance (checked when you join the room) ----------
+function claimDaily() {
+  if (!S.myName) return;
+  let got = '', added = 0;
+  runTransaction(ref(db, 'room/slots/chips/' + chipKey(S.myName)), c => {
+    got = ''; added = 0;
+    if (!c) { got = 'start'; return { n: START_CHIPS, day: today(), hop: 0, m: 1 }; }   // first time here
+    if (typeof c.n !== 'number') c.n = 0;
+    if (!c.m) {   // money from before room money: anyone below 5,000 gets topped up once
+      c.m = 1;
+      if (c.n < START_CHIPS) { added = START_CHIPS - c.n; c.n = START_CHIPS; got = 'bump'; }
+      c.day = today();
+      return c;
+    }
+    if (c.day !== today()) {
+      c.day = today();
+      if (c.n < START_CHIPS) { added = Math.min(DAILY, START_CHIPS - c.n); c.n += added; got = 'daily'; }
+    }
+    return c;
+  }).then(r => {
+    if (!r.committed) return;
+    if (got === 'start') banner(`🪙 Welcome! You start with ${START_CHIPS.toLocaleString()} room money`, 3.5);
+    else if (got === 'bump') banner(`🪙 Room money! Topped up to ${START_CHIPS.toLocaleString()}`, 3.5);
+    else if (got === 'daily') banner(`🎁 Daily allowance! +${added.toLocaleString()}`, 3.5);
+  }).catch(e => console.warn('Room money', e));
+}
+
 // ---------- Listening ----------
 export function startSlots() {
+  claimDaily();
   let first = true;
+  onValue(ref(db, 'room/slots/chips'), snap => {
+    chips = snap.val() || {};
+    redraw = true;
+    refreshSlotUI();
+    if (hooks.refreshWho) hooks.refreshWho();
+  });
   onValue(ref(db, 'room/slots/m0'), snap => {
     const d = snap.val() || {};
     const prevUser = occupant();
@@ -452,11 +484,5 @@ export function startSlots() {
     if (mine && d.user && d.user !== myId) { mine = false; if (hooks.slotKicked) hooks.slotKicked(); }
     if (occupant() !== prevUser && hooks.refreshAll) hooks.refreshAll();
     refreshSlotUI();
-  });
-  onValue(ref(db, 'room/slots/chips'), snap => {
-    chips = snap.val() || {};
-    redraw = true;
-    refreshSlotUI();
-    if (hooks.refreshWho) hooks.refreshWho();
   });
 }

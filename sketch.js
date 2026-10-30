@@ -1,0 +1,734 @@
+// =====================================================================
+// sketch.js — LittleSketch, a slow, no-timer drawing and guessing game on the board by the door
+// One player draws a secret word and everyone else guesses. Every line shows up on the wall board
+// as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
+// then 1 each, and the drawer gets 1 point for every right guess. Whiteboard or chalkboard.
+// This file adds its own panel, drawing pad and guess box to the page, so index.html needs no changes.
+// =====================================================================
+import * as THREE from 'three';
+import { ref, set, update, remove, push, onValue, onChildAdded, onChildChanged, onChildRemoved,
+         runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { db, myId, S, hooks, serverNow, scene, ROOM, std, RAINBOW_CSS } from './core.js';
+import { sfx } from './sounds.js';
+function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[name](...args); } catch (e) { console.warn('Sketch sound', e); } }
+
+export const SKETCH_NAME = 'LittleSketch';
+const REVEAL_SECS = 5;            // how long the answer shows before the next turn
+const CW = 1200, CH = 800;        // drawing size (3 wide by 2 tall)
+const SIZES = [5, 12, 28];        // brush sizes: small, medium, large
+
+// ---------- Words ----------
+const WORDS = {
+  easy: ('apple,banana,cat,dog,fish,bird,tree,flower,house,car,boat,ball,cake,cup,hat,shoe,star,moon,cloud,rain,' +
+    'snowman,frog,duck,egg,pizza,ice cream,cookie,door,window,chair,table,lamp,bed,book,pencil,key,clock,phone,heart,' +
+    'eye,hand,foot,nose,ear,tooth,bone,spider,snake,worm,bee,butterfly,ladybug,mushroom,leaf,carrot,cherry,grapes,' +
+    'lemon,pear,candle,bell,kite,balloon,drum,robot,ghost,crown,sword,rocket,train,bus,bike,truck,airplane,umbrella,' +
+    'glasses,sock,shirt,tent,campfire,mountain,river,bridge,rainbow,snowflake,owl,turtle,rabbit,mouse,pig,cow,sheep,' +
+    'horse,whale,crab,octopus,sun,cheese,bread,broom,ladder,smile').split(','),
+  medium: ('castle,lighthouse,volcano,waterfall,island,cactus,palm tree,pineapple,watermelon,hamburger,hot dog,taco,' +
+    'sandwich,popcorn,donut,cupcake,teapot,toaster,bucket,shovel,hammer,scissors,backpack,suitcase,camera,headphones,' +
+    'microphone,television,computer,keyboard,guitar,violin,piano,trumpet,skateboard,snowboard,sled,cable car,' +
+    'wheelbarrow,scarecrow,windmill,tractor,fence,mailbox,doghouse,birdhouse,treehouse,igloo,pyramid,compass,map,' +
+    'treasure chest,pirate,dragon,unicorn,mermaid,wizard,astronaut,alien,penguin,giraffe,elephant,kangaroo,peacock,' +
+    'flamingo,jellyfish,starfish,seahorse,shark,squirrel,hedgehog,bat,beaver,moose,bear,fox,raccoon,deer,slot machine,' +
+    'dice,playing card,puzzle piece,trophy,anchor,parachute,hot air balloon,ferris wheel,roller coaster,hiking boot,' +
+    'lantern,canoe,fishing rod').split(','),
+  hard: ('thunderstorm,earthquake,avalanche,sunrise,shadow,reflection,gravity,haircut,sneeze,hiccup,yawn,nightmare,' +
+    'birthday,wedding,picnic,sleepover,homework,traffic jam,fireworks,blizzard,snow angel,hide and seek,tug of war,' +
+    'high five,piggyback,trampoline,quicksand,tightrope,time machine,black hole,solar eclipse,northern lights,' +
+    'constellation,tornado,hibernation,recycling,vacation,tourist,lumberjack,firefighter,lifeguard,chef,dentist,' +
+    'magician,juggler,detective,haunted house,family tree,food fight,pillow fight,bubble bath,sunburn,brain freeze,' +
+    'sleepwalking,daydream,campfire story,shooting star,echo,scavenger hunt,mountain trail').split(',')
+};
+function norm(t) { return String(t || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function matches(guess, word) {   // spaces, capitals and a plural "s" don't matter
+  const a = norm(guess), b = norm(word);
+  return !!b && (a === b || a === b + 's' || a + 's' === b || a === b + 'es');
+}
+
+// ---------- The two board styles ----------
+const STYLES = {
+  white: { name: 'Whiteboard', bg: '#f6f6f1', ink: ['#222222', '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#6d4c41'],
+           frame: 0xb8bcc2, rough: 0.35, metal: 0.7, head: '#2b2f36' },
+  chalk: { name: 'Chalkboard', bg: '#2e4a37', ink: ['#f4f4ee', '#fff176', '#f8a5c2', '#8fd3ff', '#a8e6a1', '#ffbe76', '#d6a8ff'],
+           frame: 0x6b4226, rough: 0.7, metal: 0, head: '#3b2716' }
+};
+function makeBg(style) {   // the empty board, drawn once
+  const c = document.createElement('canvas'); c.width = CW; c.height = CH;
+  const g = c.getContext('2d');
+  g.fillStyle = STYLES[style].bg; g.fillRect(0, 0, CW, CH);
+  if (style === 'chalk') {   // faint old chalk smudges
+    for (let i = 0; i < 220; i++) {
+      g.fillStyle = `rgba(255,255,255,${0.012 + Math.random() * 0.025})`;
+      g.beginPath(); g.arc(Math.random() * CW, Math.random() * CH, 20 + Math.random() * 90, 0, Math.PI * 2); g.fill();
+    }
+  } else {                    // a soft shine across the whiteboard
+    const sh = g.createLinearGradient(0, 0, CW, CH);
+    sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.5, 'rgba(255,255,255,0.4)'); sh.addColorStop(1, 'rgba(0,0,0,0.04)');
+    g.fillStyle = sh; g.fillRect(0, 0, CW, CH);
+  }
+  return c;
+}
+const BGS = { white: makeBg('white'), chalk: makeBg('chalk') };
+
+// ---------- Shared state ----------
+const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true };
+let settings = { ...DEFAULTS };
+let game = {};          // room/sketch/game: who's playing, whose turn, the word, who has guessed it
+let strokes = {};       // room/sketch/strokes: every line on the board
+let guessesRaw = {};    // room/sketch/guesses: wrong guesses and "got it!" lines
+let wins = {};          // room/sketch/wins: all-time games won, by name
+let dirty = true, headDirty = true, lastDraw = 0;
+const gameRef = ref(db, 'room/sketch/game');
+const strokesRef = ref(db, 'room/sketch/strokes');
+const guessesRef = ref(db, 'room/sketch/guesses');
+function chipKey(name) { return String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?'; }
+function styleOf() { return STYLES[settings.style] ? settings.style : 'white'; }
+function here(id) { return !!(id && S.presence[id]); }
+function active(g, id) { return !!(g.players && g.players[id] && !g.players[id].out && here(id)); }
+function activeCount(g) { return Object.keys(g.players || {}).filter(id => active(g, id)).length; }
+function orderOf(g) { return Array.isArray(g.order) ? g.order.slice() : []; }
+function playing(g) { return g.st === 'pick' || g.st === 'draw' || g.st === 'reveal'; }
+function isPlayer(id = myId) { return !!(game.players && game.players[id] && !game.players[id].out); }
+function nameOf(id) { const p = game.players && game.players[id]; return p ? p.name : (S.presence[id] ? S.presence[id].name : 'someone'); }
+function allGot(g) {
+  const got = g.got || {};
+  return Object.keys(g.players || {}).filter(id => id !== g.drawer && active(g, id)).every(id => got[id]);
+}
+function banner(text, secs = 3) { if (hooks.banner) hooks.banner(text, secs); }
+function narrow() { return window.innerWidth <= 700 || window.innerWidth < window.innerHeight; }
+
+// ---------- The board on the door wall ----------
+export const sketchGroup = new THREE.Group();
+scene.add(sketchGroup);
+const BW = 2.1, BH = 1.4;                        // board size in meters
+const BX = -1.3, BY = 1.5, BZ = ROOM / 2 - 0.03; // between the lamp corner and the door
+const cv = document.createElement('canvas');
+cv.width = CW; cv.height = CH; cv.id = 'skCanvas';
+const g2 = cv.getContext('2d');
+const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+const headCv = document.createElement('canvas');
+headCv.width = 1024; headCv.height = 112;
+const headCtx = headCv.getContext('2d');
+const headTex = new THREE.CanvasTexture(headCv); headTex.colorSpace = THREE.SRGBColorSpace;
+const frameMat = std(0xb8bcc2, 0.35, { metalness: 0.7 });
+const trayItems = { white: new THREE.Group(), chalk: new THREE.Group() };
+(function board() {
+  const g = new THREE.Group();
+  g.position.set(BX, BY, BZ);
+  g.rotation.y = Math.PI;   // facing into the room
+  const add = (geo, mat, x, y, z, parent = g) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
+  add(new THREE.BoxGeometry(BW + 0.02, BH + 0.02, 0.03), std(0x1c1c1c, 0.8), 0, 0, 0.012);                  // backing
+  const surface = add(new THREE.PlaneGeometry(BW, BH), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, color: 0xe6e6e6 }), 0, 0, 0.028);
+  surface.castShadow = false;
+  add(new THREE.BoxGeometry(BW + 0.1, 0.05, 0.05), frameMat, 0, BH / 2 + 0.025, 0.03);                      // frame
+  add(new THREE.BoxGeometry(BW + 0.1, 0.05, 0.05), frameMat, 0, -BH / 2 - 0.025, 0.03);
+  add(new THREE.BoxGeometry(0.05, BH + 0.1, 0.05), frameMat, -BW / 2 - 0.025, 0, 0.03);
+  add(new THREE.BoxGeometry(0.05, BH + 0.1, 0.05), frameMat, BW / 2 + 0.025, 0, 0.03);
+  add(new THREE.BoxGeometry(BW * 0.8, 0.025, 0.09), frameMat, 0, -BH / 2 - 0.06, 0.07);                     // tray
+  const TY = -BH / 2 - 0.035;
+  STYLES.white.ink.slice(0, 4).forEach((col, k) => {                                                        // markers
+    const m = add(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 12), std(col, 0.5), -0.6 + k * 0.17, TY, 0.07, trayItems.white);
+    m.rotation.z = Math.PI / 2;
+  });
+  add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x333333, 0.9), 0.55, TY + 0.005, 0.07, trayItems.white); // eraser
+  STYLES.chalk.ink.slice(0, 4).forEach((col, k) => {                                                        // chalk sticks
+    add(new THREE.BoxGeometry(0.08, 0.015, 0.015), std(col, 0.95), -0.6 + k * 0.15, TY - 0.005, 0.07, trayItems.chalk);
+  });
+  add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x8b5a2b, 0.8), 0.55, TY + 0.005, 0.07, trayItems.chalk);  // brush
+  g.add(trayItems.white, trayItems.chalk);
+  add(new THREE.BoxGeometry(1.56, 0.2, 0.03), std(0x1c1c1c, 0.8), 0, BH / 2 + 0.17, 0.012);                  // sign above
+  const sign = add(new THREE.PlaneGeometry(1.52, 1.52 * 112 / 1024), new THREE.MeshBasicMaterial({ map: headTex, toneMapped: false }), 0, BH / 2 + 0.17, 0.029);
+  sign.castShadow = false;
+  g.traverse(o => { if (o.isMesh) o.userData.sketch = true; });
+  sketchGroup.add(g);
+})();
+export function sketchPickables() { return sketchGroup.children; }
+
+// Where you stand to look at the board (the room moves the camera there)
+export function sketchViewPose(aspect) {
+  const halfH = Math.tan(Math.PI / 6);   // half of the 60° view, up and down
+  const fitW = (BW + 0.5) / 2 / (halfH * Math.max(0.3, aspect));
+  const fitH = (BH + 0.7) / 2 / halfH;
+  const dist = Math.max(1.6, Math.min(3.4, Math.max(fitW, fitH)));
+  const target = new THREE.Vector3(BX, BY + 0.05, BZ);
+  const pos = new THREE.Vector3(BX, BY + 0.05, BZ - dist);
+  return { pos, target };
+}
+
+function applyStyle() {
+  const s = styleOf(), st = STYLES[s];
+  frameMat.color.setHex(st.frame); frameMat.roughness = st.rough; frameMat.metalness = st.metal;
+  trayItems.white.visible = s === 'white';
+  trayItems.chalk.visible = s === 'chalk';
+  dirty = true; headDirty = true;
+}
+
+// ---------- Drawing the board ----------
+const patterns = {};
+function eraserStyle(g, s) { if (!patterns[s]) patterns[s] = g.createPattern(BGS[s], 'no-repeat'); return patterns[s]; }
+function drawStroke(g, st, s, line) {
+  const pts = String(line.p || '').split(' ').map(t => t.split(',').map(Number)).filter(a => a.length === 2 && isFinite(a[0]) && isFinite(a[1]));
+  if (!pts.length) return;
+  const w = SIZES[line.z] || SIZES[1];
+  g.save();
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = w;
+  const color = line.e ? eraserStyle(g, s) : (st.ink[line.k] || st.ink[0]);
+  g.strokeStyle = color; g.fillStyle = color;
+  if (!line.e && s === 'chalk') { g.globalAlpha = 0.88; g.shadowColor = st.ink[line.k] || st.ink[0]; g.shadowBlur = 2; }
+  if (pts.length === 1) {
+    g.beginPath(); g.arc(pts[0][0], pts[0][1], w / 2, 0, Math.PI * 2); g.fill();
+  } else {
+    g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length - 1; i++) {   // smooth curves through the points
+      const mx = (pts[i][0] + pts[i + 1][0]) / 2, my = (pts[i][1] + pts[i + 1][1]) / 2;
+      g.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+    }
+    const last = pts[pts.length - 1];
+    g.lineTo(last[0], last[1]);
+    g.stroke();
+  }
+  g.restore();
+}
+function fitText(g, text, size, y, color) {
+  let s = size;
+  g.font = `bold ${s}px Georgia`;
+  while (g.measureText(text).width > CW - 120 && s > 20) { s -= 4; g.font = `bold ${s}px Georgia`; }
+  g.fillStyle = color; g.fillText(text, CW / 2, y);
+}
+function idleScreen(g, st) {
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (game.st === 'pick') {
+    fitText(g, '✏️', 120, 290, st.ink[0]);
+    fitText(g, `${nameOf(game.drawer)} is picking a word…`, 64, 460, st.ink[0]);
+  } else if (game.st === 'over') {
+    fitText(g, game.winner ? `🏆 ${game.winner} wins!` : 'Game over', 84, 190, st.ink[2]);
+    const list = Object.values(game.players || {}).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6);
+    list.forEach((p, i) => fitText(g, `${p.name} · ${p.score || 0}`, 48, 320 + i * 66, st.ink[0]));
+  } else {
+    fitText(g, SKETCH_NAME, 120, 330, st.ink[2]);
+    fitText(g, 'Click the board to play', 48, 470, st.ink[0]);
+  }
+}
+function strokeList() {
+  const rn = game.rn || 0;
+  return Object.keys(strokes).sort().map(k => strokes[k]).filter(l => l && l.r === rn);
+}
+function redraw() {
+  const s = styleOf(), st = STYLES[s], g = g2;
+  g.globalAlpha = 1; g.shadowBlur = 0;
+  g.drawImage(BGS[s], 0, 0);
+  if (game.st === 'draw' || game.st === 'reveal') for (const line of strokeList()) drawStroke(g, st, s, line);
+  else idleScreen(g, st);
+  tex.needsUpdate = true;
+}
+function blanks() {
+  const w = game.word || '', shown = new Set(Array.isArray(game.hint) ? game.hint : []);
+  return [...w].map((ch, i) => ch === ' ' ? ' ' : (shown.has(i) ? ch.toUpperCase() : '_')).join(' ') + `   (${w.replace(/ /g, '').length})`;
+}
+function drawHead() {   // the sign above the board
+  const g = headCtx, W = headCv.width, H = headCv.height;
+  g.fillStyle = STYLES[styleOf()].head; g.fillRect(0, 0, W, H);
+  let text = '✏️ ' + SKETCH_NAME;
+  if (game.st === 'pick') text = `✏️ ${nameOf(game.drawer)} is picking…`;
+  else if (game.st === 'draw') text = blanks();
+  else if (game.st === 'reveal') text = `It was: ${game.word}`;
+  else if (game.st === 'over') text = game.winner ? `🏆 ${game.winner} wins!` : 'Game over';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  let size = 58;
+  g.font = `bold ${size}px Georgia`;
+  while (g.measureText(text).width > W - 60 && size > 20) { size -= 3; g.font = `bold ${size}px Georgia`; }
+  g.fillStyle = '#ffe9a0'; g.fillText(text, W / 2, H / 2 + 3);
+  headTex.needsUpdate = true;
+}
+
+// ---------- Moving the game along (every change goes through one shared record) ----------
+function pickChoices(g) {   // three words for the drawer to choose from
+  const used = new Set(Array.isArray(g.used) ? g.used : []);
+  const mode = (g.set && g.set.words) || 'mixed';
+  const lists = mode === 'mixed' ? [WORDS.easy, WORDS.medium, WORDS.hard] : [WORDS[mode] || WORDS.easy, WORDS[mode] || WORDS.easy, WORDS[mode] || WORDS.easy];
+  const picks = [];
+  for (const list of lists) {
+    const pool = list.filter(w => !used.has(w) && !picks.includes(w));
+    const src = pool.length ? pool : list.filter(w => !picks.includes(w));
+    picks.push(src[Math.floor(Math.random() * src.length)]);
+  }
+  return picks;
+}
+let wonBy = '';
+function finish(g, now) {
+  g.st = 'over'; g.at = now; g.drawer = ''; g.choices = null; g.got = null; g.hint = null;
+  let best = null, tie = false;
+  for (const p of Object.values(g.players || {})) {
+    const sc = p.score || 0;
+    if (!best || sc > (best.score || 0)) { best = p; tie = false; }
+    else if (sc === (best.score || 0)) tie = true;
+  }
+  g.winner = best && (best.score || 0) > 0 && !tie ? best.name : '';
+  wonBy = g.winner;
+  return g;
+}
+function advance(g, now) {   // the next player's turn to draw, or the end of the game
+  if (activeCount(g) < 2) return finish(g, now);
+  const ord = orderOf(g), total = ord.length * ((g.set && g.set.turns) || 1);
+  let tn = typeof g.tn === 'number' ? g.tn : -1;
+  do { tn++; } while (tn < total && !active(g, ord[tn % ord.length]));
+  if (tn >= total) return finish(g, now);
+  g.tn = tn; g.drawer = ord[tn % ord.length];
+  g.st = 'pick'; g.choices = pickChoices(g); g.word = ''; g.hint = null; g.got = null;
+  g.rn = (g.rn || 0) + 1; g.at = now;
+  return g;
+}
+function txGame(fn) {   // change the game safely, even if several people click at once
+  const prevRn = game.rn || 0;
+  return runTransaction(gameRef, g => { wonBy = ''; if (!g) return; return fn(g); }).then(r => {
+    if (!r.committed) return r;
+    const v = r.snapshot.val() || {};
+    if ((v.rn || 0) !== prevRn) { remove(strokesRef).catch(() => {}); remove(guessesRef).catch(() => {}); }   // a fresh board for the new round
+    if (v.st === 'over' && wonBy) {
+      const who = wonBy;
+      runTransaction(ref(db, 'room/sketch/wins/' + chipKey(who)), n => (n || 0) + 1).catch(() => {});
+    }
+    return r;
+  }).catch(e => console.warn('Sketch', e));
+}
+
+function joinGame() {
+  if (!S.myName) return;
+  runTransaction(gameRef, g => {
+    g = g || { st: 'lobby' };
+    if (!g.st) g.st = 'lobby';
+    g.players = g.players || {};
+    const was = g.players[myId];
+    g.players[myId] = { name: S.myName, c: S.myHue, score: was ? (was.score || 0) : 0 };
+    if (playing(g)) { const ord = orderOf(g); if (!ord.includes(myId)) ord.push(myId); g.order = ord; }   // joining mid-game: you'll get a turn too
+    return g;
+  }).then(r => { if (r.committed) sound('join'); }).catch(e => console.warn('Sketch join', e));
+}
+function startGame() {
+  txGame(g => {
+    if (g.st !== 'lobby') return;
+    const ids = Object.keys(g.players || {}).filter(id => here(id) && !g.players[id].out);
+    if (ids.length < 2) return;
+    for (let k = ids.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [ids[k], ids[j]] = [ids[j], ids[k]]; }
+    const players = {};
+    ids.forEach(id => { players[id] = { name: g.players[id].name, c: g.players[id].c, score: 0 }; });
+    const fresh = { st: 'lobby', players, order: ids, tn: -1, rn: g.rn || 0, used: [],
+                    set: { turns: settings.turns, words: settings.words, hints: !!settings.hints } };
+    return advance(fresh, serverNow());
+  });
+}
+function leaveGame() {
+  txGame(g => {
+    if (!g.players || !g.players[myId]) return;
+    if (!playing(g)) { delete g.players[myId]; return g; }
+    g.players[myId].out = true;
+    const now = serverNow();
+    if (activeCount(g) < 2) return finish(g, now);
+    if (g.drawer === myId) {
+      if (g.st === 'pick') return advance(g, now);
+      if (g.st === 'draw') { g.st = 'reveal'; g.at = now; }
+      return g;
+    }
+    if (g.st === 'draw' && allGot(g)) { g.st = 'reveal'; g.at = now; }
+    return g;
+  });
+}
+function endGame() { txGame(g => (playing(g) && g.players && g.players[myId] ? finish(g, serverNow()) : undefined)); }
+function newGame() {
+  txGame(g => {
+    if (g.st !== 'over') return;
+    const players = {};
+    for (const [id, p] of Object.entries(g.players || {})) if (here(id) && !p.out) players[id] = { name: p.name, c: p.c, score: 0 };
+    return { st: 'lobby', players, rn: g.rn || 0, winner: '' };
+  });
+}
+function pickWord(w) {
+  txGame(g => {
+    if (g.st !== 'pick' || g.drawer !== myId || !(g.choices || []).includes(w)) return;
+    g.word = w; g.st = 'draw'; g.hint = null; g.got = null; g.at = serverNow();
+    g.used = [...(Array.isArray(g.used) ? g.used : []), w].slice(-60);
+    return g;
+  });
+}
+function newWords() {   // Skip: three different words, and a clean board
+  txGame(g => {
+    if (g.drawer !== myId || (g.st !== 'pick' && g.st !== 'draw') || (g.got && Object.keys(g.got).length)) return;
+    if (g.word) g.used = [...(Array.isArray(g.used) ? g.used : []), g.word].slice(-60);
+    g.used = [...(Array.isArray(g.used) ? g.used : []), ...(g.choices || [])].slice(-60);
+    g.st = 'pick'; g.choices = pickChoices(g); g.word = ''; g.hint = null; g.got = null;
+    g.rn = (g.rn || 0) + 1; g.at = serverNow();
+    return g;
+  });
+}
+function giveHint() {
+  txGame(g => {
+    if (g.st !== 'draw' || g.drawer !== myId || !(g.set && g.set.hints)) return;
+    const shown = new Set(Array.isArray(g.hint) ? g.hint : []);
+    const left = [...g.word].map((ch, i) => i).filter(i => g.word[i] !== ' ' && !shown.has(i));
+    if (left.length <= 1) return;   // always keep at least one letter hidden
+    shown.add(left[Math.floor(Math.random() * left.length)]);
+    g.hint = [...shown];
+    return g;
+  });
+}
+function doneDrawing() {   // the drawer ends the round and shows the answer
+  txGame(g => { if (g.st !== 'draw' || g.drawer !== myId) return; g.st = 'reveal'; g.at = serverNow(); return g; });
+}
+function skipTheirTurn() {   // if the drawer wandered off, anyone playing can move things along
+  txGame(g => (g.st === 'pick' && g.drawer !== myId && g.players && g.players[myId] ? advance(g, serverNow()) : undefined));
+}
+function setSetting(key, val) { update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e)); }
+
+// ---------- Guessing ----------
+function sendGuess() {
+  const text = guessInput.value.trim().slice(0, 40);
+  if (!text) return;
+  guessInput.value = '';
+  if (game.st !== 'draw' || !isPlayer() || game.drawer === myId || (game.got && game.got[myId])) return;
+  if (!matches(text, game.word)) {
+    push(guessesRef, { n: S.myName, c: S.myHue, t: text, r: game.rn || 0, at: serverNow() }).catch(() => {});
+    return;
+  }
+  let rank = 0;
+  txGame(g => {
+    rank = 0;
+    if (g.st !== 'draw' || !g.players || !g.players[myId] || g.drawer === myId || !matches(text, g.word)) return;
+    g.got = g.got || {};
+    if (g.got[myId]) return;
+    rank = Object.keys(g.got).length + 1;
+    g.got[myId] = rank;
+    g.players[myId].score = (g.players[myId].score || 0) + (rank === 1 ? 3 : rank === 2 ? 2 : 1);
+    if (g.players[g.drawer]) g.players[g.drawer].score = (g.players[g.drawer].score || 0) + 1;
+    if (allGot(g)) { g.st = 'reveal'; g.at = serverNow(); }
+    return g;
+  }).then(r => {
+    if (!r || !r.committed || !rank) return;
+    push(guessesRef, { n: S.myName, c: S.myHue, ok: 1, r: game.rn || 0, at: serverNow() }).catch(() => {});
+    sound('win');
+    banner(`✓ You got it! +${rank === 1 ? 3 : rank === 2 ? 2 : 1}`, 2.5);
+  });
+}
+
+// ---------- The page: panel, drawing pad and guess box ----------
+const css = document.createElement('style');
+css.textContent = `
+  #skPanel { display: none; left: 16px; bottom: 16px; width: 300px; max-height: calc(100vh - 120px); overflow-y: auto; }
+  body.atSketch #skPanel { display: block; }
+  body.atSketch #game, body.atSketch #actionBar, body.atSketch #stand { display: none !important; }
+  #skPanel h3 { margin: 0 0 4px; font-size: 17px; font-weight: normal; color: #ffe9a0; }
+  .skStatus { font-size: 15px; margin-bottom: 6px; }
+  .skLabel { font-size: 12px; opacity: 0.8; margin: 6px 0 3px; }
+  .skWord { font-size: 24px; color: #ffe9a0; letter-spacing: 1px; margin: 2px 0 8px; }
+  .skPlayers div { font-size: 14px; margin: 2px 0; }
+  .skFeed { margin: 6px 0; padding-top: 4px; border-top: 1px solid rgba(243,230,207,0.2); font-size: 13px; }
+  .skFeed div { margin: 1px 0; }
+  .skFeed .ok { color: #7dff8a; }
+  .skButtons { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(243,230,207,0.2); }
+  #skPad { display: none; position: fixed; left: 50%; top: 56px; transform: translateX(-50%); text-align: center; z-index: 2; }
+  body.skPadOn #skPad { display: block; }
+  #skPadWord { display: inline-block; font-size: 18px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 5px 14px; border-radius: 14px; margin-bottom: 6px; }
+  #skCanvas { display: block; margin: 0 auto; width: min(56vw, calc((100vh - 210px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
+              border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.6); touch-action: none; cursor: crosshair; }
+  body:not(.skDrawing) #skCanvas { cursor: default; }
+  #skTools { display: none; margin-top: 8px; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; }
+  body.skDrawing #skTools { display: flex; }
+  #skTools button { font-family: Georgia, serif; font-size: 15px; padding: 6px 12px; border: none; border-radius: 16px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+  #skTools button:disabled { opacity: 0.45; cursor: default; }
+  #skTools button.dot { width: 30px; height: 30px; padding: 0; border-radius: 50%; }
+  #skTools button.on { outline: 3px solid #ffd54f; outline-offset: 2px; }
+  #skGuess { display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); gap: 6px; z-index: 2; }
+  body.skGuessOn #skGuess { display: flex; }
+  #skGuess input { flex: 1; min-width: 0; font-size: 16px; padding: 9px 14px; border-radius: 16px; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+  #skGuess button { font-family: Georgia, serif; font-size: 16px; padding: 9px 18px; border: none; border-radius: 20px; background: #ffb36b; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+  @media (min-width: 701px) { body.skGuessOn #chat { bottom: 16px; } }
+  @media (max-width: 700px) {
+    #skPanel { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 36vh; padding: 8px 10px; }
+    #skPad { top: 44px; width: 100vw; }
+    #skPadWord { font-size: 15px; padding: 3px 10px; margin-bottom: 4px; }
+    #skCanvas { width: min(96vw, calc((100vh - 44px - var(--skPanelH, 200px) - 130px) * 1.5)); }
+    #skTools { gap: 4px; margin-top: 5px; }
+    #skTools button { font-size: 13px; padding: 5px 9px; }
+    #skTools button.dot { width: 26px; height: 26px; }
+    #skGuess { bottom: calc(var(--skPanelH, 200px) + 16px); }
+  }`;
+document.head.appendChild(css);
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function btn(text, onClick, cls, disabled) { const b = el('button', cls || '', text); b.addEventListener('click', onClick); if (disabled) b.disabled = true; return b; }
+
+const panel = el('div', 'panel'); panel.id = 'skPanel';
+document.body.appendChild(panel);
+if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--skPanelH', panel.offsetHeight + 'px')).observe(panel);
+
+const pad = el('div'); pad.id = 'skPad';
+const padWord = el('div'); padWord.id = 'skPadWord';
+const tools = el('div'); tools.id = 'skTools';
+pad.append(padWord, cv, tools);
+document.body.appendChild(pad);
+
+const guessBox = el('div'); guessBox.id = 'skGuess';
+const guessInput = el('input'); guessInput.maxLength = 40; guessInput.placeholder = 'Your guess…';
+guessBox.append(guessInput, btn('Guess', sendGuess));
+document.body.appendChild(guessBox);
+guessInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendGuess(); if (e.key === 'Escape') guessInput.blur(); });
+
+// The drawer's tools: colors, eraser, brush sizes, undo, clear, hint, done and skip
+let myColor = 0, mySize = 1, erasing = false;
+const colorBtns = [], sizeBtns = [];
+for (let k = 0; k < 7; k++) {
+  const b = btn('', () => { myColor = k; erasing = false; refreshTools(); }, 'dot');
+  b.title = 'Color';
+  colorBtns.push(b); tools.appendChild(b);
+}
+const eraserBtn = btn('🧽', () => { erasing = true; refreshTools(); });
+eraserBtn.title = 'Eraser';
+tools.appendChild(eraserBtn);
+['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
+const undoBtn = btn('↶ Undo', undo);
+const clearBtn = btn('🗑 Clear', clearBoard);
+const hintBtn = btn('💡 Hint', giveHint);
+const doneBtn = btn('✓ Done', doneDrawing);
+const skipBtn = btn('⏭ New words', newWords);
+tools.append(undoBtn, clearBtn, hintBtn, doneBtn, skipBtn);
+function refreshTools() {
+  const st = STYLES[styleOf()];
+  colorBtns.forEach((b, k) => { b.style.background = st.ink[k]; b.classList.toggle('on', !erasing && myColor === k); });
+  eraserBtn.classList.toggle('on', erasing);
+  sizeBtns.forEach((b, k) => b.classList.toggle('on', mySize === k));
+  const shown = new Set(Array.isArray(game.hint) ? game.hint : []);
+  const lettersLeft = [...(game.word || '')].filter((ch, i) => ch !== ' ' && !shown.has(i)).length;
+  hintBtn.style.display = game.set && game.set.hints ? '' : 'none';
+  hintBtn.disabled = lettersLeft <= 1;
+  skipBtn.disabled = !!(game.got && Object.keys(game.got).length);
+  undoBtn.disabled = !myKeys.some(k => strokes[k]);
+}
+
+// ---------- Drawing with the mouse or a finger ----------
+let live = null, liveKey = '', liveTimer = 0;
+let myKeys = [];   // my lines this round, newest last (for Undo)
+function canDraw() { return S.atSketch && game.st === 'draw' && game.drawer === myId; }
+function toPt(e) {
+  const r = cv.getBoundingClientRect();
+  return [Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * CW), Math.round(Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) * CH)];
+}
+function packed(l) { return { r: l.r, k: l.k, z: l.z, e: l.e, p: l.pts.map(a => a[0] + ',' + a[1]).join(' ') }; }
+function flush() {
+  clearTimeout(liveTimer); liveTimer = 0;
+  if (!live || !liveKey) return;
+  set(ref(db, 'room/sketch/strokes/' + liveKey), packed(live)).catch(e => console.warn('Sketch line', e));
+}
+function flushSoon() { if (!liveTimer) liveTimer = setTimeout(flush, 120); }   // send the line a few times a second while drawing
+cv.addEventListener('pointerdown', e => {
+  if (!canDraw()) return;
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  liveKey = push(strokesRef).key;
+  live = { r: game.rn || 0, k: myColor, z: mySize, e: erasing ? 1 : 0, pts: [toPt(e)] };
+  myKeys.push(liveKey);
+  strokes[liveKey] = packed(live); dirty = true;
+  flushSoon();
+});
+cv.addEventListener('pointermove', e => {
+  if (!live) return;
+  const p = toPt(e), last = live.pts[live.pts.length - 1];
+  if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 3) return;
+  live.pts.push(p);
+  strokes[liveKey] = packed(live); dirty = true;
+  flushSoon();
+});
+function endLine() { if (!live) return; flush(); live = null; liveKey = ''; refreshTools(); }
+cv.addEventListener('pointerup', endLine);
+cv.addEventListener('pointercancel', endLine);
+cv.addEventListener('lostpointercapture', endLine);
+function undo() {
+  while (myKeys.length) {
+    const k = myKeys.pop();
+    if (strokes[k]) { delete strokes[k]; dirty = true; remove(ref(db, 'room/sketch/strokes/' + k)).catch(() => {}); break; }
+  }
+  refreshTools();
+}
+let clearArmed = 0;
+function clearBoard() {
+  if (Date.now() - clearArmed > 2500) { clearArmed = Date.now(); banner('🗑 Press Clear again to wipe the board', 2.5); return; }
+  clearArmed = 0;
+  remove(strokesRef).catch(() => {});
+  strokes = {}; myKeys = []; dirty = true;
+  refreshTools();
+}
+
+// ---------- The side panel ----------
+let lastSig = '';
+function settingRow(label, key, options) {
+  const row = el('div');
+  row.appendChild(el('div', 'skLabel', label));
+  for (const [val, text] of options) {
+    const b = btn(text, () => setSetting(key, val), 'sw' + (settings[key] === val ? ' on' : ''));
+    row.appendChild(b);
+  }
+  return row;
+}
+export function refreshSketchUI(force) {
+  const at = !!S.atSketch;
+  const drawing = at && game.st === 'draw' && game.drawer === myId;
+  const got = !!(game.got && game.got[myId]);
+  document.body.classList.toggle('skDrawing', drawing);
+  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (game.st === 'draw' || game.st === 'reveal'))));
+  document.body.classList.toggle('skGuessOn', at && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got);
+  padWord.textContent = drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
+  if (drawing) refreshTools();
+  if (!at) { lastSig = ''; return; }
+  const rn = game.rn || 0;
+  const guesses = Object.values(guessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));   // only this round's
+  const sig = JSON.stringify([game, settings, guesses, wins, Object.keys(S.presence), narrow()]);
+  if (!force && sig === lastSig) return;
+  lastSig = sig;
+
+  panel.textContent = '';
+  panel.appendChild(el('h3', '', '✏️ ' + SKETCH_NAME));
+  const me = isPlayer(), drawerName = nameOf(game.drawer), st = game.st || 'lobby';
+  let status = '';
+  if (st === 'lobby') status = activeCount(game) >= 2 ? 'Ready! Press Start when everyone is in.' : 'Join, then start when 2 or more are in.';
+  else if (st === 'pick') status = game.drawer === myId ? 'Your turn to draw! Pick a word:' : `${drawerName} is picking a word…`;
+  else if (st === 'draw') status = game.drawer === myId ? 'Draw it! Take your time.' : got ? 'You got it! ✓ Waiting for the others…' : me ? `Guess what ${drawerName} is drawing!` : 'Join to guess along.';
+  else if (st === 'reveal') status = `It was "${game.word}"!`;
+  else if (st === 'over') status = game.winner ? `🏆 ${game.winner} wins!` : 'Game over';
+  panel.appendChild(el('div', 'skStatus', status));
+
+  if (st === 'pick' && game.drawer === myId) {
+    const row = el('div');
+    for (const w of game.choices || []) row.appendChild(btn(w, () => pickWord(w)));
+    row.appendChild(btn('⏭ New words', newWords));
+    panel.appendChild(row);
+  }
+  if (st === 'draw' && game.drawer === myId) panel.appendChild(el('div', 'skWord', game.word));
+  if (st === 'draw' && game.drawer !== myId) panel.appendChild(el('div', 'skWord', blanks()));
+
+  // Players and scores
+  const list = el('div', 'skPlayers');
+  const ord = orderOf(game);
+  const ids = Object.keys(game.players || {}).filter(id => playing(game) || st === 'over' || here(id))
+    .sort((a, b) => (ord.indexOf(a) - ord.indexOf(b)) || nameOf(a).localeCompare(nameOf(b)));
+  for (const id of ids) {
+    const p = game.players[id], row = el('div');
+    const dot = el('span', '', '● '); dot.style.color = RAINBOW_CSS[Number.isInteger(p.c) && p.c >= 0 && p.c < 7 ? p.c : 0];
+    row.appendChild(dot);
+    const w = wins[chipKey(p.name)] || 0;
+    const marks = (game.drawer === id && playing(game) ? ' ✏️' : '') + (game.got && game.got[id] ? ' ✓' : '') + (p.out || !here(id) ? ' (left)' : '');
+    row.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${p.score || 0}${marks}${w ? ` · 🏆${w}` : ''}`));
+    list.appendChild(row);
+  }
+  if (!ids.length) list.appendChild(el('div', '', 'Nobody has joined yet.'));
+  panel.appendChild(list);
+
+  // This round's guesses
+  if ((st === 'draw' || st === 'reveal') && guesses.length) {
+    const feed = el('div', 'skFeed');
+    for (const gu of guesses.slice(-6)) {
+      const line = el('div', gu.ok ? 'ok' : '');
+      if (gu.ok) line.textContent = `✓ ${gu.n} got it!`;
+      else {
+        const nm = el('b', '', gu.n + ': ');
+        if (Number.isInteger(gu.c) && gu.c >= 0 && gu.c < 7) nm.style.color = RAINBOW_CSS[gu.c];
+        line.append(nm, document.createTextNode(gu.t));
+      }
+      feed.appendChild(line);
+    }
+    panel.appendChild(feed);
+  }
+
+  // Settings (the board style can change any time)
+  panel.appendChild(settingRow('Board:', 'style', [['white', 'Whiteboard'], ['chalk', 'Chalkboard']]));
+  if (st === 'lobby' || st === 'over') {
+    panel.appendChild(settingRow('Turns each:', 'turns', [[1, '1'], [2, '2'], [3, '3']]));
+    panel.appendChild(settingRow('Words:', 'words', [['easy', 'Easy'], ['mixed', 'Mixed'], ['hard', 'Hard']]));
+    panel.appendChild(settingRow('Hints:', 'hints', [[true, 'On'], [false, 'Off']]));
+  }
+
+  // Buttons
+  const row = el('div', 'skButtons');
+  if (!me) row.appendChild(btn(playing(game) ? 'Join game' : 'Join', joinGame));
+  if (st === 'lobby' && me) row.appendChild(btn('Start', startGame, '', activeCount(game) < 2));
+  if (st === 'over') row.appendChild(btn('New game', newGame));
+  if (st === 'pick' && me && game.drawer !== myId) row.appendChild(btn('⏭ Skip their turn', skipTheirTurn));
+  if (me) row.appendChild(btn('Leave game', leaveGame));
+  if (me && playing(game)) row.appendChild(btn('End game', () => { if (confirm('End this LittleSketch game for everyone?')) endGame(); }));
+  row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
+  panel.appendChild(row);
+}
+window.addEventListener('resize', () => refreshSketchUI(true));
+
+// The room calls these when you walk up to the board and step away
+export function sketchEnter() { refreshSketchUI(true); }
+export function sketchLeave() { endLine(); refreshSketchUI(true); }
+
+// ---------- Little heads-ups when the game changes ----------
+let firstGame = true;
+function notice(prev, g) {
+  if (firstGame) { firstGame = false; return; }
+  if (g.st === 'pick' && g.drawer === myId && (prev.st !== 'pick' || prev.drawer !== myId)) {
+    banner(S.atSketch ? '✏️ Your turn to draw! Pick a word' : '✏️ Your turn to draw in LittleSketch! Click the board by the door', 4);
+    sound('ping');
+  }
+  if (g.st === 'draw' && prev.st !== 'draw') myKeys = [];
+  if (g.st === 'reveal' && prev.st === 'draw' && (S.atSketch || isPlayer())) banner(`It was "${g.word}"!`, 3);
+  if (g.st === 'over' && prev.st !== 'over' && (S.atSketch || isPlayer())) {
+    banner(g.winner ? `🏆 ${g.winner} wins LittleSketch!` : 'LittleSketch game over', 4);
+    if (g.winner) sound('win');
+  }
+  if (g.got && prev.got && Object.keys(g.got).length > Object.keys(prev.got).length && g.drawer === myId) sound('coin');
+  if (g.got && !prev.got && g.drawer === myId) sound('coin');
+}
+
+// ---------- Every second: keep the game moving if someone left or the answer has shown long enough ----------
+function tick() {
+  const g = game;
+  if (!S.myName || !playing(g)) return;
+  const now = serverNow();
+  const stuck = activeCount(g) < 2
+    || (g.st === 'reveal' && now - (g.at || 0) > REVEAL_SECS * 1000)
+    || (g.st === 'pick' && !active(g, g.drawer))
+    || (g.st === 'draw' && (!active(g, g.drawer) || allGot(g)));
+  if (!stuck) return;
+  txGame(x => {
+    if (!playing(x)) return;
+    const n = serverNow();
+    if (activeCount(x) < 2) return finish(x, n);
+    if (x.st === 'reveal') return n - (x.at || 0) > REVEAL_SECS * 1000 ? advance(x, n) : undefined;
+    if (x.st === 'pick' && !active(x, x.drawer)) return advance(x, n);
+    if (x.st === 'draw' && (!active(x, x.drawer) || allGot(x))) { x.st = 'reveal'; x.at = n; return x; }
+    return;
+  });
+}
+let tickAt = 0;
+export function updateSketch(dt) {
+  const t = performance.now();
+  if (dirty && t - lastDraw > 50) { lastDraw = t; dirty = false; redraw(); }
+  if (headDirty) { headDirty = false; drawHead(); }
+  if (t - tickAt > 1000) { tickAt = t; tick(); if (S.atSketch) refreshSketchUI(); }
+}
+
+// ---------- Listening ----------
+export function startSketch() {
+  onValue(ref(db, 'room/sketch/settings'), s => {
+    settings = { ...DEFAULTS, ...(s.val() || {}) };
+    applyStyle(); refreshSketchUI();
+  });
+  onValue(gameRef, s => {
+    const prev = game;
+    game = s.val() || {};
+    notice(prev, game);
+    dirty = true; headDirty = true;
+    refreshSketchUI();
+  });
+  const keep = s => { if (s.key !== liveKey) { strokes[s.key] = s.val(); dirty = true; } };   // my own line in progress is drawn from here, not echoed back
+  onChildAdded(strokesRef, keep);
+  onChildChanged(strokesRef, keep);
+  onChildRemoved(strokesRef, s => { delete strokes[s.key]; dirty = true; });
+  onValue(guessesRef, s => { guessesRaw = s.val() || {}; refreshSketchUI(); });
+  onValue(ref(db, 'room/sketch/wins'), s => { wins = s.val() || {}; refreshSketchUI(); });
+}
+
+// Show the empty board right away, before anyone joins
+applyStyle();
+redraw();
+drawHead();
