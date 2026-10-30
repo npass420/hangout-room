@@ -331,15 +331,16 @@ scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.8));
 // ---------- Ceiling ring light over the table: its neon color is shared, and the table's neon matches it ----------
 const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
                      ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
-const RING_R = 1.5, RING_Y = HEIGHT - 0.07;
+const RING_R = 1.3, RING_Y = 2.75;   // hangs down from the ceiling on four thin cables so you can see it
 const ring = new THREE.Group();
 scene.add(ring);
 const ringBase = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.035, 12, 160), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
 ringBase.rotation.x = Math.PI / 2; ringBase.position.y = RING_Y + 0.03;
 ring.add(ringBase);
-for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {   // four thin rods holding it to the ceiling
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.06, 6), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
-  rod.position.set(Math.cos(a) * RING_R, HEIGHT - 0.03, Math.sin(a) * RING_R);
+for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {   // four thin cables up to the ceiling
+  const len = HEIGHT - RING_Y - 0.03;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 6), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
+  rod.position.set(Math.cos(a) * RING_R, RING_Y + 0.03 + len / 2, Math.sin(a) * RING_R);
   ring.add(rod);
 }
 neonTube(ring, RING_R, 0.014, 1.0, true, RING_Y);    // hot core
@@ -355,7 +356,7 @@ roomLight.shadow.bias = -0.002;
 scene.add(roomLight);
 // A little of the neon color spills into the room
 const tintLight = new THREE.PointLight(0xffe8c4, 2.2, 0, 1.2);
-tintLight.position.set(0, HEIGHT - 0.3, 0);
+tintLight.position.set(0, RING_Y, 0);   // at the ring, so its color washes up onto the ceiling too
 scene.add(tintLight);
 let neonIndex = -1;
 function setNeon(i) {
