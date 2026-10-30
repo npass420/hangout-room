@@ -20,6 +20,7 @@ import { arcadeGroup, arcadePickables, arcadeViewPose, arcadeEnter, arcadeLeave,
 import { checkersGroup, chessGroup, boardGamesInUse, boardGameTap, boardGameCanTap, boardGamePickables, refreshBoardGames,
          hideBoardGames, startBoardGames, updateBoardGames } from './boardgames.js';
 import { sketchPickables, sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME } from './sketch.js';
+import { poolScene, poolEnter, poolLeave, startPool, updatePool, POOL_NAME } from './pool.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Painted textures ----------
@@ -427,13 +428,13 @@ function makeAvatar(name, c) {
 function refreshAvatars() {
   for (const id of Object.keys(avatars)) {
     const p = S.presence[id];
-    if (!p || (p.seat < 0 && slotOccupantOf(id) < 0 && arcadeCabOf(id) < 0) || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
+    if (!p || p.pool || (p.seat < 0 && slotOccupantOf(id) < 0 && arcadeCabOf(id) < 0) || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
       scene.remove(avatars[id].g);
       delete avatars[id];
     }
   }
   for (const [id, p] of Object.entries(S.presence)) {
-    if (id === myId) continue;
+    if (id === myId || p.pool) continue;   // people in the game room are drawn in there
     const slot = p.seat < 0 ? slotOccupantOf(id) : -1;
     const cab = p.seat < 0 ? arcadeCabOf(id) : -1, atCab = cab >= 0;
     if (p.seat < 0 && slot < 0 && !atCab) continue;
@@ -473,7 +474,7 @@ function refreshWho() {
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
     const slot = slotOccupantOf(id);
-    const where = p.seat >= 0 ? 'seat ' + (p.seat + 1) : slot >= 0 ? '🎰 ' + slotName(slot) : arcadeCabOf(id) >= 0 ? `🕹️ ${ARCADE_NAME} ${arcadeCabOf(id) + 1}` : 'standing';
+    const where = p.pool ? '🎱 Game room' : p.seat >= 0 ? 'seat ' + (p.seat + 1) : slot >= 0 ? '🎰 ' + slotName(slot) : arcadeCabOf(id) >= 0 ? `🕹️ ${ARCADE_NAME} ${arcadeCabOf(id) + 1}` : 'standing';
     div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
     const chipSpan = document.createElement('span');
     chipSpan.style.opacity = '0.7';
@@ -712,7 +713,7 @@ function enterRoom() {
           if (hue >= 7) hue = Object.keys(ps.val() || {}).length % 7;   // more than 7 people: colors repeat
           S.myHue = hue;
         }
-        set(meRef, { name: S.myName, seat: S.seated, c: S.myHue, t: Date.now() });
+        set(meRef, { name: S.myName, seat: S.seated, c: S.myHue, t: Date.now(), pool: S.inPool ? true : null });
       });
       connEl.textContent = 'Online';
     } else {
@@ -736,6 +737,7 @@ function enterRoom() {
   startSlots();     // the slot machines
   startArcade();    // the arcade cabinet
   startSketch();    // LittleSketch, the drawing board by the door
+  startPool();      // LittlePool, in the game room
 
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
@@ -964,6 +966,41 @@ function leaveSketch() {
 }
 hooks.sketchBack = leaveSketch;
 
+// ---------- Going through the 🎱 door into the game room (LittlePool), and back ----------
+const poolSaved = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+function enterPool() {
+  if (anim || S.boardView || S.atSlot >= 0 || S.atArcade || S.atSketch || S.trailFull || S.inPool || !S.myName) return;
+  if (S.seated >= 0) {   // get up from your chair first; when you come back you'll be standing
+    poolSaved.pos.copy(savedView.pos); poolSaved.target.copy(savedView.target);
+    S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
+  } else {
+    poolSaved.pos.copy(camera.position); poolSaved.target.copy(controls.target);
+  }
+  if (Math.hypot(poolSaved.pos.x, poolSaved.pos.y, poolSaved.pos.z) < 0.1) { poolSaved.pos.set(2.6, 2.6, 2.6); poolSaved.target.set(0, 0.8, 0); }
+  controls.enabled = false;
+  S.inPool = true;
+  document.body.classList.add('inPool');
+  update(ref(db, 'room/presence/' + myId), { pool: true });
+  hint.textContent = `${POOL_NAME} · drag to walk around the table · scroll to zoom · T for top view · Esc to go back`;
+  poolEnter();
+  refreshAll();
+}
+function leavePool() {
+  if (!S.inPool) return;
+  S.inPool = false;
+  document.body.classList.remove('inPool');
+  update(ref(db, 'room/presence/' + myId), { pool: null });
+  poolLeave();
+  camera.position.copy(poolSaved.pos);
+  controls.target.copy(poolSaved.target);
+  camera.lookAt(poolSaved.target);
+  controls.enabled = true;
+  controls.update();
+  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
+  refreshAll();
+}
+hooks.poolBack = leavePool;
+
 // ---------- LittleTrail's big board: the game fills the window and the room is hidden (and not drawn) ----------
 const fullSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), target: new THREE.Vector3(), hidden: [], bg: null };
 const fullLight = new THREE.DirectionalLight(0xfff4e0, 0);   // the lamps are hidden too, so the board gets its own light
@@ -1080,6 +1117,7 @@ standBtn.addEventListener('click', stand);
 boardBtn.addEventListener('click', toggleBoardView);
 window.addEventListener('keydown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat or name box
+  if (S.inPool) return;   // the game room handles its own keys
   if (e.key === 'Escape') { if (S.trailFull) setTrailFull(false); else if (S.atArcade) leaveArcade(); else if (S.atSlot >= 0) leaveSlot(); else if (S.atSketch) leaveSketch(); else if (S.boardView) toggleBoardView(); else stand(); }
   if (S.atArcade) { if (arcadeKey(e.key)) e.preventDefault(); return; }   // at the cabinet, keys play the game
   if ((e.key === ' ' || e.key === 'Enter') && S.atSlot >= 0) { e.preventDefault(); slotSpin(); }
@@ -1088,6 +1126,7 @@ window.addEventListener('keydown', e => {
 
 // Scroll to zoom while seated or in board view (standing uses the normal zoom)
 canvas.addEventListener('wheel', e => {
+  if (S.inPool) return;   // the game room handles its own zoom
   if (S.trailFull) { e.preventDefault(); mtnView.dist = Math.max(0.9, Math.min(4.5, mtnView.dist * (1 + e.deltaY * 0.001))); return; }   // big board: zoom in and out
   if (S.seated < 0 && !S.boardView) return;
   e.preventDefault();
@@ -1158,6 +1197,7 @@ function pinchSpread() {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 canvas.addEventListener('pointerdown', e => {
+  if (S.inPool) return;   // the game room handles its own mouse and touch
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
   touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; if (grabbing) { stackRelease(); grabbing = false; } return; }   // a pinch, not a tap
@@ -1171,6 +1211,7 @@ canvas.addEventListener('pointerdown', e => {
 function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
 window.addEventListener('pointercancel', endTouch);
 window.addEventListener('pointermove', e => {
+  if (S.inPool) return;
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (grabbing) { stackDrag(aim(e)); return; }
   if (touchPts.size === 2 && pinchDist > 0) {
@@ -1206,6 +1247,7 @@ window.addEventListener('pointermove', e => {
   }
 });
 window.addEventListener('pointerup', e => {
+  if (S.inPool) { down = null; endTouch(e); return; }
   if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
   if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
     const p = pickUnder(e);
@@ -1216,7 +1258,7 @@ window.addEventListener('pointerup', e => {
     else if (p && p.machine !== undefined) enterSlot(p.machine);
     else if (p && p.sketch) enterSketch();
     else if (p && p.lightSwitch) nextNeon();
-    else if (p && p.gameDoor) showBanner('🎱 The game room opens soon: LittlePool is on the way!', 3);
+    else if (p && p.gameDoor) enterPool();
     else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
     else if (p && p.cell !== undefined) { if (S.activeGame === 'othello') play(p.cell); else boardGameTap(p.cell); }
@@ -1242,7 +1284,9 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (anim) {
+  if (S.inPool) {
+    // the game room moves the camera itself (in updatePool below)
+  } else if (anim) {
     anim.t += dt;
     const e = easeInOut(Math.min(anim.t / anim.dur, 1));
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
@@ -1269,8 +1313,9 @@ renderer.setAnimationLoop(() => {
   updateSlots(dt);
   updateArcade(dt);
   updateSketch(dt);
+  updatePool(dt);
   updateLuckySign();
   updateClock();
   updateSky();
-  renderer.render(scene, camera);
+  renderer.render(S.inPool ? poolScene : scene, camera);
 });
