@@ -1,17 +1,25 @@
 // =====================================================================
-// arcade.js — three arcade cabinets on the back wall, all playing Peak Hop
-// Peak Hop: hop from cube to cube and light them all up. A cube sinks after you hop off it,
-// so every map is a little path puzzle. No enemies and no clock: take your time.
+// arcade.js — three arcade cabinets on the back wall. Each one can be set to any of three games:
+//   Peak Hop: hop from cube to cube and light them all up. A cube sinks after you hop off it,
+//             so every map is a little path puzzle. No enemies and no clock: take your time.
+//   Bricks and Bug Invaders: quick action games (they live in arcadegames.js).
+// Walk up to a cabinet and pick its game from the menu on the screen; it stays on that game for the next person.
 // Each cabinet has its own player; the high scores and the daily map are shared by all three.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, runTransaction, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, myId, S, hooks, serverNow, scene, ROOM, std, colorIndex, RAINBOW_CSS } from './core.js';
+import { db, myId, S, hooks, serverNow, scene, camera, canvas, ROOM, std, colorIndex, RAINBOW_CSS } from './core.js';
+import { ACT_GAMES } from './arcadegames.js';
 import { sfx } from './sounds.js';
 function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[name](...args); } catch (e) { console.warn('Arcade sound', e); } }
 
-export const ARCADE_NAME = 'Peak Hop';
+export const ARCADE_NAME = 'Arcade';
 const RUN_LEVELS = 10;
+const GAME_LIST = ['hop', 'bricks', 'bugs'];   // the menu, top to bottom
+const TITLES = { hop: 'PEAK HOP', bricks: ACT_GAMES.bricks.title, bugs: ACT_GAMES.bugs.title };
+const LABELS = { hop: '🧊 Peak Hop', bricks: ACT_GAMES.bricks.label, bugs: ACT_GAMES.bugs.label };
+const isAct = mode => !!ACT_GAMES[mode];        // Bricks or Bug Invaders (not Peak Hop)
+const isHop = mode => mode === 'run' || mode === 'daily';
 
 // ---------- Making the maps ----------
 // The four hops, as they look on the screen: ↖ ↗ ↙ ↘
@@ -119,6 +127,7 @@ function levelScore(targets, undos, restarts) {
 // ---------- Shared state ----------
 let scores = {};        // room/arcade/scores: best run per name (shared by all three cabinets)
 let daily = {};         // room/arcade/daily/<today>: best daily result per name (shared too)
+const best = { bricks: {}, bugs: {} };   // room/arcade/best/<game>: best score per name for Bricks and Bug Invaders
 let dailyDay = '';
 let focus = -1;         // the cabinet you're standing at (playing or watching), or -1
 const keyOf = name => String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?';
@@ -147,6 +156,7 @@ const CW = 576, CH = 480;                   // each screen's pixels
 function makeCabinet(i) {
   const cab = {
     i, x: AXS[i], liveRef: ref(db, LIVE_PATHS[i]), live: {}, mine: false,
+    pick: GAME_LIST[i], act: null, sendT: 0, lastInfo: '',   // the cabinet's game, and the Bricks or Bug Invaders game on it
     game: null, gameKey: '', levelCache: { key: '', level: null },
     anim: { segs: null, t: 0, sinking: [] }, face: [1, 1],
     dirty: true, lastDraw: 0, idleT: 0, wasNear: false, nextTimer: 0, sideGlow: [], marqueeMat: null
@@ -178,22 +188,12 @@ function makeCabinet(i) {
   add(new THREE.SphereGeometry(0.025, 12, 10), std(0xe53935, 0.3), -0.16, 1.09, 0.21);
   add(new THREE.CylinderGeometry(0.022, 0.022, 0.02, 14), std(0x43a047, 0.3), 0.08, 1.01, 0.22, -0.25);
   add(new THREE.CylinderGeometry(0.022, 0.022, 0.02, 14), std(0x1e88e5, 0.3), 0.18, 1.0, 0.24, -0.25);
-  // Lit marquee on top, with the cabinet's number
-  const mc = document.createElement('canvas'); mc.width = 512; mc.height = 144;
-  const m = mc.getContext('2d');
-  const grad = m.createLinearGradient(0, 0, 512, 0);
-  grad.addColorStop(0, '#2a0f5c'); grad.addColorStop(0.5, '#5a1a8c'); grad.addColorStop(1, '#2a0f5c');
-  m.fillStyle = grad; m.fillRect(0, 0, 512, 144);
-  m.strokeStyle = '#7af0ff'; m.lineWidth = 6; m.strokeRect(6, 6, 500, 132);
-  m.textAlign = 'center'; m.textBaseline = 'middle';
-  m.font = 'bold 74px Georgia';
-  m.shadowColor = '#ff4fd8'; m.shadowBlur = 22;
-  m.fillStyle = '#ffe36b'; m.fillText('PEAK HOP', 240, 78);
-  m.shadowBlur = 0; m.lineWidth = 2; m.strokeStyle = '#ff4fd8'; m.strokeText('PEAK HOP', 240, 78);
-  m.font = 'bold 40px Georgia'; m.fillStyle = '#7af0ff'; m.fillText(String(i + 1), 470, 80);
-  const mTex = new THREE.CanvasTexture(mc); mTex.colorSpace = THREE.SRGBColorSpace;
+  // Lit marquee on top, with the game's name and the cabinet's number
+  cab.mc = document.createElement('canvas'); cab.mc.width = 512; cab.mc.height = 144;
+  cab.mTex = new THREE.CanvasTexture(cab.mc); cab.mTex.colorSpace = THREE.SRGBColorSpace;
+  paintMarquee(cab);
   add(new THREE.BoxGeometry(0.8, 0.24, 0.48), dark, 0, 1.97, -0.08);
-  cab.marqueeMat = new THREE.MeshBasicMaterial({ map: mTex, toneMapped: false });
+  cab.marqueeMat = new THREE.MeshBasicMaterial({ map: cab.mTex, toneMapped: false });
   add(new THREE.PlaneGeometry(0.78, 0.22), cab.marqueeMat, 0, 1.97, 0.161).castShadow = false;
   // Neon strips down the front edges of the sides
   for (const sx of [-1, 1]) {
@@ -204,6 +204,25 @@ function makeCabinet(i) {
   g.traverse(o => { if (o.isMesh) { o.userData.arcade = true; o.userData.cab = i; } });
   arcadeGroup.add(g);
   return cab;
+}
+// Each game has its own marquee colors: [back color, middle color, letters, glow]
+const MARQUEE = { hop: ['#2a0f5c', '#5a1a8c', '#ffe36b', '#ff4fd8'], bricks: ['#0f2450', '#1a5a8c', '#ffb36b', '#ff7a3d'],
+                  bugs: ['#0c3a1c', '#1a6a34', '#c8ff6b', '#3dff8a'] };
+function paintMarquee(cab) {
+  const m = cab.mc.getContext('2d'), [c0, c1, ink, glow] = MARQUEE[cab.pick] || MARQUEE.hop, title = TITLES[cab.pick] || TITLES.hop;
+  const grad = m.createLinearGradient(0, 0, 512, 0);
+  grad.addColorStop(0, c0); grad.addColorStop(0.5, c1); grad.addColorStop(1, c0);
+  m.shadowBlur = 0;
+  m.fillStyle = grad; m.fillRect(0, 0, 512, 144);
+  m.strokeStyle = '#7af0ff'; m.lineWidth = 6; m.strokeRect(6, 6, 500, 132);
+  m.textAlign = 'center'; m.textBaseline = 'middle';
+  let size = 74;
+  do { m.font = `bold ${size}px Georgia`; size -= 2; } while (m.measureText(title).width > 380 && size > 30);   // long names get smaller letters
+  m.shadowColor = glow; m.shadowBlur = 22;
+  m.fillStyle = ink; m.fillText(title, 240, 78);
+  m.shadowBlur = 0; m.lineWidth = 2; m.strokeStyle = glow; m.strokeText(title, 240, 78);
+  m.font = 'bold 40px Georgia'; m.fillStyle = '#7af0ff'; m.fillText(String(cab.i + 1), 470, 80);
+  cab.mTex.needsUpdate = true;
 }
 const cabs = [0, 1, 2].map(makeCabinet);
 export function arcadePickables() { return [arcadeGroup]; }
@@ -334,8 +353,8 @@ function drawGame() {
   else { let left = 0; for (const v of g.rem.values()) left += v; msg = `${left} TO GO`; mcol = 'rgba(255,255,255,0.7)'; }
   neonText(msg, CW / 2, CH - 20, msg.endsWith('TO GO') ? 18 : 26, mcol);
 }
-function topList(obj, better, fmt, title, y0) {
-  const rows = Object.values(obj || {}).filter(r => r && r.name).sort(better).slice(0, 7);
+function topList(obj, better, fmt, title, y0, n = 7) {
+  const rows = Object.values(obj || {}).filter(r => r && r.name).sort(better).slice(0, n);
   neonText(title, CW / 2, y0, 24, '#7af0ff');
   if (!rows.length) { neonText('NO SCORES YET', CW / 2, y0 + 50, 18, 'rgba(255,255,255,0.6)'); return; }
   rows.forEach((r, i) => {
@@ -345,27 +364,54 @@ function topList(obj, better, fmt, title, y0) {
     neonText(fmt(r), CW - 110, y, 20, '#ffe36b', 'right');
   });
 }
-function drawIdle() {
+const byScore = (p, q) => q.score - p.score;
+function scoresOf(game) { return game === 'hop' ? scores : best[game]; }
+function drawIdle() {   // nobody's at this cabinet: its game's name and high scores
   background();
-  neonText('PEAK HOP', CW / 2, 46, 52, '#ff4fd8');
-  const page = (idleFlips + C.i) % 2;   // the screens take turns, so one shows high scores while the next shows the daily
-  if (page === 0) topList(scores, (p, q) => q.score - p.score, r => String(r.score), 'HIGH SCORES', 110);
+  const pick = C.pick;
+  neonText(TITLES[pick], CW / 2, 46, pick === 'bugs' ? 44 : 52, (MARQUEE[pick] || MARQUEE.hop)[3]);
+  const page = (idleFlips + C.i) % 2;   // Peak Hop screens take turns, so one shows high scores while the next shows the daily
+  if (pick !== 'hop' || page === 0) topList(scoresOf(pick), byScore, r => String(r.score), 'HIGH SCORES', 110);
   else topList(daily, (p, q) => p.undos - q.undos || p.secs - q.secs, r => `${r.undos} UNDO`, "TODAY'S DAILY", 110);
   const blink = !fancy || Math.floor(performance.now() / 600) % 2 === 0;
-  const who = occupant(C);
-  if (who && C.live.name) neonText(`${String(C.live.name).toUpperCase()} IS PICKING A GAME`, CW / 2, CH - 26, 18, '#ffffff');
-  else if (blink) neonText('CLICK THE CABINET TO PLAY', CW / 2, CH - 26, 20, '#ffffff');
+  if (blink) neonText('CLICK THE CABINET TO PLAY', CW / 2, CH - 26, 20, '#ffffff');
+}
+const MENU_Y = 100, MENU_GAP = 54;
+function drawMenu() {   // someone's at the cabinet picking a game
+  background();
+  neonText('PICK A GAME', CW / 2, 40, 32, '#7af0ff');
+  GAME_LIST.forEach((g, j) => {
+    const y = MENU_Y + j * MENU_GAP, on = C.pick === g;
+    if (on) {
+      sg.fillStyle = 'rgba(255,79,216,0.18)'; sg.fillRect(70, y - 24, CW - 140, 48);
+      sg.strokeStyle = '#ff4fd8'; sg.lineWidth = 2; sg.strokeRect(70, y - 24, CW - 140, 48);
+    }
+    neonText((on ? '▶ ' : '') + TITLES[g], CW / 2, y, on ? 30 : 24, on ? '#ffe36b' : 'rgba(255,255,255,0.6)');
+  });
+  topList(scoresOf(C.pick), byScore, r => String(r.score), 'HIGH SCORES', 268, 4);
+  const blink = !fancy || Math.floor(performance.now() / 600) % 2 === 0;
+  if (blink) neonText(C.pick === 'hop' ? '↑ ↓ PICK · ENTER RUN · D DAILY' : '↑ ↓ PICK · ENTER TO PLAY', CW / 2, CH - 22, 18, '#ffffff');
+}
+function drawAct() {   // Bricks or Bug Invaders
+  const l = C.live;
+  ACT_GAMES[l.mode].draw(sg, C.act, { W: CW, H: CH, fancy, color: RAINBOW_CSS[colorIndex(l)], name: l.name || '',
+    neon: neonText, bg: background, now: performance.now() });
 }
 function drawScreen(cab) {
   C = cab; sg = cab.sg;
   fancy = !!S.atArcade && focus === cab.i;
-  if (cab.game && occupant(cab) && cab.live.mode) drawGame(); else drawIdle();
+  const mode = cab.live.mode || '', here = !!occupant(cab);
+  if (here && isAct(mode) && cab.act) drawAct();
+  else if (here && isHop(mode) && cab.game) drawGame();
+  else if (here && !mode) drawMenu();
+  else drawIdle();
   cab.tex.needsUpdate = true;
 }
 
 // ---------- Applying the shared state ----------
 function syncGame(cab, animate) {
-  if (!occupant(cab) || !cab.live.mode) { cab.game = null; cab.gameKey = ''; cab.dirty = true; return; }
+  syncAct(cab);
+  if (!occupant(cab) || !isHop(cab.live.mode)) { cab.game = null; cab.gameKey = ''; cab.dirty = true; return; }
   const level = levelFor(cab);
   if (!level) return;
   const key = cab.levelCache.key;
@@ -379,6 +425,14 @@ function syncGame(cab, animate) {
     cab.gameKey = key;
     cab.anim.segs = null; cab.anim.sinking = [];
   }
+  cab.dirty = true;
+}
+function syncAct(cab) {   // Bricks or Bug Invaders: the player runs the game; everyone else shows the latest copy
+  const mode = cab.live.mode;
+  if (!occupant(cab) || !isAct(mode)) { cab.act = null; return; }
+  if (cab.mine && cab.act && cab.actMode === mode) return;   // your own game: your screen is the real one
+  cab.act = ACT_GAMES[mode].unpack(cab.live.snap);
+  cab.actMode = mode;
   cab.dirty = true;
 }
 function playMove(cab, d) {   // hop on the screen, with sounds for whoever is standing at that cabinet
@@ -433,8 +487,11 @@ export function arcadeEnter(i) {   // take a cabinet; resolves true if it's your
 export function arcadeLeave() {
   const cab = myCab();
   if (!cab) return;
+  if (cab.act && isAct(cab.live.mode) && cab.act.ph === 'play' && cab.act.sc > 0) saveBest(cab.live.mode, cab.act.sc);   // walking away still counts your score
   cab.mine = false;
+  cab.act = null;
   clearTimeout(cab.nextTimer);
+  releaseInput();
   runTransaction(cab.liveRef, d => (d && d.user === myId ? null : undefined)).catch(() => {});
   try { onDisconnect(cab.liveRef).cancel(); } catch (e) {}
   refreshArcadeUI();
@@ -447,6 +504,7 @@ function startRun() {
   const cab = myCab();
   if (!cab) return;
   clearTimeout(cab.nextTimer);
+  if (cab.pick !== 'hop') setPick(cab, 'hop');
   writeLive(cab, { mode: 'run', seed: Math.floor(Math.random() * 1e9), level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
   syncGame(cab, false);
   refreshArcadeUI();
@@ -455,10 +513,67 @@ function startDaily() {
   const cab = myCab();
   if (!cab) return;
   clearTimeout(cab.nextTimer);
+  if (cab.pick !== 'hop') setPick(cab, 'hop');
   const day = dayKey();
   writeLive(cab, { mode: 'daily', seed: hashText('peakhop' + day), day, level: 1, moves: '', undos: 0, restarts: 0, score: 0, gain: 0, phase: 'play', started: serverNow() });
   syncGame(cab, false);
   refreshArcadeUI();
+}
+function startAct(game) {   // a new game of Bricks or Bug Invaders
+  const cab = myCab();
+  if (!cab || !isAct(game)) return;
+  clearTimeout(cab.nextTimer);
+  if (cab.pick !== game) setPick(cab, game);
+  cab.act = ACT_GAMES[game].create();
+  cab.actMode = game;
+  cab.sendT = 0;
+  writeLive(cab, { mode: game, phase: 'play', moves: '', score: 0, snap: ACT_GAMES[game].pack(cab.act), started: serverNow() });
+  syncGame(cab, false);
+  sound('buy');
+  refreshArcadeUI();
+}
+function startPicked() {   // Enter or ▶ in the menu
+  const cab = myCab();
+  if (!cab) return;
+  if (cab.pick === 'hop') startRun(); else startAct(cab.pick);
+}
+function toMenu() {   // back to the game menu (a Bricks or Bug Invaders score still counts)
+  const cab = myCab();
+  if (!cab || !cab.live.mode) return;
+  if (cab.act && isAct(cab.live.mode) && cab.act.ph === 'play' && cab.act.sc > 0) saveBest(cab.live.mode, cab.act.sc);
+  clearTimeout(cab.nextTimer);
+  cab.act = null;
+  writeLive(cab, { mode: '', phase: '', moves: '', snap: null });
+  syncGame(cab, false);
+  sound('card');
+  refreshArcadeUI();
+}
+function setPick(cab, game) {   // change which game this cabinet is set to (everyone sees it)
+  if (!GAME_LIST.includes(game) || cab.pick === game) return;
+  cab.pick = game;
+  set(ref(db, 'room/arcade/pick/c' + cab.i), game).catch(e => console.warn('Arcade pick', e));
+  paintMarquee(cab);
+  cab.dirty = true;
+  refreshArcadeUI();
+}
+function stepPick(dir) {   // ↑ ↓ in the menu
+  const cab = myCab();
+  if (!cab || cab.live.mode) return;
+  setPick(cab, GAME_LIST[(GAME_LIST.indexOf(cab.pick) + dir + GAME_LIST.length) % GAME_LIST.length]);
+  sound('flip');
+}
+function saveBest(game, score) {   // a Bricks or Bug Invaders high score
+  if (!isAct(game) || !(score > 0)) return;
+  const top = Object.values(best[game] || {}).reduce((m, r) => Math.max(m, (r && r.score) || 0), 0);
+  const r = ref(db, `room/arcade/best/${game}/${keyOf(S.myName)}`);
+  runTransaction(r, d => {
+    if (d && d.score >= score) return;
+    return { name: S.myName, c: S.myHue, score, at: serverNow() };
+  }).then(t => {
+    if (!t.committed) return;
+    banner(`🏆 New best: ${score}`, 2.5);
+    if (score > top && hooks.addSys) hooks.addSys(`🕹️ ${S.myName} set the ${TITLES[game] === 'BRICKS' ? 'Bricks' : 'Bug Invaders'} high score: ${score}!`, S.myHue);
+  }).catch(e => console.warn('Arcade best', e));
 }
 export function arcadeHop(d) {
   const cab = myCab();
@@ -520,18 +635,43 @@ function saveDaily(cab) {
 }
 
 // Tapping the screen hops toward where you tapped (up-left, up-right, down-left or down-right of your hopper)
+// In the menu, tapping a game picks it, and tapping the picked one starts it
 export function arcadeTap(point, i) {
   const cab = myCab();
-  if (!cab || cab.i !== i || !cab.game || cab.live.phase !== 'play') return;
+  if (!cab || cab.i !== i) return;
   const u = ((point.x - cab.x) / SCREEN_W + 0.5) * CW, v = (0.5 - (point.y - SCREEN_Y) / SCREEN_H) * CH;
+  if (!cab.live.mode) {
+    const j = Math.round((v - MENU_Y) / MENU_GAP);
+    if (j >= 0 && j < GAME_LIST.length && Math.abs(v - (MENU_Y + j * MENU_GAP)) < 27) {
+      if (cab.pick === GAME_LIST[j]) startPicked(); else { setPick(cab, GAME_LIST[j]); sound('flip'); }
+    }
+    return;
+  }
+  if (isAct(cab.live.mode)) { if (cab.act && cab.act.ph === 'over') startAct(cab.live.mode); return; }   // play is by holding the screen
+  if (!cab.game || cab.live.phase !== 'play') return;
   const L = layout(cab.game.level), p = cubeTop(L, cab.game.x, cab.game.y);
   const dx = u - p.x, dy = v - (p.y - L.a * 0.35);
   arcadeHop(dy < 0 ? (dx < 0 ? 0 : 1) : (dx < 0 ? 2 : 3));
 }
 // Keyboard: arrows (turned a quarter so ↑ hops up-right), Q W A S, or the number pad 7 9 1 3
 const KEYS = { ArrowLeft: 0, ArrowUp: 1, ArrowDown: 2, ArrowRight: 3, q: 0, w: 1, a: 2, s: 3, Q: 0, W: 1, A: 2, S: 3, '7': 0, '9': 1, '1': 2, '3': 3 };
+const ACT_KEYS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'a', 'A', 'd', 'D', 'w', 'W']);
 export function arcadeKey(key) {
-  if (!myCab()) return false;
+  const cab = myCab();
+  if (!cab) return false;
+  const mode = cab.live.mode || '';
+  if (!mode) {   // the menu
+    if (key === 'ArrowUp' || key === 'ArrowLeft' || key === 'w' || key === 'W') { stepPick(-1); return true; }
+    if (key === 'ArrowDown' || key === 'ArrowRight' || key === 's' || key === 'S') { stepPick(1); return true; }
+    if (key === 'Enter' || key === ' ') { startPicked(); return true; }
+    if ((key === 'd' || key === 'D') && cab.pick === 'hop') { startDaily(); return true; }
+    return false;
+  }
+  if (key === 'm' || key === 'M') { toMenu(); return true; }
+  if (isAct(mode)) {   // moving and shooting are read straight from the keys being held (see "Holding keys and buttons")
+    if (key === 'Enter' && cab.act && cab.act.ph === 'over') { startAct(mode); return true; }
+    return ACT_KEYS.has(key);
+  }
   if (key in KEYS) { arcadeHop(KEYS[key]); return true; }
   if (key === 'z' || key === 'Z' || key === 'Backspace') { undo(); return true; }
   if (key === 'r' || key === 'R') { restart(); return true; }
@@ -543,21 +683,168 @@ const aInfo = document.getElementById('arcadeInfo');
 const padBtns = ['aUL', 'aUR', 'aDL', 'aDR'].map((id, d) => { const b = document.getElementById(id); b.addEventListener('click', () => arcadeHop(d)); return b; });
 const aUndo = document.getElementById('aUndo'), aRestart = document.getElementById('aRestart');
 const aRun = document.getElementById('aRun'), aDaily = document.getElementById('aDaily');
+const aPad = document.getElementById('arcadePad'), aBtns = document.getElementById('arcadeBtns'), aBack = document.getElementById('aBack');
+// New parts of the bar: the three game buttons (in the menu), the ◀ fire ▶ buttons (in Bricks and Bug Invaders), and 🎮 Games
+const barStyle = document.createElement('style');
+barStyle.textContent = `#aGames, #aMove { display: inline-block; vertical-align: middle; }
+  #actionBar #aGames button { font-size: 15px; padding: 8px 12px; margin: 3px; background: #d9c8ff; }
+  #actionBar #aGames button.on { background: #ffe36b; box-shadow: 0 0 0 3px rgba(255,255,255,0.5) inset, 0 3px 10px rgba(0,0,0,0.5); }
+  #actionBar #aMove button { font-size: 24px; width: 68px; padding: 8px 0; margin: 3px; background: #7af0ff; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #actionBar #aMove button.fire { background: #ff8a65; }
+  #actionBar #aMove button.held { filter: brightness(0.8); }`;
+document.head.appendChild(barStyle);
+const aGames = document.createElement('div');
+aGames.id = 'aGames';
+const gameBtns = GAME_LIST.map(g => {
+  const b = document.createElement('button');
+  b.textContent = LABELS[g];
+  b.addEventListener('click', () => { const cab = myCab(); if (cab && !cab.live.mode) { setPick(cab, g); sound('flip'); } b.blur(); });
+  aGames.appendChild(b);
+  return b;
+});
+const aMove = document.createElement('div');
+aMove.id = 'aMove';
+const btnHeld = { left: false, fire: false, right: false };
+function holdButton(text, what, cls) {   // a button that counts as held down while your finger or mouse is on it
+  const b = document.createElement('button');
+  b.textContent = text;
+  if (cls) b.className = cls;
+  const on = e => { e.preventDefault(); btnHeld[what] = true; b.classList.add('held'); };
+  const off = () => { btnHeld[what] = false; b.classList.remove('held'); };
+  b.addEventListener('pointerdown', on);
+  b.addEventListener('pointerup', off);
+  b.addEventListener('pointerleave', off);
+  b.addEventListener('pointercancel', off);
+  b.addEventListener('contextmenu', e => e.preventDefault());
+  aMove.appendChild(b);
+  return b;
+}
+holdButton('◀', 'left');
+const fireBtn = holdButton('🔥', 'fire', 'fire');
+holdButton('▶', 'right');
+aPad.parentNode.insertBefore(aGames, aPad);
+aPad.parentNode.insertBefore(aMove, aBtns);
+const aMenu = document.createElement('button');
+aMenu.textContent = '🎮 Games';
+aBtns.insertBefore(aMenu, aBack);
+aMenu.addEventListener('click', () => { toMenu(); aMenu.blur(); });
 aUndo.addEventListener('click', undo);
 aRestart.addEventListener('click', restart);
-aRun.addEventListener('click', startRun);
-aDaily.addEventListener('click', startDaily);
+aRun.addEventListener('click', () => {
+  const cab = myCab();
+  aRun.blur();
+  if (!cab) return;
+  const mode = cab.live.mode || '';
+  if (!mode) startPicked(); else if (isAct(mode)) startAct(mode); else startRun();
+});
+aDaily.addEventListener('click', () => { aDaily.blur(); startDaily(); });
+function actInfo(cab) {   // the line above the buttons during Bricks or Bug Invaders
+  const st = cab.act, G = ACT_GAMES[cab.live.mode];
+  if (!st || !G) return '';
+  if (st.ph === 'over') return `${G.label} · game over · score ${st.sc}`;
+  return `${G.label} · ${G.what === 'LEVEL' ? 'level ' + st.lv : 'wave ' + st.wv} · score ${st.sc} · ${st.li} ${G.what === 'LEVEL' ? 'ball' : 'ship'}${st.li === 1 ? '' : 's'} left`;
+}
 export function refreshArcadeUI() {
   const cab = myCab();
   if (!cab) return;
-  const live = cab.live, game = cab.game;
-  const playing = !!(game && live.mode && live.phase === 'play');
+  const live = cab.live, game = cab.game, mode = live.mode || '';
+  const menu = !mode, hop = isHop(mode), act = isAct(mode);
+  const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+  show(aGames, menu);
+  gameBtns.forEach((b, j) => b.classList.toggle('on', cab.pick === GAME_LIST[j]));
+  show(aPad, hop);
+  show(aUndo, hop); show(aRestart, hop);
+  show(aMove, act);
+  fireBtn.textContent = mode === 'bricks' ? '⬆' : '🔥';
+  fireBtn.title = mode === 'bricks' ? 'Launch the ball' : 'Shoot';
+  show(aDaily, (menu && cab.pick === 'hop') || hop);
+  show(aMenu, !menu);
+  const playing = !!(game && hop && live.phase === 'play');
   padBtns.forEach(b => { b.disabled = !playing; });
   aUndo.disabled = aRestart.disabled = !(playing && game.moves.length);
-  aRun.textContent = live.mode === 'run' && live.phase !== 'done' ? '🎲 New run' : '🎲 Run';
-  if (!live.mode) aInfo.textContent = `🕹️ Cabinet ${cab.i + 1} · pick 🎲 Run (10 levels) or 📅 Daily map`;
-  else if (live.mode === 'daily') aInfo.textContent = `📅 Daily map · undos ${live.undos || 0}`;
-  else aInfo.textContent = `Level ${live.level}/${RUN_LEVELS} · score ${live.score || 0}${live.undos || live.restarts ? '' : ' · perfect so far'}`;
+  if (menu) aRun.textContent = cab.pick === 'hop' ? '🎲 Run' : '▶ Play';
+  else if (act) aRun.textContent = '▶ New game';
+  else aRun.textContent = mode === 'run' && live.phase !== 'done' ? '🎲 New run' : '🎲 Run';
+  let info;
+  if (menu) info = `🕹️ Cabinet ${cab.i + 1} · pick a game, then ${cab.pick === 'hop' ? '🎲 Run (10 levels) or 📅 Daily map' : '▶ Play'}`;
+  else if (act) info = actInfo(cab);
+  else if (mode === 'daily') info = `📅 Daily map · undos ${live.undos || 0}`;
+  else info = `Level ${live.level}/${RUN_LEVELS} · score ${live.score || 0}${live.undos || live.restarts ? '' : ' · perfect so far'}`;
+  if (info !== cab.lastInfo) { cab.lastInfo = info; aInfo.textContent = info; }
+}
+
+// ---------- Holding keys and buttons, and holding the screen, for Bricks and Bug Invaders ----------
+const keyHeld = { left: false, right: false, fire: false };
+let touchId = null, touchU = null;   // a finger (or mouse button) held on the screen, and where across it is
+function releaseInput() {
+  keyHeld.left = keyHeld.right = keyHeld.fire = false;
+  btnHeld.left = btnHeld.right = btnHeld.fire = false;
+  touchId = null; touchU = null;
+}
+function actPlaying() { const cab = myCab(); return cab && S.atArcade && isAct(cab.live.mode) ? cab : null; }
+function keyChange(e, down) {
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  if (!actPlaying()) { if (!down) releaseInput(); return; }
+  const k = e.key;
+  if (k === 'ArrowLeft' || k === 'a' || k === 'A') keyHeld.left = down;
+  else if (k === 'ArrowRight' || k === 'd' || k === 'D') keyHeld.right = down;
+  else if (k === ' ' || k === 'ArrowUp' || k === 'w' || k === 'W') keyHeld.fire = down;
+  else return;
+  e.preventDefault();
+}
+window.addEventListener('keydown', e => keyChange(e, true));
+window.addEventListener('keyup', e => keyChange(e, false));
+window.addEventListener('blur', releaseInput);   // switching windows lets go of everything
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+function screenSpot(e, cab) {   // where the pointer is on the cabinet's screen, in screen pixels
+  ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const o = ray.ray.origin, d = ray.ray.direction, z = AZ + 0.137;
+  if (Math.abs(d.z) < 1e-6) return null;
+  const t = (z - o.z) / d.z;
+  if (t < 0) return null;
+  return { u: ((o.x + d.x * t - cab.x) / SCREEN_W + 0.5) * CW, v: (0.5 - (o.y + d.y * t - SCREEN_Y) / SCREEN_H) * CH };
+}
+canvas.addEventListener('pointerdown', e => {
+  const cab = actPlaying();
+  if (!cab) return;
+  const p = screenSpot(e, cab);
+  if (!p || p.u < -40 || p.u > CW + 40 || p.v < -40 || p.v > CH + 40) return;
+  touchId = e.pointerId;
+  touchU = Math.max(0, Math.min(CW, p.u));
+});
+window.addEventListener('pointermove', e => {
+  if (e.pointerId !== touchId) return;
+  const cab = actPlaying();
+  if (!cab) { touchId = null; touchU = null; return; }
+  const p = screenSpot(e, cab);
+  if (p) touchU = Math.max(0, Math.min(CW, p.u));
+});
+function touchEnd(e) { if (e.pointerId === touchId) { touchId = null; touchU = null; } }
+window.addEventListener('pointerup', touchEnd);
+window.addEventListener('pointercancel', touchEnd);
+function playerInput() {   // holding the screen moves you there and fires (Bug Invaders) or launches (Bricks) by itself
+  return { left: keyHeld.left || btnHeld.left, right: keyHeld.right || btnHeld.right,
+           fire: keyHeld.fire || btnHeld.fire || touchId !== null, px: touchId !== null ? touchU : null };
+}
+function runMyAct(cab, dt) {   // your own Bricks or Bug Invaders game, every frame
+  const G = ACT_GAMES[cab.live.mode], st = cab.act;
+  if (!G || !st) return;
+  const wasOver = st.ph === 'over', ev = [];
+  G.step(st, dt, playerInput(), ev);
+  for (const name of new Set(ev)) sound(name);
+  const over = !wasOver && st.ph === 'over';
+  cab.sendT += dt;
+  if (over || ev.length && cab.sendT > 0.06 || cab.sendT >= 0.12) {   // about 8 copies a second for watchers
+    cab.sendT = 0;
+    writeLive(cab, { snap: G.pack(st), score: st.sc });
+    refreshArcadeUI();
+  }
+  cab.dirty = true;
+  if (over) {
+    saveBest(cab.live.mode, st.sc);
+    if (st.sc > 0) banner(`🕹️ Game over · ${st.sc}`, 2);
+  }
 }
 
 // ---------- Listening ----------
@@ -573,6 +860,14 @@ function listenDaily() {
 export function startArcade() {
   for (const cab of cabs) onValue(cab.liveRef, s => applyLive(cab, s.val()));
   onValue(ref(db, 'room/arcade/scores'), s => { scores = s.val() || {}; allDirty(); });
+  for (const g of Object.keys(best)) onValue(ref(db, 'room/arcade/best/' + g), s => { best[g] = s.val() || {}; allDirty(); });
+  onValue(ref(db, 'room/arcade/pick'), s => {   // which game each cabinet is set to
+    const v = s.val() || {};
+    for (const cab of cabs) {
+      const g = GAME_LIST.includes(v['c' + cab.i]) ? v['c' + cab.i] : GAME_LIST[cab.i];
+      if (g !== cab.pick) { cab.pick = g; paintMarquee(cab); cab.dirty = true; if (cab.mine) refreshArcadeUI(); }
+    }
+  });
   listenDaily();
   setInterval(listenDaily, 60000);
 }
@@ -591,6 +886,10 @@ export function updateArcade(dt) {
       anim.t += dt;
       if (anim.t >= anim.segs.length * 0.17) { anim.segs = null; if (cab.mine) refreshArcadeUI(); cab.dirty = true; }
       moving = true;
+    }
+    if (cab.act && occupant(cab) && isAct(cab.live.mode)) {   // Bricks or Bug Invaders running on this cabinet
+      if (cab.mine) runMyAct(cab, dt); else ACT_GAMES[cab.live.mode].drift(cab.act, dt);
+      if (cab.act && cab.act.ph === 'play') moving = true;
     }
     if (anim.sinking.length) {
       anim.sinking.forEach(s => { s.t += dt; });
