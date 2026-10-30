@@ -138,7 +138,7 @@ function myCab() { return cabs.find(c => c.mine) || null; }
 // ---------- The cabinets ----------
 export const arcadeGroup = new THREE.Group();
 scene.add(arcadeGroup);
-const AXS = [2.6, 1.7, 0.8];                // across the back wall, right side (the first one is the original)
+const AXS = [3.95, 2.95, 1.95];             // the back wall's right corner, beside the game room door (number 1 is in the corner)
 const AZ = -ROOM / 2 + 0.38;
 const LIVE_PATHS = ['room/arcade/live', 'room/arcade/live2', 'room/arcade/live3'];
 const BODY_COLS = [0x1d1640, 0x10343a, 0x3a1424];   // purple, teal and red cabinets

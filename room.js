@@ -108,19 +108,22 @@ const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.06, 32), tab
 base.position.y = 0.03;
 [top, leg, base].forEach(m => { m.castShadow = true; m.receiveShadow = true; table.add(m); });
 
-// Yellow neon strip around the side of the table edge: a bright tube with layered glow
-function neonLayer(tube, color, opacity) {
-  const m = new THREE.Mesh(new THREE.TorusGeometry(1.004, tube, 12, 160),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false,
-      blending: THREE.AdditiveBlending, toneMapped: false }));
+// Neon tubes: a bright core with layered glow. Their color follows the light switch (see "Ceiling ring light" below).
+const neonMats = [];   // { mat, core } for every neon layer in the room
+function neonTube(parent, radius, tube, opacity, core, y) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false,
+    blending: THREE.AdditiveBlending, toneMapped: false });
+  const m = new THREE.Mesh(new THREE.TorusGeometry(radius, tube, 12, 160), mat);
   m.rotation.x = Math.PI / 2;
-  m.position.y = TABLE_Y - 0.03;     // middle of the table's edge
-  table.add(m);
+  m.position.y = y;
+  parent.add(m);
+  neonMats.push({ mat, core });
 }
-neonLayer(0.004, 0xfff3b0, 1.0);    // hot white-yellow core
-neonLayer(0.009, 0xffd23a, 0.55);   // inner glow
-neonLayer(0.02, 0xffb81e, 0.18);    // soft outer glow
-neonLayer(0.04, 0xff9f10, 0.06);    // faint haze
+// Strip around the side of the table edge
+neonTube(table, 1.004, 0.004, 1.0, true, TABLE_Y - 0.03);    // hot core
+neonTube(table, 1.004, 0.009, 0.55, false, TABLE_Y - 0.03);  // inner glow
+neonTube(table, 1.004, 0.02, 0.18, false, TABLE_Y - 0.03);   // soft outer glow
+neonTube(table, 1.004, 0.04, 0.06, false, TABLE_Y - 0.03);   // faint haze
 
 // ---------- Chairs ----------
 const chairs = [];
@@ -145,7 +148,7 @@ function makeChair(i) {
 }
 for (let i = 0; i < SEATS; i++) makeChair(i);
 
-// ---------- Two windows whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
+// ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
 const skyCanvas = document.createElement('canvas');
 skyCanvas.width = 256; skyCanvas.height = 192;
 const skyCtx = skyCanvas.getContext('2d');
@@ -153,9 +156,9 @@ const skyTex = new THREE.CanvasTexture(skyCanvas);
 skyTex.colorSpace = THREE.SRGBColorSpace;
 const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
 const windowLights = [];
-for (const side of [-1, 1]) {                      // light coming in through each window
+{                                                  // light coming in through the window
   const l = new THREE.DirectionalLight(0x8fa8ff, 0.35);
-  l.position.set(side * 8, 4, 0);
+  l.position.set(-8, 4, 0);
   l.target.position.set(0, 0, 0);
   scene.add(l, l.target);
   windowLights.push(l);
@@ -205,10 +208,9 @@ function makeWindow(x, z, rotY) {
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWindow(-ROOM / 2 + 0.02, 0, Math.PI / 2);     // left wall, centered
-makeWindow(ROOM / 2 - 0.02, 0, -Math.PI / 2);     // right wall, centered
+makeWindow(-ROOM / 2 + 0.02, 0, Math.PI / 2);     // the wall beside the sketch board, centered
 
-// ---------- Two green dot-matrix wall clocks (your local time, with A or P) ----------
+// ---------- A green dot-matrix wall clock (your local time, with A or P) ----------
 const CLK_FONT = {
   ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
   'A': ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
@@ -234,8 +236,7 @@ function makeWallClock(x, z, rotY) {
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(-ROOM / 2 + 0.03, -1.5, Math.PI / 2);   // left wall, beside the window on the side away from the lamp
-makeWallClock(ROOM / 2 - 0.03, 1.5, -Math.PI / 2);     // right wall, beside the window on the side away from the lamp
+makeWallClock(-ROOM / 2 + 0.03, -1.5, Math.PI / 2);   // beside the window
 
 function updateClock() {
   const d = new Date();
@@ -260,8 +261,8 @@ function updateClock() {
   clockTex.needsUpdate = true;
 }
 
-// ---------- Door on the front wall (click it twice to leave the room) ----------
-const doorGroup = (function door() {
+// ---------- Doors: the way in on the front wall (click it twice to leave), and the game room door on the back wall ----------
+function makeDoor(x, z, rotY, tag) {
   const g = new THREE.Group();
   const trim = std(0xe8dcc4, 0.6);
   const wood = std(0x5a3a24, 0.65);
@@ -273,48 +274,34 @@ const doorGroup = (function door() {
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), std(0xc9a227, 0.3, { metalness: 0.8 }));
   knob.position.set(0.34, 1.0, 0.06);
   g.add(knob);
-  g.position.set(1.5, 0, ROOM / 2 - 0.03);
-  g.rotation.y = Math.PI;
-  g.traverse(o => { if (o.isMesh) o.userData.door = true; });
+  g.position.set(x, 0, z);
+  g.rotation.y = rotY;
+  g.traverse(o => { if (o.isMesh) o.userData[tag] = true; });
   scene.add(g);
   return g;
+}
+const doorGroup = makeDoor(1.5, ROOM / 2 - 0.03, Math.PI, 'door');
+const gameDoorGroup = makeDoor(0, -ROOM / 2 + 0.03, 0, 'gameDoor');
+(function gameDoorSign() {   // a glowing sign over the game room door
+  const t = paintTexture(1024, 256, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = 'bold 110px Georgia';
+    g.shadowColor = '#7af0ff'; g.shadowBlur = 36;
+    g.strokeStyle = '#7af0ff'; g.lineWidth = 8; g.strokeText('Game Room', w / 2 + 40, h / 2 + 6);
+    g.shadowBlur = 10; g.fillStyle = '#e8fdff'; g.fillText('Game Room', w / 2 + 40, h / 2 + 6);
+    g.font = '96px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
+    g.shadowBlur = 0; g.fillText('🎱', 150, h / 2 + 6);
+  });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.375), new THREE.MeshBasicMaterial({ map: t, transparent: true, toneMapped: false, depthWrite: false }));
+  sign.position.set(0, 2.5, 0.01);
+  sign.userData.gameDoor = true;
+  gameDoorGroup.add(sign);
 })();
 
-// ---------- The Lucky Corner: red carpet, rope posts and a neon sign around the slot machines ----------
+// ---------- The Lucky Corner: a neon sign above the three slot machines in the back-left corner ----------
 const luckySign = (function luckyCorner() {
-  const CX = -2.7, WALL = -ROOM / 2;
-  // Red carpet with a gold border
-  const carpetTex = paintTexture(512, 256, (g, w, h) => {
-    g.fillStyle = '#7a1424'; g.fillRect(0, 0, w, h);
-    for (let i = 0; i < 400; i++) { g.fillStyle = `rgba(${rnd() < 0.5 ? '255,120,140' : '40,0,10'},0.08)`; g.fillRect(rnd() * w, rnd() * h, 3, 3); }
-    g.strokeStyle = '#d4a63c'; g.lineWidth = 10; g.strokeRect(14, 14, w - 28, h - 28);
-    g.strokeStyle = '#a3192e'; g.lineWidth = 4; g.strokeRect(30, 30, w - 60, h - 60);
-  });
-  const carpet = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.7), std(0xffffff, 1, { map: carpetTex }));
-  carpet.rotation.x = -Math.PI / 2; carpet.position.set(CX, 0.008, WALL + 0.85); carpet.receiveShadow = true;
-  scene.add(carpet);
-  // Brass posts with velvet rope along the front, with a gap in the middle to walk through
-  const brass = std(0xd4a63c, 0.25, { metalness: 0.9 });
-  const velvet = std(0x9c1530, 0.8);
-  const postAt = (x, z) => {
-    const p = new THREE.Group();
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.04, 20), brass); base.position.y = 0.02;
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.86, 12), brass); pole.position.y = 0.45;
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 12), brass); ball.position.y = 0.9;
-    [base, pole, ball].forEach(m => { m.castShadow = true; p.add(m); });
-    p.position.set(x, 0, z); scene.add(p);
-    return new THREE.Vector3(x, 0.84, z);
-  };
-  const rope = (a, b) => {
-    const mid = a.clone().add(b).multiplyScalar(0.5); mid.y -= 0.18;   // a gentle sag
-    const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
-    const m = new THREE.Mesh(new THREE.TubeGeometry(curve, 20, 0.018, 8, false), velvet);
-    m.castShadow = true; scene.add(m);
-  };
-  const FZ = WALL + 1.75;   // front line of the corner
-  const p1 = postAt(-4.3, FZ), p2 = postAt(-3.3, FZ), p3 = postAt(-2.1, FZ), p4 = postAt(-1.1, FZ), p5 = postAt(-1.1, WALL + 0.9);
-  rope(p1, p2); rope(p3, p4); rope(p4, p5);   // the gap between posts 2 and 3 is the way in
-  // Neon "Lucky Corner" sign on the wall above the machines
+  const CX = -2.95, WALL = -ROOM / 2;
   const signTex = paintTexture(1024, 256, (g, w, h) => {
     g.clearRect(0, 0, w, h);
     g.textAlign = 'center'; g.textBaseline = 'middle';
@@ -327,7 +314,7 @@ const luckySign = (function luckyCorner() {
     g.fillText('🍀', 70, h / 2 + 6); g.fillText('🍀', w - 70, h / 2 + 6);
   });
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: signTex, transparent: true, toneMapped: false, depthWrite: false }));
-  sign.position.set(CX, 2.62, WALL + 0.02);
+  sign.position.set(CX, 2.78, WALL + 0.02);
   scene.add(sign);
   return { sign };
 })();
@@ -339,30 +326,72 @@ function updateLuckySign() {   // the neon hums along and blinks off for a momen
 }
 
 // ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.75));
+scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.8));
 
-// Two floor lamps in opposite corners (no overhead light)
-function floorLamp(x, z, shadows) {
-  const g = new THREE.Group();
-  const metal = std(0x2a2a2a, 0.4, { metalness: 0.6 });
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.6, 12), metal);
-  pole.position.y = 0.8; pole.castShadow = true; g.add(pole);
-  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.22, 0.04, 24), metal);
-  foot.position.y = 0.02; g.add(foot);
-  const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.35, 24, 1, true),
-    new THREE.MeshStandardMaterial({ color: 0xf2e2c2, emissive: 0xffc982, emissiveIntensity: 0.5, side: THREE.DoubleSide }));
-  shade.position.y = 1.65; g.add(shade);
-  const light = new THREE.PointLight(0xffc982, 5, 0, 1);   // softer falloff so it reaches the table
-  light.position.y = 1.6;
-  light.castShadow = shadows;
-  light.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
-  light.shadow.bias = -0.002;
-  g.add(light);
-  g.position.set(x, 0, z);
-  scene.add(g);
+// ---------- Ceiling ring light over the table: its neon color is shared, and the table's neon matches it ----------
+const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
+                     ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
+const RING_R = 1.5, RING_Y = HEIGHT - 0.07;
+const ring = new THREE.Group();
+scene.add(ring);
+const ringBase = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.035, 12, 160), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
+ringBase.rotation.x = Math.PI / 2; ringBase.position.y = RING_Y + 0.03;
+ring.add(ringBase);
+for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {   // four thin rods holding it to the ceiling
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.06, 6), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
+  rod.position.set(Math.cos(a) * RING_R, HEIGHT - 0.03, Math.sin(a) * RING_R);
+  ring.add(rod);
 }
-floorLamp(ROOM / 2 - 0.6, -ROOM / 2 + 0.6, true);
-floorLamp(-ROOM / 2 + 0.6, ROOM / 2 - 0.6, !PHONE);   // phones: only one lamp casts shadows (much lighter to draw)
+neonTube(ring, RING_R, 0.014, 1.0, true, RING_Y);    // hot core
+neonTube(ring, RING_R, 0.03, 0.5, false, RING_Y);    // inner glow
+neonTube(ring, RING_R, 0.07, 0.15, false, RING_Y);   // soft outer glow
+neonTube(ring, RING_R, 0.14, 0.05, false, RING_Y);   // faint haze
+// The room's main light, a soft warm white from the middle of the ceiling (gentle, so nothing glares white)
+const roomLight = new THREE.PointLight(0xfff0dc, 6, 0, 1);
+roomLight.position.set(0, HEIGHT - 0.25, 0);
+roomLight.castShadow = true;
+roomLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
+roomLight.shadow.bias = -0.002;
+scene.add(roomLight);
+// A little of the neon color spills into the room
+const tintLight = new THREE.PointLight(0xffe8c4, 2.2, 0, 1.2);
+tintLight.position.set(0, HEIGHT - 0.3, 0);
+scene.add(tintLight);
+let neonIndex = -1;
+function setNeon(i) {
+  i = Number.isInteger(i) && i >= 0 && i < NEON_COLORS.length ? i : 0;
+  if (i === neonIndex) return;
+  neonIndex = i;
+  const col = new THREE.Color(NEON_COLORS[i][1]);
+  const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.65);   // the core looks almost white, tinted
+  for (const n of neonMats) n.mat.color.copy(n.core ? hot : col);
+  tintLight.color.copy(col);
+  switchGlow.color.copy(col);
+}
+
+// The light switch on the wall beside the entry door: click it to change the neon color for everyone
+const switchGroup = new THREE.Group();
+const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: false });
+(function lightSwitch() {
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.015), std(0xf2ead8, 0.5));
+  const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
+  toggle.position.z = 0.015;
+  switchGroup.add(plate, toggle);
+  switchGroup.position.set(2.45, 1.25, ROOM / 2 - 0.015);
+  switchGroup.rotation.y = Math.PI;
+  switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
+  scene.add(switchGroup);
+})();
+setNeon(0);
+onValue(ref(db, 'room/decor/neon'), s => setNeon(s.val()));
+function nextNeon() {
+  if (!S.myName) return;
+  const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
+  set(ref(db, 'room/decor/neon'), i).catch(e => console.warn('Light switch', e));
+  setNeon(i);
+  showBanner(`💡 ${NEON_COLORS[i][0]}`, 1.5);
+  sfx.ping();
+}
 
 // ---------- Other people: a snowman in their chair with a name tag ----------
 const avatars = {};   // id -> { g, name, c }
@@ -508,6 +537,43 @@ for (const [name, g] of Object.entries(GAMES)) {
 const msgs = document.getElementById('msgs');
 const chatInput = document.getElementById('chatInput');
 const newDot = document.getElementById('newDot');
+
+// Two tabs on the chat box: 💬 Chat is only what people type, 🔔 Room is joins, leaves and game news
+const tabStyle = document.createElement('style');
+tabStyle.textContent = `#chatTabs { display: flex; gap: 6px; margin-bottom: 6px; }
+  #chatTabs button { position: relative; margin: 0; font-size: 13px; padding: 4px 12px; background: rgba(233,201,143,0.25); color: #f3e6cf; }
+  #chatTabs button.on { background: #e9c98f; color: #2a1c10; }
+  #roomDot { display: none; position: absolute; top: 1px; right: 1px; width: 8px; height: 8px; border-radius: 50%; background: #ff3b2f; }
+  #roomLog { display: none; height: 150px; overflow-y: auto; font-size: 14px; margin-bottom: 8px; word-wrap: break-word; }
+  #roomLog .sys { font-style: italic; opacity: 0.75; font-size: 13px; }
+  body.roomTab #msgs { display: none; }
+  body.roomTab #roomLog { display: block; }
+  @media (max-width: 700px) { #roomLog { height: 110px; } }`;
+document.head.appendChild(tabStyle);
+const chatTabs = document.createElement('div');
+chatTabs.id = 'chatTabs';
+const chatTabBtn = document.createElement('button');
+chatTabBtn.textContent = '💬 Chat';
+const roomTabBtn = document.createElement('button');
+roomTabBtn.textContent = '🔔 Room';
+const roomDot = document.createElement('span');
+roomDot.id = 'roomDot';
+roomTabBtn.appendChild(roomDot);
+chatTabs.append(chatTabBtn, roomTabBtn);
+const roomLog = document.createElement('div');
+roomLog.id = 'roomLog';
+msgs.parentNode.insertBefore(chatTabs, msgs);
+msgs.parentNode.insertBefore(roomLog, msgs.nextSibling);
+function showTab(room) {
+  document.body.classList.toggle('roomTab', room);
+  chatTabBtn.classList.toggle('on', !room);
+  roomTabBtn.classList.toggle('on', room);
+  if (room) { roomDot.style.display = 'none'; roomLog.scrollTop = roomLog.scrollHeight; }
+  else msgs.scrollTop = msgs.scrollHeight;
+}
+chatTabBtn.addEventListener('click', () => showTab(false));
+roomTabBtn.addEventListener('click', () => showTab(true));
+showTab(false);
 function addMsg(name, text, mine, c) {
   const div = document.createElement('div');
   const b = document.createElement('b');
@@ -522,7 +588,7 @@ function addMsg(name, text, mine, c) {
     if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
   }
 }
-function addSys(text, c) {   // grey line in chat, like "Sam joined the room"
+function addSys(text, c) {   // grey line in the Room tab, like "Sam joined the room"
   const div = document.createElement('div');
   div.className = 'sys';
   const dot = document.createElement('span');
@@ -530,8 +596,10 @@ function addSys(text, c) {   // grey line in chat, like "Sam joined the room"
   if (Number.isInteger(c) && c >= 0 && c < 7) dot.style.color = RAINBOW_CSS[c];
   div.appendChild(dot);
   div.appendChild(document.createTextNode(text));
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
+  roomLog.appendChild(div);
+  while (roomLog.children.length > 100) roomLog.removeChild(roomLog.firstChild);   // keep only the latest 100
+  roomLog.scrollTop = roomLog.scrollHeight;
+  if (!document.body.classList.contains('roomTab')) roomDot.style.display = 'block';
 }
 hooks.addSys = addSys;
 
@@ -560,6 +628,7 @@ function sendChat() {
   if (!text || !S.myName) return;
   push(ref(db, 'room/chat'), { name: S.myName, text: text.slice(0, 200), t: Date.now(), id: myId, c: S.myHue });
   chatInput.value = '';
+  showTab(false);   // back to the chat to see your message
 }
 document.getElementById('send').addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
@@ -772,7 +841,7 @@ watchBar.append(watchInfo, watchBack);
 document.body.appendChild(watchBar);
 watchBack.addEventListener('click', () => { if (S.atArcade) leaveArcade(); else leaveSlot(); });
 function whoIsAt(kind, i) {   // the name of whoever is playing the slot machine or that arcade cabinet
-  const id = Object.keys(S.presence).find(k => k !== myId && (kind === 'arcade' ? arcadeCabOf(k) === i : slotOccupantOf(k) >= 0));
+  const id = Object.keys(S.presence).find(k => k !== myId && (kind === 'arcade' ? arcadeCabOf(k) === i : slotOccupantOf(k) === i));
   return id ? S.presence[id].name : '';
 }
 function stepUp(kind, i, watch) {   // move the camera up to the machine
@@ -809,7 +878,7 @@ function enterSlot(i) {
   slotEnter(i).then(ok => {
     if (anim) { if (ok) slotLeave(); return; }
     if (ok) stepUp('slot', i, false);
-    else if (whoIsAt('slot')) stepUp('slot', i, true);   // someone's playing: watch them up close
+    else if (whoIsAt('slot', i)) stepUp('slot', i, true);   // someone's playing: watch them up close
   });
 }
 function leaveSlot() {
@@ -1049,13 +1118,15 @@ function pickUnder(e) {
     : S.activeGame === 'stack' ? [...chairs, ...stackPickables()]
     : S.activeGame === 'checkers' || S.activeGame === 'chess' ? [...chairs, ...boardGamePickables()] : [...chairs, felt];
   const hits = raycaster.intersectObjects(S.atArcade ? arcadePickables() : S.atSlot >= 0 ? slotPickables()
-    : [...targets, ...slotPickables(), ...arcadePickables(), ...sketchPickables(), doorGroup], true);
+    : [...targets, ...slotPickables(), ...arcadePickables(), ...sketchPickables(), doorGroup, gameDoorGroup, switchGroup], true);
   if (!hits.length) return null;
   const h = hits[0];
   if (h.object.userData.arcade) return S.boardView ? null : { arcade: true, cab: h.object.userData.cab || 0, screen: !!h.object.userData.arcadeScreen, point: h.point };
   if (h.object.userData.machine !== undefined) return S.boardView ? null : { machine: h.object.userData.machine, lever: !!h.object.userData.lever };
   if (h.object.userData.door) return S.boardView ? null : { door: true };
   if (h.object.userData.sketch) return S.boardView ? null : { sketch: true };
+  if (h.object.userData.gameDoor) return S.boardView ? null : { gameDoor: true };
+  if (h.object.userData.lightSwitch) return S.boardView ? null : { lightSwitch: true };
   if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
   if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
   if (h.object.userData.sq !== undefined) return { cell: h.object.userData.sq };   // a checkers or chess piece
@@ -1129,7 +1200,7 @@ window.addEventListener('pointermove', e => {
     const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
     const slot = p && p.slot !== undefined;
     const machine = p && p.machine !== undefined && (S.atSlot < 0 || p.lever);
-    canvas.style.cursor = (chair || legal || grabbable || slot || machine || (p && p.door) || (p && p.sketch) || (p && p.arcade && (!S.atArcade || p.screen))) ? 'pointer' : 'grab';
+    canvas.style.cursor = (chair || legal || grabbable || slot || machine || (p && (p.door || p.sketch || p.gameDoor || p.lightSwitch)) || (p && p.arcade && (!S.atArcade || p.screen))) ? 'pointer' : 'grab';
     if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
   }
 });
@@ -1143,6 +1214,8 @@ window.addEventListener('pointerup', e => {
     else if (p && p.arcade) enterArcade(p.cab);
     else if (p && p.machine !== undefined) enterSlot(p.machine);
     else if (p && p.sketch) enterSketch();
+    else if (p && p.lightSwitch) nextNeon();
+    else if (p && p.gameDoor) showBanner('🎱 The game room opens soon: LittlePool is on the way!', 3);
     else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
     else if (p && p.door) leaveRoom();
     else if (p && p.cell !== undefined) { if (S.activeGame === 'othello') play(p.cell); else boardGameTap(p.cell); }
