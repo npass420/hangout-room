@@ -1,13 +1,16 @@
 // =====================================================================
-// sketch.js — LittleSketch, a slow, no-timer drawing and guessing game on the board by the door
-// One player draws a secret word and everyone else guesses. Every line shows up on the wall board
-// as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
-// then 1 each, and the drawer gets 1 point for every right guess. Whiteboard or chalkboard.
+// sketch.js — LittleSketch, a slow, no-timer drawing board by the door, with two modes
+// Game mode: one player draws a secret word and everyone else guesses. Every line shows up on the wall
+// board as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
+// then 1 each, and the drawer gets 1 point for every right guess.
+// Doodle mode: no word and no points. One person takes the pen and draws while everyone else watches,
+// and the drawing stays on the board until someone clears it.
+// Tools: 12 colors, a paint bucket (fill), an eraser and three brush sizes. Whiteboard or chalkboard.
 // This file adds its own panel, drawing pad and guess box to the page, so index.html needs no changes.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, remove, push, onValue, onChildAdded, onChildChanged, onChildRemoved,
-         runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+         runTransaction, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, serverNow, scene, ROOM, std, RAINBOW_CSS } from './core.js';
 import { sfx } from './sounds.js';
 function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[name](...args); } catch (e) { console.warn('Sketch sound', e); } }
@@ -16,6 +19,7 @@ export const SKETCH_NAME = 'LittleSketch';
 const REVEAL_SECS = 5;            // how long the answer shows before the next turn
 const CW = 1200, CH = 800;        // drawing size (3 wide by 2 tall)
 const SIZES = [5, 12, 28];        // brush sizes: small, medium, large
+const FILL_TOL = 100;             // how different a color can be and still get filled by the bucket
 
 // ---------- Words ----------
 const WORDS = {
@@ -46,12 +50,16 @@ function matches(guess, word) {   // spaces, capitals and a plural "s" don't mat
   return !!b && (a === b || a === b + 's' || a + 's' === b || a === b + 'es');
 }
 
-// ---------- The two board styles ----------
+// ---------- The two board styles (12 colors each; on the chalkboard, black becomes a light chalk gray) ----------
 const STYLES = {
-  white: { name: 'Whiteboard', bg: '#f6f6f1', ink: ['#222222', '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#6d4c41'],
-           frame: 0xb8bcc2, rough: 0.35, metal: 0.7, head: '#2b2f36' },
-  chalk: { name: 'Chalkboard', bg: '#2e4a37', ink: ['#f4f4ee', '#fff176', '#f8a5c2', '#8fd3ff', '#a8e6a1', '#ffbe76', '#d6a8ff'],
-           frame: 0x6b4226, rough: 0.7, metal: 0, head: '#3b2716' }
+  white: { name: 'Whiteboard', bg: '#f6f6f1',
+           ink: ['#222222', '#ffffff', '#9e9e9e', '#6d4c41', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#4fc3f7', '#1e88e5', '#8e24aa', '#f06292'],
+           names: ['Black', 'White', 'Gray', 'Brown', 'Red', 'Orange', 'Yellow', 'Green', 'Light blue', 'Blue', 'Purple', 'Pink'],
+           tray: [0, 4, 9, 7], frame: 0xb8bcc2, rough: 0.35, metal: 0.7, head: '#2b2f36' },
+  chalk: { name: 'Chalkboard', bg: '#2e4a37',
+           ink: ['#cfd0c8', '#fbfbf6', '#9a9c96', '#c49a6c', '#ff8a80', '#ffbe76', '#fff176', '#a8e6a1', '#b3e5fc', '#6fb8ff', '#d6a8ff', '#f8a5c2'],
+           names: ['Light gray', 'White', 'Gray', 'Brown', 'Red', 'Orange', 'Yellow', 'Green', 'Light blue', 'Blue', 'Purple', 'Pink'],
+           tray: [1, 6, 11, 9], frame: 0x6b4226, rough: 0.7, metal: 0, head: '#3b2716' }
 };
 function makeBg(style) {   // the empty board, drawn once
   const c = document.createElement('canvas'); c.width = CW; c.height = CH;
@@ -72,15 +80,19 @@ function makeBg(style) {   // the empty board, drawn once
 const BGS = { white: makeBg('white'), chalk: makeBg('chalk') };
 
 // ---------- Shared state ----------
-const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true };
+const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true, mode: 'game' };
 let settings = { ...DEFAULTS };
 let game = {};          // room/sketch/game: who's playing, whose turn, the word, who has guessed it
-let strokes = {};       // room/sketch/strokes: every line on the board
+let strokes = {};       // room/sketch/strokes: every line on the board in game mode
+let doodles = {};       // room/sketch/doodles: every line on the doodle board (stays until cleared)
+let pen = {};           // room/sketch/pen: who holds the doodle pen
 let guessesRaw = {};    // room/sketch/guesses: wrong guesses and "got it!" lines
 let wins = {};          // room/sketch/wins: all-time games won, by name
 let dirty = true, headDirty = true, lastDraw = 0;
 const gameRef = ref(db, 'room/sketch/game');
 const strokesRef = ref(db, 'room/sketch/strokes');
+const doodlesRef = ref(db, 'room/sketch/doodles');
+const penRef = ref(db, 'room/sketch/pen');
 const guessesRef = ref(db, 'room/sketch/guesses');
 function chipKey(name) { return String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?'; }
 function styleOf() { return STYLES[settings.style] ? settings.style : 'white'; }
@@ -89,6 +101,8 @@ function active(g, id) { return !!(g.players && g.players[id] && !g.players[id].
 function activeCount(g) { return Object.keys(g.players || {}).filter(id => active(g, id)).length; }
 function orderOf(g) { return Array.isArray(g.order) ? g.order.slice() : []; }
 function playing(g) { return g.st === 'pick' || g.st === 'draw' || g.st === 'reveal'; }
+function doodling() { return settings.mode === 'doodle' && !playing(game); }   // a running game always wins
+function penHolder() { return pen && pen.id && here(pen.id) ? pen.id : ''; }   // the pen is free once its holder leaves the room
 function isPlayer(id = myId) { return !!(game.players && game.players[id] && !game.players[id].out); }
 function nameOf(id) { const p = game.players && game.players[id]; return p ? p.name : (S.presence[id] ? S.presence[id].name : 'someone'); }
 function allGot(g) {
@@ -107,6 +121,9 @@ const cv = document.createElement('canvas');
 cv.width = CW; cv.height = CH; cv.id = 'skCanvas';
 const g2 = cv.getContext('2d');
 const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+const cacheCv = document.createElement('canvas');   // the board with every fill done so far, so fills don't have to be redone each time
+cacheCv.width = CW; cacheCv.height = CH;
+const cacheG = cacheCv.getContext('2d', { willReadFrequently: true });
 const headCv = document.createElement('canvas');
 headCv.width = 1024; headCv.height = 112;
 const headCtx = headCv.getContext('2d');
@@ -127,13 +144,13 @@ const trayItems = { white: new THREE.Group(), chalk: new THREE.Group() };
   add(new THREE.BoxGeometry(0.05, BH + 0.1, 0.05), frameMat, BW / 2 + 0.025, 0, 0.03);
   add(new THREE.BoxGeometry(BW * 0.8, 0.025, 0.09), frameMat, 0, -BH / 2 - 0.06, 0.07);                     // tray
   const TY = -BH / 2 - 0.035;
-  STYLES.white.ink.slice(0, 4).forEach((col, k) => {                                                        // markers
-    const m = add(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 12), std(col, 0.5), -0.6 + k * 0.17, TY, 0.07, trayItems.white);
+  STYLES.white.tray.forEach((ci, k) => {                                                                     // markers
+    const m = add(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 12), std(STYLES.white.ink[ci], 0.5), -0.6 + k * 0.17, TY, 0.07, trayItems.white);
     m.rotation.z = Math.PI / 2;
   });
   add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x333333, 0.9), 0.55, TY + 0.005, 0.07, trayItems.white); // eraser
-  STYLES.chalk.ink.slice(0, 4).forEach((col, k) => {                                                        // chalk sticks
-    add(new THREE.BoxGeometry(0.08, 0.015, 0.015), std(col, 0.95), -0.6 + k * 0.15, TY - 0.005, 0.07, trayItems.chalk);
+  STYLES.chalk.tray.forEach((ci, k) => {                                                                     // chalk sticks
+    add(new THREE.BoxGeometry(0.08, 0.015, 0.015), std(STYLES.chalk.ink[ci], 0.95), -0.6 + k * 0.15, TY - 0.005, 0.07, trayItems.chalk);
   });
   add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x8b5a2b, 0.8), 0.55, TY + 0.005, 0.07, trayItems.chalk);  // brush
   g.add(trayItems.white, trayItems.chalk);
@@ -166,7 +183,11 @@ function applyStyle() {
 
 // ---------- Drawing the board ----------
 const patterns = {};
-function eraserStyle(g, s) { if (!patterns[s]) patterns[s] = g.createPattern(BGS[s], 'no-repeat'); return patterns[s]; }
+function eraserStyle(g, s) {   // the eraser paints the empty board back on
+  const key = s + (g === cacheG ? 'c' : 'v');
+  if (!patterns[key]) patterns[key] = g.createPattern(BGS[s], 'no-repeat');
+  return patterns[key];
+}
 function drawStroke(g, st, s, line) {
   const pts = String(line.p || '').split(' ').map(t => t.split(',').map(Number)).filter(a => a.length === 2 && isFinite(a[0]) && isFinite(a[1]));
   if (!pts.length) return;
@@ -190,6 +211,60 @@ function drawStroke(g, st, s, line) {
   }
   g.restore();
 }
+function hexRgb(h) { const n = parseInt(String(h).slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function floodFill(g, sx, sy, color) {   // the paint bucket: fill the area you tapped, up to the lines around it
+  sx = Math.max(0, Math.min(CW - 1, Math.round(sx))); sy = Math.max(0, Math.min(CH - 1, Math.round(sy)));
+  const img = g.getImageData(0, 0, CW, CH), d = img.data, N = CW * CH;
+  const [fr, fg, fb] = hexRgb(color);
+  const i0 = (sy * CW + sx) * 4, tr = d[i0], tg = d[i0 + 1], tb = d[i0 + 2];
+  if (Math.abs(tr - fr) + Math.abs(tg - fg) + Math.abs(tb - fb) < 24) return;   // already that color
+  const seen = new Uint8Array(N);
+  const like = p => { const i = p * 4; return Math.abs(d[i] - tr) + Math.abs(d[i + 1] - tg) + Math.abs(d[i + 2] - tb) <= FILL_TOL; };
+  const stack = [sx, sy];
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop(), row = y * CW;
+    if (seen[row + x] || !like(row + x)) continue;
+    let lx = x, rx = x;
+    while (lx > 0 && !seen[row + lx - 1] && like(row + lx - 1)) lx--;
+    while (rx < CW - 1 && !seen[row + rx + 1] && like(row + rx + 1)) rx++;
+    let up = false, dn = false;
+    for (let xx = lx; xx <= rx; xx++) {
+      seen[row + xx] = 1;
+      if (y > 0) { const q = row - CW + xx, ok = !seen[q] && like(q); if (ok && !up) stack.push(xx, y - 1); up = ok; }
+      if (y < CH - 1) { const q = row + CW + xx, ok = !seen[q] && like(q); if (ok && !dn) stack.push(xx, y + 1); dn = ok; }
+    }
+  }
+  for (let p = 0; p < N; p++) {   // one pixel past the edge too, so no pale ring is left along the lines
+    if (seen[p] !== 1) continue;
+    const x = p % CW;
+    if (x > 0 && !seen[p - 1]) seen[p - 1] = 2;
+    if (x < CW - 1 && !seen[p + 1]) seen[p + 1] = 2;
+    if (p >= CW && !seen[p - CW]) seen[p - CW] = 2;
+    if (p + CW < N && !seen[p + CW]) seen[p + CW] = 2;
+  }
+  for (let p = 0; p < N; p++) if (seen[p]) { const i = p * 4; d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = 255; }
+  g.putImageData(img, 0, 0);
+}
+function fillAt(g, st, line) {
+  const a = String(line.p || '').split(',').map(Number);
+  if (a.length !== 2 || !isFinite(a[0]) || !isFinite(a[1])) return;
+  try { floodFill(g, a[0], a[1], st.ink[line.k] || st.ink[0]); } catch (e) { console.warn('Sketch fill', e); }
+}
+function paintLine(g, st, s, line) { if (line.f) fillAt(g, st, line); else drawStroke(g, st, s, line); }
+// Everything up to the newest fill is kept in the cache; only lines after it are drawn fresh each time
+let cacheId = '', cacheSigs = [];
+function sigOf(key, l) { return key + '|' + (l.f ? 'f' : '') + (l.e ? 'e' : '') + l.k + '|' + l.z + '|' + l.p; }
+function drawLines(list, s, st) {   // list is [key, line] pairs, oldest first
+  let lastFill = -1;
+  list.forEach(([, l], i) => { if (l.f) lastFill = i; });
+  const id = s + '|' + (doodling() ? 'd' : 'g' + (game.rn || 0));
+  const want = list.slice(0, lastFill + 1).map(([k, l]) => sigOf(k, l));
+  const same = cacheId === id && cacheSigs.length <= want.length && cacheSigs.every((x, i) => x === want[i]);
+  if (!same) { cacheG.globalAlpha = 1; cacheG.shadowBlur = 0; cacheG.drawImage(BGS[s], 0, 0); cacheSigs = []; cacheId = id; }
+  for (let i = cacheSigs.length; i <= lastFill; i++) { paintLine(cacheG, st, s, list[i][1]); cacheSigs.push(want[i]); }
+  g2.drawImage(cacheCv, 0, 0);
+  for (let i = lastFill + 1; i < list.length; i++) paintLine(g2, st, s, list[i][1]);
+}
 function fitText(g, text, size, y, color) {
   let s = size;
   g.font = `bold ${s}px Georgia`;
@@ -202,24 +277,25 @@ function idleScreen(g, st) {
     fitText(g, '✏️', 120, 290, st.ink[0]);
     fitText(g, `${nameOf(game.drawer)} is picking a word…`, 64, 460, st.ink[0]);
   } else if (game.st === 'over') {
-    fitText(g, game.winner ? `🏆 ${game.winner} wins!` : 'Game over', 84, 190, st.ink[2]);
+    fitText(g, game.winner ? `🏆 ${game.winner} wins!` : 'Game over', 84, 190, st.ink[9]);
     const list = Object.values(game.players || {}).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6);
     list.forEach((p, i) => fitText(g, `${p.name} · ${p.score || 0}`, 48, 320 + i * 66, st.ink[0]));
   } else {
-    fitText(g, SKETCH_NAME, 120, 330, st.ink[2]);
+    fitText(g, SKETCH_NAME, 120, 330, st.ink[9]);
     fitText(g, 'Click the board to play', 48, 470, st.ink[0]);
   }
 }
-function strokeList() {
+function strokeList() {   // this round's lines in game mode
   const rn = game.rn || 0;
-  return Object.keys(strokes).sort().map(k => strokes[k]).filter(l => l && l.r === rn);
+  return Object.keys(strokes).sort().map(k => [k, strokes[k]]).filter(([, l]) => l && l.r === rn);
 }
+function doodleList() { return Object.keys(doodles).sort().map(k => [k, doodles[k]]).filter(([, l]) => l); }
 function redraw() {
   const s = styleOf(), st = STYLES[s], g = g2;
   g.globalAlpha = 1; g.shadowBlur = 0;
-  g.drawImage(BGS[s], 0, 0);
-  if (game.st === 'draw' || game.st === 'reveal') for (const line of strokeList()) drawStroke(g, st, s, line);
-  else idleScreen(g, st);
+  if (doodling()) drawLines(doodleList(), s, st);
+  else if (game.st === 'draw' || game.st === 'reveal') drawLines(strokeList(), s, st);
+  else { g.drawImage(BGS[s], 0, 0); idleScreen(g, st); }
   tex.needsUpdate = true;
 }
 function blanks() {
@@ -230,7 +306,8 @@ function drawHead() {   // the sign above the board
   const g = headCtx, W = headCv.width, H = headCv.height;
   g.fillStyle = STYLES[styleOf()].head; g.fillRect(0, 0, W, H);
   let text = '✏️ ' + SKETCH_NAME;
-  if (game.st === 'pick') text = `✏️ ${nameOf(game.drawer)} is picking…`;
+  if (doodling()) text = penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
+  else if (game.st === 'pick') text = `✏️ ${nameOf(game.drawer)} is picking…`;
   else if (game.st === 'draw') text = blanks();
   else if (game.st === 'reveal') text = `It was: ${game.word}`;
   else if (game.st === 'over') text = game.winner ? `🏆 ${game.winner} wins!` : 'Game over';
@@ -306,6 +383,7 @@ function joinGame() {
   }).then(r => { if (r.committed) sound('join'); }).catch(e => console.warn('Sketch join', e));
 }
 function startGame() {
+  if (settings.mode === 'doodle') return;
   txGame(g => {
     if (g.st !== 'lobby') return;
     const ids = Object.keys(g.players || {}).filter(id => here(id) && !g.players[id].out);
@@ -378,7 +456,33 @@ function doneDrawing() {   // the drawer ends the round and shows the answer
 function skipTheirTurn() {   // if the drawer wandered off, anyone playing can move things along
   txGame(g => (g.st === 'pick' && g.drawer !== myId && g.players && g.players[myId] ? advance(g, serverNow()) : undefined));
 }
-function setSetting(key, val) { update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e)); }
+function setSetting(key, val) {
+  if (key === 'mode') {   // the mode can only change when no game is running; going back to Game drops the pen
+    if (playing(game)) return;
+    if (val === 'game') remove(penRef).catch(() => {});
+  }
+  update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e));
+}
+
+// ---------- Doodle mode: one pen, passed around ----------
+function takePen() {
+  if (!S.myName) return;
+  runTransaction(penRef, p => {
+    if (p && p.id && p.id !== myId && S.presence[p.id]) return;   // someone else has it
+    return { id: myId, name: S.myName, c: S.myHue, at: serverNow() };
+  }).then(r => {
+    if (!r.committed) { banner('🖍 Someone else has the pen', 2); return; }
+    onDisconnect(penRef).remove();
+    myKeys = [];
+    sound('join');
+    banner('🖍 You have the pen! Draw anything', 2.5);
+  }).catch(e => console.warn('Sketch pen', e));
+}
+function givePen() {
+  endLine();
+  runTransaction(penRef, p => (p && p.id === myId ? null : undefined)).catch(() => {});
+  try { onDisconnect(penRef).cancel(); } catch (e) {}
+}
 
 // ---------- Guessing ----------
 function sendGuess() {
@@ -428,15 +532,17 @@ css.textContent = `
   #skPad { display: none; position: fixed; left: 50%; top: 56px; transform: translateX(-50%); text-align: center; z-index: 2; }
   body.skPadOn #skPad { display: block; }
   #skPadWord { display: inline-block; font-size: 18px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 5px 14px; border-radius: 14px; margin-bottom: 6px; }
-  #skCanvas { display: block; margin: 0 auto; width: min(56vw, calc((100vh - 210px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
+  #skCanvas { display: block; margin: 0 auto; width: min(56vw, calc((100vh - 240px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
               border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.6); touch-action: none; cursor: crosshair; }
   body:not(.skDrawing) #skCanvas { cursor: default; }
-  #skTools { display: none; margin-top: 8px; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; }
+  body.skFill #skCanvas { cursor: cell; }
+  #skTools { display: none; margin-top: 8px; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; max-width: min(96vw, 760px); margin-left: auto; margin-right: auto; }
   body.skDrawing #skTools { display: flex; }
   #skTools button { font-family: Georgia, serif; font-size: 15px; padding: 6px 12px; border: none; border-radius: 16px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
   #skTools button:disabled { opacity: 0.45; cursor: default; }
-  #skTools button.dot { width: 30px; height: 30px; padding: 0; border-radius: 50%; }
+  #skTools button.dot { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid rgba(0,0,0,0.25); }
   #skTools button.on { outline: 3px solid #ffd54f; outline-offset: 2px; }
+  #skTools .skBreak { flex-basis: 100%; height: 0; }
   #skGuess { display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); gap: 6px; z-index: 2; }
   body.skGuessOn #skGuess { display: flex; }
   #skGuess input { flex: 1; min-width: 0; font-size: 16px; padding: 9px 14px; border-radius: 16px; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
@@ -446,10 +552,10 @@ css.textContent = `
     #skPanel { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 36vh; padding: 8px 10px; }
     #skPad { top: 44px; width: 100vw; }
     #skPadWord { font-size: 15px; padding: 3px 10px; margin-bottom: 4px; }
-    #skCanvas { width: min(96vw, calc((100vh - 44px - var(--skPanelH, 200px) - 130px) * 1.5)); }
+    #skCanvas { width: min(96vw, calc((100vh - 44px - var(--skPanelH, 200px) - 160px) * 1.5)); }
     #skTools { gap: 4px; margin-top: 5px; }
     #skTools button { font-size: 13px; padding: 5px 9px; }
-    #skTools button.dot { width: 26px; height: 26px; }
+    #skTools button.dot { width: 24px; height: 24px; }
     #skGuess { bottom: calc(var(--skPanelH, 200px) + 16px); }
   }`;
 document.head.appendChild(css);
@@ -472,41 +578,54 @@ guessBox.append(guessInput, btn('Guess', sendGuess));
 document.body.appendChild(guessBox);
 guessInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendGuess(); if (e.key === 'Escape') guessInput.blur(); });
 
-// The drawer's tools: colors, eraser, brush sizes, undo, clear, hint, done and skip
-let myColor = 0, mySize = 1, erasing = false;
+// The drawer's tools: 12 colors, pen, bucket, eraser, brush sizes, undo, clear, hint, done, skip and give up pen
+let myColor = 0, mySize = 1, tool = 'pen';   // tool is 'pen', 'fill' or 'erase'
 const colorBtns = [], sizeBtns = [];
-for (let k = 0; k < 7; k++) {
-  const b = btn('', () => { myColor = k; erasing = false; refreshTools(); }, 'dot');
-  b.title = 'Color';
+for (let k = 0; k < 12; k++) {
+  const b = btn('', () => { myColor = k; if (tool === 'erase') tool = 'pen'; refreshTools(); }, 'dot');
   colorBtns.push(b); tools.appendChild(b);
 }
-const eraserBtn = btn('🧽', () => { erasing = true; refreshTools(); });
+tools.appendChild(el('div', 'skBreak'));
+const penBtn = btn('✏️', () => { tool = 'pen'; refreshTools(); });
+penBtn.title = 'Pen';
+const fillBtn = btn('🪣', () => { tool = 'fill'; refreshTools(); });
+fillBtn.title = 'Fill (paint bucket)';
+const eraserBtn = btn('🧽', () => { tool = 'erase'; refreshTools(); });
 eraserBtn.title = 'Eraser';
-tools.appendChild(eraserBtn);
-['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
+tools.append(penBtn, fillBtn, eraserBtn);
+['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; if (tool === 'fill') tool = 'pen'; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
 const undoBtn = btn('↶ Undo', undo);
 const clearBtn = btn('🗑 Clear', clearBoard);
 const hintBtn = btn('💡 Hint', giveHint);
 const doneBtn = btn('✓ Done', doneDrawing);
 const skipBtn = btn('⏭ New words', newWords);
-tools.append(undoBtn, clearBtn, hintBtn, doneBtn, skipBtn);
+const givePenBtn = btn('✋ Give up pen', givePen);
+tools.append(undoBtn, clearBtn, hintBtn, doneBtn, skipBtn, givePenBtn);
 function refreshTools() {
-  const st = STYLES[styleOf()];
-  colorBtns.forEach((b, k) => { b.style.background = st.ink[k]; b.classList.toggle('on', !erasing && myColor === k); });
-  eraserBtn.classList.toggle('on', erasing);
-  sizeBtns.forEach((b, k) => b.classList.toggle('on', mySize === k));
+  const st = STYLES[styleOf()], doodle = doodling();
+  colorBtns.forEach((b, k) => { b.style.background = st.ink[k]; b.title = st.names[k]; b.classList.toggle('on', tool !== 'erase' && myColor === k); });
+  penBtn.classList.toggle('on', tool === 'pen');
+  fillBtn.classList.toggle('on', tool === 'fill');
+  eraserBtn.classList.toggle('on', tool === 'erase');
+  sizeBtns.forEach((b, k) => b.classList.toggle('on', tool !== 'fill' && mySize === k));
+  document.body.classList.toggle('skFill', tool === 'fill');
   const shown = new Set(Array.isArray(game.hint) ? game.hint : []);
   const lettersLeft = [...(game.word || '')].filter((ch, i) => ch !== ' ' && !shown.has(i)).length;
-  hintBtn.style.display = game.set && game.set.hints ? '' : 'none';
+  hintBtn.style.display = !doodle && game.set && game.set.hints ? '' : 'none';
   hintBtn.disabled = lettersLeft <= 1;
+  doneBtn.style.display = doodle ? 'none' : '';
+  skipBtn.style.display = doodle ? 'none' : '';
   skipBtn.disabled = !!(game.got && Object.keys(game.got).length);
-  undoBtn.disabled = !myKeys.some(k => strokes[k]);
+  givePenBtn.style.display = doodle ? '' : 'none';
+  const store = doodle ? doodles : strokes;
+  undoBtn.disabled = !myKeys.some(k => store[k]);
 }
 
 // ---------- Drawing with the mouse or a finger ----------
-let live = null, liveKey = '', liveTimer = 0;
-let myKeys = [];   // my lines this round, newest last (for Undo)
-function canDraw() { return S.atSketch && game.st === 'draw' && game.drawer === myId; }
+let live = null, liveKey = '', liveDoodle = false, liveTimer = 0;
+let myKeys = [];   // my lines and fills this round (or since I took the pen), newest last (for Undo)
+function canDraw() { return !!S.atSketch && (doodling() ? penHolder() === myId : (game.st === 'draw' && game.drawer === myId)); }
+function linesPath(doodle) { return doodle ? 'room/sketch/doodles/' : 'room/sketch/strokes/'; }
 function toPt(e) {
   const r = cv.getBoundingClientRect();
   return [Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * CW), Math.round(Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) * CH)];
@@ -515,17 +634,27 @@ function packed(l) { return { r: l.r, k: l.k, z: l.z, e: l.e, p: l.pts.map(a => 
 function flush() {
   clearTimeout(liveTimer); liveTimer = 0;
   if (!live || !liveKey) return;
-  set(ref(db, 'room/sketch/strokes/' + liveKey), packed(live)).catch(e => console.warn('Sketch line', e));
+  set(ref(db, linesPath(liveDoodle) + liveKey), packed(live)).catch(e => console.warn('Sketch line', e));
 }
 function flushSoon() { if (!liveTimer) liveTimer = setTimeout(flush, 120); }   // send the line a few times a second while drawing
 cv.addEventListener('pointerdown', e => {
   if (!canDraw()) return;
   e.preventDefault();
+  const doodle = doodling(), store = doodle ? doodles : strokes;
+  const key = push(doodle ? doodlesRef : strokesRef).key;
+  if (tool === 'fill') {   // one tap fills; everyone's screen does the filling from just the spot and the color
+    const p = toPt(e), rec = { r: doodle ? 0 : (game.rn || 0), k: myColor, z: 0, e: 0, f: 1, p: p[0] + ',' + p[1] };
+    store[key] = rec; myKeys.push(key); dirty = true;
+    set(ref(db, linesPath(doodle) + key), rec).catch(err => console.warn('Sketch fill', err));
+    sound('flip');
+    refreshTools();
+    return;
+  }
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
-  liveKey = push(strokesRef).key;
-  live = { r: game.rn || 0, k: myColor, z: mySize, e: erasing ? 1 : 0, pts: [toPt(e)] };
+  liveKey = key; liveDoodle = doodle;
+  live = { r: doodle ? 0 : (game.rn || 0), k: myColor, z: mySize, e: tool === 'erase' ? 1 : 0, pts: [toPt(e)] };
   myKeys.push(liveKey);
-  strokes[liveKey] = packed(live); dirty = true;
+  store[liveKey] = packed(live); dirty = true;
   flushSoon();
 });
 cv.addEventListener('pointermove', e => {
@@ -533,7 +662,7 @@ cv.addEventListener('pointermove', e => {
   const p = toPt(e), last = live.pts[live.pts.length - 1];
   if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 3) return;
   live.pts.push(p);
-  strokes[liveKey] = packed(live); dirty = true;
+  (liveDoodle ? doodles : strokes)[liveKey] = packed(live); dirty = true;
   flushSoon();
 });
 function endLine() { if (!live) return; flush(); live = null; liveKey = ''; refreshTools(); }
@@ -541,9 +670,10 @@ cv.addEventListener('pointerup', endLine);
 cv.addEventListener('pointercancel', endLine);
 cv.addEventListener('lostpointercapture', endLine);
 function undo() {
+  const doodle = doodling(), store = doodle ? doodles : strokes;
   while (myKeys.length) {
     const k = myKeys.pop();
-    if (strokes[k]) { delete strokes[k]; dirty = true; remove(ref(db, 'room/sketch/strokes/' + k)).catch(() => {}); break; }
+    if (store[k]) { delete store[k]; dirty = true; remove(ref(db, linesPath(doodle) + k)).catch(() => {}); break; }
   }
   refreshTools();
 }
@@ -551,8 +681,9 @@ let clearArmed = 0;
 function clearBoard() {
   if (Date.now() - clearArmed > 2500) { clearArmed = Date.now(); banner('🗑 Press Clear again to wipe the board', 2.5); return; }
   clearArmed = 0;
-  remove(strokesRef).catch(() => {});
-  strokes = {}; myKeys = []; dirty = true;
+  if (doodling()) { remove(doodlesRef).catch(() => {}); doodles = {}; }
+  else { remove(strokesRef).catch(() => {}); strokes = {}; }
+  myKeys = []; dirty = true;
   refreshTools();
 }
 
@@ -567,24 +698,43 @@ function settingRow(label, key, options) {
   }
   return row;
 }
+const MODE_OPTIONS = [['game', '🎲 Game'], ['doodle', '🖍 Doodle']];
+const BOARD_OPTIONS = [['white', 'Whiteboard'], ['chalk', 'Chalkboard']];
+function doodlePanel() {   // the panel in doodle mode
+  const holder = penHolder();
+  let status;
+  if (holder === myId) status = 'You have the pen. Draw anything, take your time!';
+  else if (holder) status = `🖍 ${pen.name} is doodling…`;
+  else status = 'Nobody has the pen. Take it to draw!';
+  panel.appendChild(el('div', 'skStatus', status));
+  panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
+  const row = el('div', 'skButtons');
+  if (!holder) row.appendChild(btn('🖍 Take the pen', takePen));
+  if (holder === myId) row.appendChild(btn('✋ Give up pen', givePen));
+  row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
+  panel.appendChild(row);
+}
 export function refreshSketchUI(force) {
-  const at = !!S.atSketch;
-  const drawing = at && game.st === 'draw' && game.drawer === myId;
+  const at = !!S.atSketch, doodle = doodling();
+  const drawing = canDraw();
   const got = !!(game.got && game.got[myId]);
   document.body.classList.toggle('skDrawing', drawing);
-  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (game.st === 'draw' || game.st === 'reveal'))));
-  document.body.classList.toggle('skGuessOn', at && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got);
-  padWord.textContent = drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
+  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (doodle || game.st === 'draw' || game.st === 'reveal'))));
+  document.body.classList.toggle('skGuessOn', at && !doodle && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got);
+  if (doodle) padWord.textContent = drawing ? '🖍 Doodle anything · take your time' : penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
+  else padWord.textContent = drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
   if (drawing) refreshTools();
   if (!at) { lastSig = ''; return; }
   const rn = game.rn || 0;
   const guesses = Object.values(guessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));   // only this round's
-  const sig = JSON.stringify([game, settings, guesses, wins, Object.keys(S.presence), narrow()]);
+  const sig = JSON.stringify([game, settings, pen, guesses, wins, Object.keys(S.presence), narrow()]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
   panel.textContent = '';
   panel.appendChild(el('h3', '', '✏️ ' + SKETCH_NAME));
+  if (doodle) { doodlePanel(); return; }
   const me = isPlayer(), drawerName = nameOf(game.drawer), st = game.st || 'lobby';
   let status = '';
   if (st === 'lobby') status = activeCount(game) >= 2 ? 'Ready! Press Start when everyone is in.' : 'Join, then start when 2 or more are in.';
@@ -636,8 +786,9 @@ export function refreshSketchUI(force) {
     panel.appendChild(feed);
   }
 
-  // Settings (the board style can change any time)
-  panel.appendChild(settingRow('Board:', 'style', [['white', 'Whiteboard'], ['chalk', 'Chalkboard']]));
+  // Settings (the board style can change any time; the mode only when no game is running)
+  if (!playing(game)) panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
   if (st === 'lobby' || st === 'over') {
     panel.appendChild(settingRow('Turns each:', 'turns', [[1, '1'], [2, '2'], [3, '3']]));
     panel.appendChild(settingRow('Words:', 'words', [['easy', 'Easy'], ['mixed', 'Mixed'], ['hard', 'Hard']]));
@@ -657,7 +808,7 @@ export function refreshSketchUI(force) {
 }
 window.addEventListener('resize', () => refreshSketchUI(true));
 
-// The room calls these when you walk up to the board and step away
+// The room calls these when you walk up to the board and step away (you keep the doodle pen until you give it up or leave the room)
 export function sketchEnter() { refreshSketchUI(true); }
 export function sketchLeave() { endLine(); refreshSketchUI(true); }
 
@@ -704,13 +855,19 @@ export function updateSketch(dt) {
   const t = performance.now();
   if (dirty && t - lastDraw > 50) { lastDraw = t; dirty = false; redraw(); }
   if (headDirty) { headDirty = false; drawHead(); }
-  if (t - tickAt > 1000) { tickAt = t; tick(); if (S.atSketch) refreshSketchUI(); }
+  if (t - tickAt > 1000) {
+    tickAt = t; tick();
+    if (doodling()) headDirty = true;   // notices when the pen holder leaves the room
+    if (S.atSketch) refreshSketchUI();
+  }
 }
 
 // ---------- Listening ----------
 export function startSketch() {
+  let prevMode = settings.mode;
   onValue(ref(db, 'room/sketch/settings'), s => {
     settings = { ...DEFAULTS, ...(s.val() || {}) };
+    if (settings.mode !== prevMode) { prevMode = settings.mode; endLine(); myKeys = []; }
     applyStyle(); refreshSketchUI();
   });
   onValue(gameRef, s => {
@@ -720,10 +877,21 @@ export function startSketch() {
     dirty = true; headDirty = true;
     refreshSketchUI();
   });
-  const keep = s => { if (s.key !== liveKey) { strokes[s.key] = s.val(); dirty = true; } };   // my own line in progress is drawn from here, not echoed back
-  onChildAdded(strokesRef, keep);
-  onChildChanged(strokesRef, keep);
+  onValue(penRef, s => {
+    pen = s.val() || {};
+    if (pen.id !== myId && live && liveDoodle) endLine();
+    headDirty = true;
+    refreshSketchUI();
+  });
+  // my own line in progress is drawn from here, not echoed back
+  const keepGame = s => { if (s.key !== liveKey) { strokes[s.key] = s.val(); dirty = true; } };
+  const keepDoodle = s => { if (s.key !== liveKey) { doodles[s.key] = s.val(); dirty = true; } };
+  onChildAdded(strokesRef, keepGame);
+  onChildChanged(strokesRef, keepGame);
   onChildRemoved(strokesRef, s => { delete strokes[s.key]; dirty = true; });
+  onChildAdded(doodlesRef, keepDoodle);
+  onChildChanged(doodlesRef, keepDoodle);
+  onChildRemoved(doodlesRef, s => { delete doodles[s.key]; dirty = true; });
   onValue(guessesRef, s => { guessesRaw = s.val() || {}; refreshSketchUI(); });
   onValue(ref(db, 'room/sketch/wins'), s => { wins = s.val() || {}; refreshSketchUI(); });
 }
