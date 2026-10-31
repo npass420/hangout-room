@@ -1,10 +1,12 @@
 // =====================================================================
-// sketch.js — LittleSketch, a slow, no-timer drawing board by the door, with two modes
+// sketch.js — LittleSketch, a slow, no-timer drawing board by the door, with three modes
 // Game mode: one player draws a secret word and everyone else guesses. Every line shows up on the wall
 // board as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
 // then 1 each, and the drawer gets 1 point for every right guess.
 // Doodle mode: no word and no points. One person takes the pen and draws while everyone else watches,
 // and the drawing stays on the board until someone clears it.
+// Guess mode: the board slowly draws a real doodle from Google's "Quick, Draw!" (they live in doodles.js)
+// and everyone at the board races to guess it. Letters show up as hints once the drawing is done.
 // Tools: 12 colors, a paint bucket (fill), an eraser and three brush sizes. Whiteboard or chalkboard.
 // This file adds its own panel, drawing pad and guess box to the page, so index.html needs no changes.
 // =====================================================================
@@ -20,6 +22,9 @@ const REVEAL_SECS = 5;            // how long the answer shows before the next t
 const CW = 1200, CH = 800;        // drawing size (3 wide by 2 tall)
 const SIZES = [5, 12, 28];        // brush sizes: small, medium, large
 const FILL_TOL = 100;             // how different a color can be and still get filled by the bucket
+const BOT_SECS = { slow: 25, normal: 14 };   // Guess mode: how long the board takes to draw a doodle
+const HINT_SECS = 6;              // Guess mode: a new letter shows up this often once the doodle is drawn
+const BOT_WAIT_SECS = 20;         // Guess mode: after the last hint, the answer shows by itself this much later
 
 // ---------- Words ----------
 const WORDS = {
@@ -80,7 +85,7 @@ function makeBg(style) {   // the empty board, drawn once
 const BGS = { white: makeBg('white'), chalk: makeBg('chalk') };
 
 // ---------- Shared state ----------
-const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true, mode: 'game' };
+const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true, mode: 'game', rounds: 10, speed: 'normal' };
 let settings = { ...DEFAULTS };
 let game = {};          // room/sketch/game: who's playing, whose turn, the word, who has guessed it
 let strokes = {};       // room/sketch/strokes: every line on the board in game mode
@@ -88,12 +93,18 @@ let doodles = {};       // room/sketch/doodles: every line on the doodle board (
 let pen = {};           // room/sketch/pen: who holds the doodle pen
 let guessesRaw = {};    // room/sketch/guesses: wrong guesses and "got it!" lines
 let wins = {};          // room/sketch/wins: all-time games won, by name
+let bot = {};           // room/sketch/bot: the Guess mode game (which doodle, when it started, who got it, scores)
+let botGuessesRaw = {}; // room/sketch/botguesses: wrong guesses and "got it!" lines in Guess mode
+let watchers = {};      // room/sketch/watch: who is standing at the board in Guess mode
 let dirty = true, headDirty = true, lastDraw = 0;
 const gameRef = ref(db, 'room/sketch/game');
 const strokesRef = ref(db, 'room/sketch/strokes');
 const doodlesRef = ref(db, 'room/sketch/doodles');
 const penRef = ref(db, 'room/sketch/pen');
 const guessesRef = ref(db, 'room/sketch/guesses');
+const botRef = ref(db, 'room/sketch/bot');
+const botGuessesRef = ref(db, 'room/sketch/botguesses');
+const watchRef = ref(db, 'room/sketch/watch/' + myId);
 function chipKey(name) { return String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?'; }
 function styleOf() { return STYLES[settings.style] ? settings.style : 'white'; }
 function here(id) { return !!(id && S.presence[id]); }
@@ -102,6 +113,8 @@ function activeCount(g) { return Object.keys(g.players || {}).filter(id => activ
 function orderOf(g) { return Array.isArray(g.order) ? g.order.slice() : []; }
 function playing(g) { return g.st === 'pick' || g.st === 'draw' || g.st === 'reveal'; }
 function doodling() { return settings.mode === 'doodle' && !playing(game); }   // a running game always wins
+function guessing() { return settings.mode === 'guess' && !playing(game); }
+function botPlaying(b = bot) { return b.st === 'draw' || b.st === 'reveal'; }
 function penHolder() { return pen && pen.id && here(pen.id) ? pen.id : ''; }   // the pen is free once its holder leaves the room
 function isPlayer(id = myId) { return !!(game.players && game.players[id] && !game.players[id].out); }
 function nameOf(id) { const p = game.players && game.players[id]; return p ? p.name : (S.presence[id] ? S.presence[id].name : 'someone'); }
@@ -290,10 +303,95 @@ function strokeList() {   // this round's lines in game mode
   return Object.keys(strokes).sort().map(k => [k, strokes[k]]).filter(([, l]) => l && l.r === rn);
 }
 function doodleList() { return Object.keys(doodles).sort().map(k => [k, doodles[k]]).filter(([, l]) => l); }
+
+// ---------- Guess mode: the real doodles (loaded only when someone uses Guess mode, so phones don't download them otherwise) ----------
+let DOODLES = null, WORDLIST = [], doodlesLoading = false, doodlesFailed = false;
+function needDoodles() {
+  if (DOODLES || doodlesLoading) return;
+  doodlesLoading = true; doodlesFailed = false;
+  import('./doodles.js').then(m => {
+    DOODLES = m.DOODLES || {}; WORDLIST = Object.keys(DOODLES);
+    dirty = true; headDirty = true; refreshSketchUI(true);
+  }).catch(e => { console.warn('Sketch doodles', e); doodlesLoading = false; doodlesFailed = true; refreshSketchUI(true); });
+}
+const decoded = {};
+function doodleOf(word, idx) {   // the doodle's strokes as points, centered in a 256 by 256 box
+  const key = word + '#' + idx;
+  if (decoded[key]) return decoded[key];
+  const raw = DOODLES && DOODLES[word] && DOODLES[word][idx];
+  if (!raw) return null;
+  const strokes = raw.split(' ').map(t => { const pts = []; for (let i = 0; i + 3 < t.length; i += 4) pts.push([parseInt(t.slice(i, i + 2), 16), parseInt(t.slice(i + 2, i + 4), 16)]); return pts; }).filter(s => s.length);
+  let minX = 255, maxX = 0, minY = 255, maxY = 0;
+  for (const s of strokes) for (const [x, y] of s) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  const dx = (255 - (maxX - minX)) / 2 - minX, dy = (255 - (maxY - minY)) / 2 - minY;
+  const d = { strokes: strokes.map(s => s.map(([x, y]) => [x + dx, y + dy])), total: strokes.reduce((n, s) => n + s.length, 0) };
+  decoded[key] = d;
+  return d;
+}
+function botElapsed(b = bot) { return Math.max(0, (serverNow() - (b.at || 0)) / 1000); }
+function botFrac(b = bot) { return b.st === 'reveal' ? 1 : Math.min(1, botElapsed(b) / (b.dur || BOT_SECS.normal)); }
+function letterCount(w) { return String(w || '').replace(/ /g, '').length; }
+function botHintCount(b = bot) {   // how many letters are showing as hints right now (always at least one stays hidden)
+  if (b.st !== 'draw') return 0;
+  const after = botElapsed(b) - (b.dur || BOT_SECS.normal);
+  return after < 0 ? 0 : Math.max(0, Math.min(letterCount(b.word) - 1, Math.floor(after / HINT_SECS)));
+}
+function botAutoRevealDue(b = bot) {
+  return botElapsed(b) > (b.dur || BOT_SECS.normal) + HINT_SECS * Math.max(0, letterCount(b.word) - 1) + BOT_WAIT_SECS;
+}
+function hintOrder(word, round) {   // the order letters show up in: the same on everyone's screen
+  let h = 7;
+  for (const ch of word + '|' + round) h = (h * 31 + ch.charCodeAt(0)) % 2147483647;
+  const idx = [...word].map((ch, i) => i).filter(i => word[i] !== ' ');
+  for (let k = idx.length - 1; k > 0; k--) { h = (h * 16807) % 2147483647; const j = h % (k + 1); [idx[k], idx[j]] = [idx[j], idx[k]]; }
+  return idx;
+}
+function botBlanks() {
+  const w = bot.word || '';
+  if (bot.st === 'reveal' || bot.st === 'over') return w;
+  const shown = new Set(hintOrder(w, bot.round || 0).slice(0, botHintCount()));
+  return [...w].map((ch, i) => ch === ' ' ? ' ' : (shown.has(i) ? ch.toUpperCase() : '_')).join(' ') + `   (${letterCount(w)})`;
+}
+function drawDoodle(g, st, s, d, frac) {
+  const K = 2.6, ox = (CW - 256 * K) / 2, oy = 30;
+  let left = Math.max(1, Math.ceil(d.total * frac));
+  g.save();
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 9;
+  g.strokeStyle = st.ink[0]; g.fillStyle = st.ink[0];
+  if (s === 'chalk') { g.globalAlpha = 0.9; g.shadowColor = st.ink[0]; g.shadowBlur = 2; }
+  for (const stroke of d.strokes) {
+    if (left <= 0) break;
+    const n = Math.min(stroke.length, left);
+    left -= n;
+    if (n === 1) { g.beginPath(); g.arc(ox + stroke[0][0] * K, oy + stroke[0][1] * K, 4.5, 0, Math.PI * 2); g.fill(); continue; }
+    g.beginPath(); g.moveTo(ox + stroke[0][0] * K, oy + stroke[0][1] * K);
+    for (let i = 1; i < n; i++) g.lineTo(ox + stroke[i][0] * K, oy + stroke[i][1] * K);
+    g.stroke();
+  }
+  g.restore();
+}
+function drawBot(g, st, s) {   // the board in Guess mode
+  g.drawImage(BGS[s], 0, 0);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (!DOODLES) { fitText(g, doodlesFailed ? 'Could not load doodles.js' : 'Loading doodles…', 64, 400, st.ink[0]); return; }
+  if (botPlaying()) {
+    const d = doodleOf(bot.word, bot.idx);
+    if (d) drawDoodle(g, st, s, d, botFrac());
+    if (bot.st === 'reveal') fitText(g, `It was: ${bot.word}`, 60, 750, st.ink[9]);
+  } else if (bot.st === 'over') {
+    fitText(g, bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over', 84, 190, st.ink[9]);
+    const list = Object.values(bot.scores || {}).sort((a, b) => (b.s || 0) - (a.s || 0)).slice(0, 6);
+    list.forEach((p, i) => fitText(g, `${p.name} · ${p.s || 0}`, 48, 320 + i * 66, st.ink[0]));
+  } else {
+    fitText(g, '🤖 Guess the doodle', 100, 330, st.ink[9]);
+    fitText(g, 'Click the board, then press Start', 48, 470, st.ink[0]);
+  }
+}
 function redraw() {
   const s = styleOf(), st = STYLES[s], g = g2;
   g.globalAlpha = 1; g.shadowBlur = 0;
-  if (doodling()) drawLines(doodleList(), s, st);
+  if (guessing()) drawBot(g, st, s);
+  else if (doodling()) drawLines(doodleList(), s, st);
   else if (game.st === 'draw' || game.st === 'reveal') drawLines(strokeList(), s, st);
   else { g.drawImage(BGS[s], 0, 0); idleScreen(g, st); }
   tex.needsUpdate = true;
@@ -306,7 +404,13 @@ function drawHead() {   // the sign above the board
   const g = headCtx, W = headCv.width, H = headCv.height;
   g.fillStyle = STYLES[styleOf()].head; g.fillRect(0, 0, W, H);
   let text = '✏️ ' + SKETCH_NAME;
-  if (doodling()) text = penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
+  if (guessing()) {
+    if (bot.st === 'draw') text = botBlanks();
+    else if (bot.st === 'reveal') text = `It was: ${bot.word}`;
+    else if (bot.st === 'over') text = bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over';
+    else text = '🤖 Guess the doodle';
+  }
+  else if (doodling()) text = penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
   else if (game.st === 'pick') text = `✏️ ${nameOf(game.drawer)} is picking…`;
   else if (game.st === 'draw') text = blanks();
   else if (game.st === 'reveal') text = `It was: ${game.word}`;
@@ -460,8 +564,106 @@ function setSetting(key, val) {
   if (key === 'mode') {   // the mode can only change when no game is running; going back to Game drops the pen
     if (playing(game)) return;
     if (val === 'game') remove(penRef).catch(() => {});
+    if (val !== 'guess' && botPlaying()) set(botRef, { st: 'idle' }).catch(() => {});   // leaving Guess mode ends its game
+    if (val === 'guess') needDoodles();
   }
   update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e));
+}
+
+// ---------- Guess mode: moving its game along ----------
+function botPick(b) {   // a word that hasn't come up lately, and one of its doodles
+  const used = new Set(Array.isArray(b.used) ? b.used : []);
+  const pool = WORDLIST.filter(w => !used.has(w));
+  const list = pool.length ? pool : WORDLIST;
+  const word = list[Math.floor(Math.random() * list.length)];
+  b.word = word; b.idx = Math.floor(Math.random() * DOODLES[word].length);
+  b.used = [...(Array.isArray(b.used) ? b.used : []), word].slice(-120);
+  b.st = 'draw'; b.at = serverNow(); b.got = null; b.revealAt = 0;
+  return b;
+}
+function botFinish(b) {
+  let best = null, tie = false;
+  for (const p of Object.values(b.scores || {})) {
+    if (!best || (p.s || 0) > (best.s || 0)) { best = p; tie = false; }
+    else if ((p.s || 0) === (best.s || 0)) tie = true;
+  }
+  b.winner = best && (best.s || 0) > 0 && !tie ? best.name : '';
+  b.st = 'over'; b.at = serverNow(); b.got = null;
+  return b;
+}
+function txBot(fn) {   // change the Guess game safely, even if several people click at once
+  const prevRound = bot.round || 0;
+  return runTransaction(botRef, b => fn(b || {})).then(r => {
+    if (!r.committed) return r;
+    const v = r.snapshot.val() || {};
+    if ((v.round || 0) !== prevRound || v.st === 'idle') remove(botGuessesRef).catch(() => {});   // fresh guesses each round
+    return r;
+  }).catch(e => console.warn('Sketch guess', e));
+}
+function botWatching() { return Object.keys(watchers).filter(id => here(id)); }
+function botAllGot(b) {
+  const ids = botWatching(), got = b.got || {};
+  return ids.length > 0 && ids.every(id => got[id]);
+}
+function startBot() {
+  if (!DOODLES || !WORDLIST.length) { needDoodles(); return; }
+  txBot(b => {
+    if (botPlaying(b)) return;
+    const fresh = { round: 1, rounds: settings.rounds || 10, dur: BOT_SECS[settings.speed] || BOT_SECS.normal,
+                    scores: {}, used: Array.isArray(b.used) ? b.used : [], winner: '' };
+    return botPick(fresh);
+  });
+}
+function botReveal() { txBot(b => (b.st === 'draw' ? { ...b, st: 'reveal', revealAt: serverNow() } : undefined)); }
+function botEnd() { txBot(b => (botPlaying(b) ? botFinish(b) : undefined)); }
+function botTick() {   // every second: show the answer when everyone has it or it's waited long enough, then the next doodle
+  const b = bot;
+  if (!S.myName || !botPlaying(b) || !DOODLES) return;
+  const now = serverNow();
+  const due = (b.st === 'draw' && (botAllGot(b) || botAutoRevealDue(b))) || (b.st === 'reveal' && now - (b.revealAt || 0) > REVEAL_SECS * 1000);
+  if (!due) return;
+  txBot(x => {
+    if (x.st === 'draw' && (botAllGot(x) || botAutoRevealDue(x))) { x.st = 'reveal'; x.revealAt = serverNow(); return x; }
+    if (x.st === 'reveal' && serverNow() - (x.revealAt || 0) > REVEAL_SECS * 1000) {
+      if ((x.round || 1) >= (x.rounds || 10)) return botFinish(x);
+      x.round = (x.round || 1) + 1;
+      return botPick(x);
+    }
+    return;
+  });
+}
+function botGuess(text) {
+  if (bot.st !== 'draw' || (bot.got && bot.got[myId])) return;
+  if (!matches(text, bot.word)) {
+    push(botGuessesRef, { n: S.myName, c: S.myHue, t: text, r: bot.round || 0, at: serverNow() }).catch(() => {});
+    return;
+  }
+  let rank = 0;
+  txBot(b => {
+    rank = 0;
+    if (b.st !== 'draw' || !matches(text, b.word)) return;
+    b.got = b.got || {};
+    if (b.got[myId]) return;
+    rank = Object.keys(b.got).length + 1;
+    b.got[myId] = rank;
+    b.scores = b.scores || {};
+    const was = b.scores[myId] || { s: 0 };
+    b.scores[myId] = { name: S.myName, c: S.myHue, s: (was.s || 0) + (rank === 1 ? 3 : rank === 2 ? 2 : 1) };
+    if (botAllGot(b)) { b.st = 'reveal'; b.revealAt = serverNow(); }
+    return b;
+  }).then(r => {
+    if (!r || !r.committed || !rank) return;
+    push(botGuessesRef, { n: S.myName, c: S.myHue, ok: 1, r: bot.round || 0, at: serverNow() }).catch(() => {});
+    sound('win');
+    banner(`✓ You got it! +${rank === 1 ? 3 : rank === 2 ? 2 : 1}`, 2.5);
+  });
+}
+let watching = false;
+function setWatching(on) {   // tell everyone you're at the board in Guess mode, so a round ends once all of you have it
+  if (on === watching || !S.myName) return;
+  watching = on;
+  if (on) { set(watchRef, { name: S.myName, c: S.myHue }).catch(() => {}); onDisconnect(watchRef).remove(); }
+  else { remove(watchRef).catch(() => {}); try { onDisconnect(watchRef).cancel(); } catch (e) {} }
 }
 
 // ---------- Doodle mode: one pen, passed around ----------
@@ -489,6 +691,7 @@ function sendGuess() {
   const text = guessInput.value.trim().slice(0, 40);
   if (!text) return;
   guessInput.value = '';
+  if (guessing()) { botGuess(text); return; }
   if (game.st !== 'draw' || !isPlayer() || game.drawer === myId || (game.got && game.got[myId])) return;
   if (!matches(text, game.word)) {
     push(guessesRef, { n: S.myName, c: S.myHue, t: text, r: game.rn || 0, at: serverNow() }).catch(() => {});
@@ -529,6 +732,7 @@ css.textContent = `
   .skFeed div { margin: 1px 0; }
   .skFeed .ok { color: #7dff8a; }
   .skButtons { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(243,230,207,0.2); }
+  .skCredit { margin-top: 6px; font-size: 11px; opacity: 0.6; }
   #skPad { display: none; position: fixed; left: 50%; top: 56px; transform: translateX(-50%); text-align: center; z-index: 2; }
   body.skPadOn #skPad { display: block; }
   #skPadWord { display: inline-block; font-size: 18px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 5px 14px; border-radius: 14px; margin-bottom: 6px; }
@@ -698,7 +902,7 @@ function settingRow(label, key, options) {
   }
   return row;
 }
-const MODE_OPTIONS = [['game', '🎲 Game'], ['doodle', '🖍 Doodle']];
+const MODE_OPTIONS = [['game', '🎲 Game'], ['doodle', '🖍 Doodle'], ['guess', '🤖 Guess']];
 const BOARD_OPTIONS = [['white', 'Whiteboard'], ['chalk', 'Chalkboard']];
 function doodlePanel() {   // the panel in doodle mode
   const holder = penHolder();
@@ -715,25 +919,91 @@ function doodlePanel() {   // the panel in doodle mode
   row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
   panel.appendChild(row);
 }
+function guessPanel() {   // the panel in Guess mode
+  const st = bot.st || 'idle', got = !!(bot.got && bot.got[myId]);
+  let status;
+  if (!DOODLES) status = doodlesFailed ? 'Could not load doodles.js. Is it uploaded next to sketch.js?' : 'Loading the doodles…';
+  else if (st === 'draw') status = got ? 'You got it! ✓ Waiting for the others…' : 'What is it? Type your guess below!';
+  else if (st === 'reveal') status = `It was "${bot.word}"!`;
+  else if (st === 'over') status = bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over';
+  else status = 'The board draws a real doodle. Guess what it is! Press Start when everyone is here.';
+  panel.appendChild(el('div', 'skStatus', status));
+  if (botPlaying()) panel.appendChild(el('div', 'skLabel', `Doodle ${bot.round || 1} of ${bot.rounds || 10}`));
+  if (st === 'draw') panel.appendChild(el('div', 'skWord', botBlanks()));
+
+  // Scores
+  const list = el('div', 'skPlayers');
+  const rows = Object.entries(bot.scores || {}).sort((a, b) => (b[1].s || 0) - (a[1].s || 0));
+  for (const [id, p] of rows) {
+    const row = el('div');
+    const dot = el('span', '', '● '); dot.style.color = RAINBOW_CSS[Number.isInteger(p.c) && p.c >= 0 && p.c < 7 ? p.c : 0];
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${p.s || 0}${bot.got && bot.got[id] ? ' ✓' : ''}`));
+    list.appendChild(row);
+  }
+  if (rows.length) panel.appendChild(list);
+
+  // This round's guesses
+  const rn = bot.round || 0;
+  const guesses = Object.values(botGuessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));
+  if (botPlaying() && guesses.length) {
+    const feed = el('div', 'skFeed');
+    for (const gu of guesses.slice(-6)) {
+      const line = el('div', gu.ok ? 'ok' : '');
+      if (gu.ok) line.textContent = `✓ ${gu.n} got it!`;
+      else {
+        const nm = el('b', '', gu.n + ': ');
+        if (Number.isInteger(gu.c) && gu.c >= 0 && gu.c < 7) nm.style.color = RAINBOW_CSS[gu.c];
+        line.append(nm, document.createTextNode(gu.t));
+      }
+      feed.appendChild(line);
+    }
+    panel.appendChild(feed);
+  }
+
+  // Settings
+  panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
+  if (!botPlaying()) {
+    panel.appendChild(settingRow('Doodles:', 'rounds', [[5, '5'], [10, '10'], [20, '20']]));
+    panel.appendChild(settingRow('Drawing speed:', 'speed', [['slow', 'Slow'], ['normal', 'Normal']]));
+  }
+
+  // Buttons
+  const row = el('div', 'skButtons');
+  if (!botPlaying()) row.appendChild(btn(st === 'over' ? 'New game' : '▶ Start', startBot, '', !DOODLES));
+  if (st === 'draw') row.appendChild(btn('👀 Reveal', botReveal));
+  if (botPlaying()) row.appendChild(btn('End game', () => { if (confirm('End this Guess game for everyone?')) botEnd(); }));
+  row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
+  panel.appendChild(row);
+  panel.appendChild(el('div', 'skCredit', 'Doodles from Google\'s "Quick, Draw!" (CC BY 4.0)'));
+}
 export function refreshSketchUI(force) {
-  const at = !!S.atSketch, doodle = doodling();
+  const at = !!S.atSketch, doodle = doodling(), guess = guessing();
   const drawing = canDraw();
   const got = !!(game.got && game.got[myId]);
+  setWatching(at && guess);
+  if (guess) needDoodles();
   document.body.classList.toggle('skDrawing', drawing);
-  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (doodle || game.st === 'draw' || game.st === 'reveal'))));
-  document.body.classList.toggle('skGuessOn', at && !doodle && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got);
-  if (doodle) padWord.textContent = drawing ? '🖍 Doodle anything · take your time' : penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
+  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (doodle || guess || game.st === 'draw' || game.st === 'reveal'))));
+  const guessOn = guess ? bot.st === 'draw' && !(bot.got && bot.got[myId])
+                        : !doodle && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got;
+  document.body.classList.toggle('skGuessOn', at && guessOn);
+  if (guess) padWord.textContent = bot.st === 'draw' ? botBlanks() : bot.st === 'reveal' ? `It was: ${bot.word}` : '🤖 Guess the doodle';
+  else if (doodle) padWord.textContent = drawing ? '🖍 Doodle anything · take your time' : penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
   else padWord.textContent = drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
   if (drawing) refreshTools();
   if (!at) { lastSig = ''; return; }
   const rn = game.rn || 0;
   const guesses = Object.values(guessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));   // only this round's
-  const sig = JSON.stringify([game, settings, pen, guesses, wins, Object.keys(S.presence), narrow()]);
+  const botSig = guess ? [bot, botGuessesRaw, botHintCount(), !!DOODLES, doodlesFailed] : 0;
+  const sig = JSON.stringify([game, settings, pen, guesses, wins, Object.keys(S.presence), narrow(), botSig]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
   panel.textContent = '';
   panel.appendChild(el('h3', '', '✏️ ' + SKETCH_NAME));
+  if (guess) { guessPanel(); return; }
   if (doodle) { doodlePanel(); return; }
   const me = isPlayer(), drawerName = nameOf(game.drawer), st = game.st || 'lobby';
   let status = '';
@@ -810,7 +1080,7 @@ window.addEventListener('resize', () => refreshSketchUI(true));
 
 // The room calls these when you walk up to the board and step away (you keep the doodle pen until you give it up or leave the room)
 export function sketchEnter() { refreshSketchUI(true); }
-export function sketchLeave() { endLine(); refreshSketchUI(true); }
+export function sketchLeave() { endLine(); setWatching(false); refreshSketchUI(true); }
 
 // ---------- Little heads-ups when the game changes ----------
 let firstGame = true;
@@ -853,10 +1123,12 @@ function tick() {
 let tickAt = 0;
 export function updateSketch(dt) {
   const t = performance.now();
+  if (guessing() && bot.st === 'draw' && DOODLES && botFrac() < 1) dirty = true;   // the doodle is still being drawn
   if (dirty && t - lastDraw > 50) { lastDraw = t; dirty = false; redraw(); }
   if (headDirty) { headDirty = false; drawHead(); }
   if (t - tickAt > 1000) {
     tickAt = t; tick();
+    if (guessing()) { botTick(); headDirty = true; dirty = true; }   // hints show up as time passes
     if (doodling()) headDirty = true;   // notices when the pen holder leaves the room
     if (S.atSketch) refreshSketchUI();
   }
@@ -868,8 +1140,23 @@ export function startSketch() {
   onValue(ref(db, 'room/sketch/settings'), s => {
     settings = { ...DEFAULTS, ...(s.val() || {}) };
     if (settings.mode !== prevMode) { prevMode = settings.mode; endLine(); myKeys = []; }
+    if (settings.mode === 'guess') needDoodles();
     applyStyle(); refreshSketchUI();
   });
+  onValue(botRef, s => {
+    const prev = bot;
+    bot = s.val() || {};
+    if (botPlaying()) needDoodles();
+    if (guessing() && S.atSketch) {   // little heads-ups for whoever is at the board
+      if (bot.st === 'reveal' && prev.st === 'draw') banner(`It was "${bot.word}"!`, 3);
+      if (bot.st === 'draw' && (prev.round !== bot.round || prev.st !== 'draw')) sound('flip');
+      if (bot.st === 'over' && prev.st !== 'over') { banner(bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over', 4); if (bot.winner) sound('win'); }
+    }
+    dirty = true; headDirty = true;
+    refreshSketchUI();
+  });
+  onValue(botGuessesRef, s => { botGuessesRaw = s.val() || {}; refreshSketchUI(); });
+  onValue(ref(db, 'room/sketch/watch'), s => { watchers = s.val() || {}; });
   onValue(gameRef, s => {
     const prev = game;
     game = s.val() || {};
