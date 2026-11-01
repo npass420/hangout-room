@@ -83,12 +83,15 @@ let guessesRaw = {};    // room/sketch/guesses: wrong guesses and "got it!" line
 let wins = {};          // room/sketch/wins: all-time games won, by name
 let doodle = {};        // room/sketch/doodle: { on, a: who drew on it } while the board is a doodle board
 let dlines = {};        // room/sketch/dstrokes: the doodle's lines
+let dback = null;       // room/sketch/dbackup: the doodle as it was before the last Clear (for Undo clear)
+let gBackup = null;     // the drawer's own copy of their drawing before they pressed Clear in a game
 let dirty = true, headDirty = true, lastDraw = 0;
 const gameRef = ref(db, 'room/sketch/game');
 const strokesRef = ref(db, 'room/sketch/strokes');
 const guessesRef = ref(db, 'room/sketch/guesses');
 const doodleRef = ref(db, 'room/sketch/doodle');
 const dstrokesRef = ref(db, 'room/sketch/dstrokes');
+const dbackRef = ref(db, 'room/sketch/dbackup');
 function chipKey(name) { return String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?'; }
 function styleOf() { return STYLES[settings.style] ? settings.style : 'white'; }
 function here(id) { return !!(id && S.presence[id]); }
@@ -332,7 +335,7 @@ function joinGame() {
     return g;
   }).then(r => { if (r.committed) sound('join'); }).catch(e => console.warn('Sketch join', e));
 }
-function wipeDoodle() { remove(dstrokesRef).catch(() => {}); remove(doodleRef).catch(() => {}); }
+function wipeDoodle() { remove(dstrokesRef).catch(() => {}); remove(doodleRef).catch(() => {}); remove(dbackRef).catch(() => {}); }
 function startGame() {
   if (doodle.on && Object.keys(dlines).length && !confirm('Starting a game wipes the doodle off the board. Start anyway?')) return;
   txGame(g => {
@@ -413,6 +416,7 @@ function setSetting(key, val) { update(ref(db, 'room/sketch/settings'), { [key]:
 function startDoodle() {
   if (!S.myName || playing(game)) return;
   remove(dstrokesRef).catch(() => {});
+  remove(dbackRef).catch(() => {});
   set(doodleRef, { on: true, at: serverNow() }).catch(e => console.warn('Doodle', e));
   sound('flip');
 }
@@ -559,12 +563,14 @@ tools.appendChild(eraserBtn);
 ['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
 const undoBtn = btn('↶ Undo', undo);
 const clearBtn = btn('🗑 Clear', clearBoard);
+const undoClearBtn = btn('↩ Undo clear', undoClear);
+undoClearBtn.title = 'Bring back what was on the board before the last Clear';
 const hintBtn = btn('💡 Hint', giveHint);
 const doneBtn = btn('✓ Done', doneDrawing);
 const skipBtn = btn('⏭ New words', newWords);
 const saveBtn = btn('📸 Save', saveDoodle);
 saveBtn.title = 'Save to the Doodle Gallery';
-tools.append(undoBtn, clearBtn, hintBtn, doneBtn, skipBtn, saveBtn);
+tools.append(undoBtn, clearBtn, undoClearBtn, hintBtn, doneBtn, skipBtn, saveBtn);
 const titleInput = el('input');   // the doodle's title for the gallery (kept between panel redraws)
 titleInput.maxLength = 40; titleInput.placeholder = 'Title (optional)';
 titleInput.style.cssText = 'width: 100%; box-sizing: border-box; font-size: 15px; padding: 6px 10px; border-radius: 12px; margin-bottom: 4px;';
@@ -583,6 +589,7 @@ function refreshTools() {
   hintBtn.disabled = lettersLeft <= 1;
   skipBtn.disabled = !!(game.got && Object.keys(game.got).length);
   undoBtn.disabled = !myKeys.some(k => (dd ? dlines : strokes)[k]);
+  undoClearBtn.style.display = canUndoClear() ? '' : 'none';
 }
 
 // ---------- Drawing with the mouse or a finger ----------
@@ -636,16 +643,51 @@ let clearArmed = 0;
 function clearBoard() {
   if (Date.now() - clearArmed > 2500) { clearArmed = Date.now(); banner('🗑 Press Clear again to wipe the board', 2.5); return; }
   clearArmed = 0;
+  endLine();
   if (doodling()) {   // a clean doodle board (and nobody has drawn on it yet)
+    if (!Object.keys(dlines).some(k => dlines[k])) return;   // nothing to clear
+    const copy = {};   // keep what was there, so anyone at the board can press Undo clear
+    for (const [k, l] of Object.entries(dlines)) if (l) copy[k] = l;
+    dback = { l: copy, a: doodle.a || null };
+    set(dbackRef, dback).catch(() => {});
     remove(dstrokesRef).catch(() => {});
     set(ref(db, 'room/sketch/doodle/a'), null).catch(() => {});
     dlines = {}; myKeys = []; dirty = true; savedSig = '';
-    refreshTools();
+    refreshTools(); refreshSketchUI(true);
     return;
   }
+  const mine = strokeList();
+  if (!mine.length) return;   // nothing to clear
+  const copy = {};   // the drawer keeps their drawing, so they can press Undo clear
+  for (const [k, l] of Object.entries(strokes)) if (l && l.r === (game.rn || 0)) copy[k] = l;
+  gBackup = { rn: game.rn || 0, l: copy };
   remove(strokesRef).catch(() => {});
   strokes = {}; myKeys = []; dirty = true;
   refreshTools();
+}
+function canUndoClear() {
+  if (doodling()) return !!(dback && dback.l);
+  return !!(gBackup && game.st === 'draw' && game.drawer === myId && gBackup.rn === (game.rn || 0));
+}
+function undoClear() {   // put the cleared drawing back (anything drawn since stays on top)
+  if (!canUndoClear()) return;
+  endLine();
+  if (doodling()) {
+    const back = dback;
+    dback = null;
+    update(dstrokesRef, back.l).catch(e => console.warn('Undo clear', e));
+    for (const [k, l] of Object.entries(back.l)) if (!dlines[k]) dlines[k] = l;
+    if (back.a) update(ref(db, 'room/sketch/doodle/a'), back.a).catch(() => {});
+    remove(dbackRef).catch(() => {});
+  } else {
+    const back = gBackup;
+    gBackup = null;
+    update(strokesRef, back.l).catch(e => console.warn('Undo clear', e));
+    for (const [k, l] of Object.entries(back.l)) if (!strokes[k]) strokes[k] = l;
+  }
+  dirty = true;
+  sound('flip');
+  refreshTools(); refreshSketchUI(true);
 }
 
 // ---------- The side panel ----------
@@ -671,7 +713,7 @@ export function refreshSketchUI(force) {
   if (!at) { lastSig = ''; return; }
   const rn = game.rn || 0;
   const guesses = Object.values(guessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));   // only this round's
-  const sig = JSON.stringify([game, settings, guesses, wins, Object.keys(S.presence), narrow(), doodle]);
+  const sig = JSON.stringify([game, settings, guesses, wins, Object.keys(S.presence), narrow(), doodle, !!dback]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
@@ -685,6 +727,7 @@ export function refreshSketchUI(force) {
     panel.appendChild(titleInput);
     const srow = el('div');
     srow.append(btn('📸 Save to gallery', saveDoodle), btn('🧽 Clear', clearBoard));
+    if (canUndoClear()) srow.append(btn('↩ Undo clear', undoClear));
     panel.appendChild(srow);
     panel.appendChild(settingRow('Board:', 'style', [['white', 'Whiteboard'], ['chalk', 'Chalkboard']]));
     const drow = el('div', 'skButtons');
@@ -842,6 +885,10 @@ export function startSketch() {
     if (doodling() !== was) { endLine(); myKeys = []; savedSig = ''; }
     dirty = true; headDirty = true;
     refreshSketchUI();
+  });
+  onValue(dbackRef, s => {
+    dback = s.val();
+    if (S.atSketch) { refreshTools(); refreshSketchUI(); }
   });
   const keepD = s => { if (s.key !== liveKey) { dlines[s.key] = s.val(); dirty = true; } };
   onChildAdded(dstrokesRef, keepD);
