@@ -1,15 +1,20 @@
 // =====================================================================
-// sketch.js — LittleSketch, a slow, no-timer drawing and guessing game on the board by the door
-// One player draws a secret word and everyone else guesses. Every line shows up on the wall board
-// as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
-// then 1 each, and the drawer gets 1 point for every right guess. Whiteboard or chalkboard.
-// When no game is going, the board can be a Doodle board instead: no words and no points, everyone at the
-// board draws together, and a finished doodle can be saved to the Doodle Gallery on the left wall (gallery.js).
+// sketch.js — LittleSketch, a slow, no-timer drawing board by the door, with three modes
+// Game mode: one player draws a secret word and everyone else guesses. Every line shows up on the wall
+// board as it's drawn. Everyone can keep guessing until they get it: 1st right guess 3 points, 2nd 2,
+// then 1 each, and the drawer gets 1 point for every right guess.
+// Doodle mode: no word and no points. One person takes the pen and draws while everyone else watches,
+// then passes the pen so the next person keeps working on the same drawing. It stays until someone clears it,
+// and a finished doodle can be saved to the Doodle Gallery on the left wall (gallery.js), with everyone who drew on it as artists.
+// Guess mode: the board slowly draws a real doodle from Google's "Quick, Draw!" (they live in doodles.js)
+// and everyone at the board races to guess it. Letters show up as hints once the drawing is done.
+// Tools: 12 colors, pen, paint bucket (fill), line, square and circle (drag to stretch them; hold Shift for an
+// exact square or circle), an eraser and three brush sizes. Undo, Clear and Undo clear. Whiteboard or chalkboard.
 // This file adds its own panel, drawing pad and guess box to the page, so index.html needs no changes.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, remove, push, onValue, onChildAdded, onChildChanged, onChildRemoved,
-         runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+         runTransaction, onDisconnect } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, serverNow, scene, ROOM, std, RAINBOW_CSS } from './core.js';
 import { sfx } from './sounds.js';
 import './gallery.js';   // the Doodle Gallery on the left wall
@@ -19,6 +24,10 @@ export const SKETCH_NAME = 'LittleSketch';
 const REVEAL_SECS = 5;            // how long the answer shows before the next turn
 const CW = 1200, CH = 800;        // drawing size (3 wide by 2 tall)
 const SIZES = [5, 12, 28];        // brush sizes: small, medium, large
+const FILL_TOL = 100;             // how different a color can be and still get filled by the bucket
+const BOT_SECS = { slow: 25, normal: 14 };   // Guess mode: how long the board takes to draw a doodle
+const HINT_SECS = 6;              // Guess mode: a new letter shows up this often once the doodle is drawn
+const BOT_WAIT_SECS = 20;         // Guess mode: after the last hint, the answer shows by itself this much later
 
 // ---------- Words ----------
 const WORDS = {
@@ -49,12 +58,16 @@ function matches(guess, word) {   // spaces, capitals and a plural "s" don't mat
   return !!b && (a === b || a === b + 's' || a + 's' === b || a === b + 'es');
 }
 
-// ---------- The two board styles ----------
+// ---------- The two board styles (12 colors each; on the chalkboard, black becomes a light chalk gray) ----------
 const STYLES = {
-  white: { name: 'Whiteboard', bg: '#f6f6f1', ink: ['#222222', '#e53935', '#1e88e5', '#43a047', '#fb8c00', '#8e24aa', '#6d4c41'],
-           frame: 0xb8bcc2, rough: 0.35, metal: 0.7, head: '#2b2f36' },
-  chalk: { name: 'Chalkboard', bg: '#2e4a37', ink: ['#f4f4ee', '#fff176', '#f8a5c2', '#8fd3ff', '#a8e6a1', '#ffbe76', '#d6a8ff'],
-           frame: 0x6b4226, rough: 0.7, metal: 0, head: '#3b2716' }
+  white: { name: 'Whiteboard', bg: '#f6f6f1',
+           ink: ['#222222', '#ffffff', '#9e9e9e', '#6d4c41', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#4fc3f7', '#1e88e5', '#8e24aa', '#f06292'],
+           names: ['Black', 'White', 'Gray', 'Brown', 'Red', 'Orange', 'Yellow', 'Green', 'Light blue', 'Blue', 'Purple', 'Pink'],
+           tray: [0, 4, 9, 7], frame: 0xb8bcc2, rough: 0.35, metal: 0.7, head: '#2b2f36' },
+  chalk: { name: 'Chalkboard', bg: '#2e4a37',
+           ink: ['#cfd0c8', '#fbfbf6', '#9a9c96', '#c49a6c', '#ff8a80', '#ffbe76', '#fff176', '#a8e6a1', '#b3e5fc', '#6fb8ff', '#d6a8ff', '#f8a5c2'],
+           names: ['Light gray', 'White', 'Gray', 'Brown', 'Red', 'Orange', 'Yellow', 'Green', 'Light blue', 'Blue', 'Purple', 'Pink'],
+           tray: [1, 6, 11, 9], frame: 0x6b4226, rough: 0.7, metal: 0, head: '#3b2716' }
 };
 function makeBg(style) {   // the empty board, drawn once
   const c = document.createElement('canvas'); c.width = CW; c.height = CH;
@@ -75,22 +88,30 @@ function makeBg(style) {   // the empty board, drawn once
 const BGS = { white: makeBg('white'), chalk: makeBg('chalk') };
 
 // ---------- Shared state ----------
-const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true };
+const DEFAULTS = { style: 'white', turns: 1, words: 'mixed', hints: true, mode: 'game', rounds: 10, speed: 'normal' };
 let settings = { ...DEFAULTS };
 let game = {};          // room/sketch/game: who's playing, whose turn, the word, who has guessed it
-let strokes = {};       // room/sketch/strokes: every line on the board
+let strokes = {};       // room/sketch/strokes: every line on the board in game mode
+let doodles = {};       // room/sketch/doodles: every line on the doodle board (stays until cleared)
+let pen = {};           // room/sketch/pen: who holds the doodle pen
 let guessesRaw = {};    // room/sketch/guesses: wrong guesses and "got it!" lines
 let wins = {};          // room/sketch/wins: all-time games won, by name
-let doodle = {};        // room/sketch/doodle: { on, a: who drew on it } while the board is a doodle board
-let dlines = {};        // room/sketch/dstrokes: the doodle's lines
+let bot = {};           // room/sketch/bot: the Guess mode game (which doodle, when it started, who got it, scores)
+let botGuessesRaw = {}; // room/sketch/botguesses: wrong guesses and "got it!" lines in Guess mode
+let watchers = {};      // room/sketch/watch: who is standing at the board in Guess mode
+let artists = {};       // room/sketch/doodleArt: everyone who has drawn on the doodle (for the gallery)
 let dback = null;       // room/sketch/dbackup: the doodle as it was before the last Clear (for Undo clear)
 let gBackup = null;     // the drawer's own copy of their drawing before they pressed Clear in a game
 let dirty = true, headDirty = true, lastDraw = 0;
 const gameRef = ref(db, 'room/sketch/game');
 const strokesRef = ref(db, 'room/sketch/strokes');
+const doodlesRef = ref(db, 'room/sketch/doodles');
+const penRef = ref(db, 'room/sketch/pen');
 const guessesRef = ref(db, 'room/sketch/guesses');
-const doodleRef = ref(db, 'room/sketch/doodle');
-const dstrokesRef = ref(db, 'room/sketch/dstrokes');
+const botRef = ref(db, 'room/sketch/bot');
+const botGuessesRef = ref(db, 'room/sketch/botguesses');
+const watchRef = ref(db, 'room/sketch/watch/' + myId);
+const artRef = ref(db, 'room/sketch/doodleArt');
 const dbackRef = ref(db, 'room/sketch/dbackup');
 function chipKey(name) { return String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?'; }
 function styleOf() { return STYLES[settings.style] ? settings.style : 'white'; }
@@ -99,7 +120,10 @@ function active(g, id) { return !!(g.players && g.players[id] && !g.players[id].
 function activeCount(g) { return Object.keys(g.players || {}).filter(id => active(g, id)).length; }
 function orderOf(g) { return Array.isArray(g.order) ? g.order.slice() : []; }
 function playing(g) { return g.st === 'pick' || g.st === 'draw' || g.st === 'reveal'; }
-function doodling() { return !!doodle.on && !playing(game); }   // the board is a doodle board right now
+function doodling() { return settings.mode === 'doodle' && !playing(game); }   // a running game always wins
+function guessing() { return settings.mode === 'guess' && !playing(game); }
+function botPlaying(b = bot) { return b.st === 'draw' || b.st === 'reveal'; }
+function penHolder() { return pen && pen.id && here(pen.id) ? pen.id : ''; }   // the pen is free once its holder leaves the room
 function isPlayer(id = myId) { return !!(game.players && game.players[id] && !game.players[id].out); }
 function nameOf(id) { const p = game.players && game.players[id]; return p ? p.name : (S.presence[id] ? S.presence[id].name : 'someone'); }
 function allGot(g) {
@@ -118,6 +142,9 @@ const cv = document.createElement('canvas');
 cv.width = CW; cv.height = CH; cv.id = 'skCanvas';
 const g2 = cv.getContext('2d');
 const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
+const cacheCv = document.createElement('canvas');   // the board with every fill done so far, so fills don't have to be redone each time
+cacheCv.width = CW; cacheCv.height = CH;
+const cacheG = cacheCv.getContext('2d', { willReadFrequently: true });
 const headCv = document.createElement('canvas');
 headCv.width = 1024; headCv.height = 112;
 const headCtx = headCv.getContext('2d');
@@ -138,13 +165,13 @@ const trayItems = { white: new THREE.Group(), chalk: new THREE.Group() };
   add(new THREE.BoxGeometry(0.05, BH + 0.1, 0.05), frameMat, BW / 2 + 0.025, 0, 0.03);
   add(new THREE.BoxGeometry(BW * 0.8, 0.025, 0.09), frameMat, 0, -BH / 2 - 0.06, 0.07);                     // tray
   const TY = -BH / 2 - 0.035;
-  STYLES.white.ink.slice(0, 4).forEach((col, k) => {                                                        // markers
-    const m = add(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 12), std(col, 0.5), -0.6 + k * 0.17, TY, 0.07, trayItems.white);
+  STYLES.white.tray.forEach((ci, k) => {                                                                     // markers
+    const m = add(new THREE.CylinderGeometry(0.012, 0.012, 0.13, 12), std(STYLES.white.ink[ci], 0.5), -0.6 + k * 0.17, TY, 0.07, trayItems.white);
     m.rotation.z = Math.PI / 2;
   });
   add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x333333, 0.9), 0.55, TY + 0.005, 0.07, trayItems.white); // eraser
-  STYLES.chalk.ink.slice(0, 4).forEach((col, k) => {                                                        // chalk sticks
-    add(new THREE.BoxGeometry(0.08, 0.015, 0.015), std(col, 0.95), -0.6 + k * 0.15, TY - 0.005, 0.07, trayItems.chalk);
+  STYLES.chalk.tray.forEach((ci, k) => {                                                                     // chalk sticks
+    add(new THREE.BoxGeometry(0.08, 0.015, 0.015), std(STYLES.chalk.ink[ci], 0.95), -0.6 + k * 0.15, TY - 0.005, 0.07, trayItems.chalk);
   });
   add(new THREE.BoxGeometry(0.13, 0.035, 0.05), std(0x8b5a2b, 0.8), 0.55, TY + 0.005, 0.07, trayItems.chalk);  // brush
   g.add(trayItems.white, trayItems.chalk);
@@ -176,7 +203,7 @@ function applyStyle() {
 }
 
 // ---------- Drawing the board ----------
-const patterns = new WeakMap();   // the eraser paints the empty board back in (one pattern per canvas)
+const patterns = new WeakMap();   // the eraser paints the empty board back on (one pattern per canvas)
 function eraserStyle(g, s) {
   let m = patterns.get(g);
   if (!m) { m = {}; patterns.set(g, m); }
@@ -206,6 +233,97 @@ function drawStroke(g, st, s, line) {
   }
   g.restore();
 }
+function hexRgb(h) { const n = parseInt(String(h).slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function floodFill(g, sx, sy, color) {   // the paint bucket: fill the area you tapped, up to the lines around it
+  sx = Math.max(0, Math.min(CW - 1, Math.round(sx))); sy = Math.max(0, Math.min(CH - 1, Math.round(sy)));
+  const img = g.getImageData(0, 0, CW, CH), d = img.data, N = CW * CH;
+  const [fr, fg, fb] = hexRgb(color);
+  const i0 = (sy * CW + sx) * 4, tr = d[i0], tg = d[i0 + 1], tb = d[i0 + 2];
+  if (Math.abs(tr - fr) + Math.abs(tg - fg) + Math.abs(tb - fb) < 24) return;   // already that color
+  const seen = new Uint8Array(N);
+  const like = p => { const i = p * 4; return Math.abs(d[i] - tr) + Math.abs(d[i + 1] - tg) + Math.abs(d[i + 2] - tb) <= FILL_TOL; };
+  const stack = [sx, sy];
+  while (stack.length) {
+    const y = stack.pop(), x = stack.pop(), row = y * CW;
+    if (seen[row + x] || !like(row + x)) continue;
+    let lx = x, rx = x;
+    while (lx > 0 && !seen[row + lx - 1] && like(row + lx - 1)) lx--;
+    while (rx < CW - 1 && !seen[row + rx + 1] && like(row + rx + 1)) rx++;
+    let up = false, dn = false;
+    for (let xx = lx; xx <= rx; xx++) {
+      seen[row + xx] = 1;
+      if (y > 0) { const q = row - CW + xx, ok = !seen[q] && like(q); if (ok && !up) stack.push(xx, y - 1); up = ok; }
+      if (y < CH - 1) { const q = row + CW + xx, ok = !seen[q] && like(q); if (ok && !dn) stack.push(xx, y + 1); dn = ok; }
+    }
+  }
+  for (let p = 0; p < N; p++) {   // one pixel past the edge too, so no pale ring is left along the lines
+    if (seen[p] !== 1) continue;
+    const x = p % CW;
+    if (x > 0 && !seen[p - 1]) seen[p - 1] = 2;
+    if (x < CW - 1 && !seen[p + 1]) seen[p + 1] = 2;
+    if (p >= CW && !seen[p - CW]) seen[p - CW] = 2;
+    if (p + CW < N && !seen[p + CW]) seen[p + CW] = 2;
+  }
+  for (let p = 0; p < N; p++) if (seen[p]) { const i = p * 4; d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = 255; }
+  g.putImageData(img, 0, 0);
+}
+function fillAt(g, st, line) {
+  const a = String(line.p || '').split(',').map(Number);
+  if (a.length !== 2 || !isFinite(a[0]) || !isFinite(a[1])) return;
+  try { floodFill(g, a[0], a[1], st.ink[line.k] || st.ink[0]); } catch (e) { console.warn('Sketch fill', e); }
+}
+function drawShape(g, st, s, line) {   // a line ('l'), square ('r') or circle ('o') from one corner to the other
+  const pts = String(line.p || '').split(' ').map(t => t.split(',').map(Number));
+  if (pts.length !== 2 || pts.some(a => a.length !== 2 || !isFinite(a[0]) || !isFinite(a[1]))) return;
+  const [[x1, y1], [x2, y2]] = pts;
+  const color = st.ink[line.k] || st.ink[0];
+  g.save();
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = SIZES[line.z] || SIZES[1];
+  g.strokeStyle = color;
+  if (s === 'chalk') { g.globalAlpha = 0.88; g.shadowColor = color; g.shadowBlur = 2; }
+  g.beginPath();
+  if (line.sh === 'r') g.rect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+  else if (line.sh === 'o') g.ellipse((x1 + x2) / 2, (y1 + y2) / 2, Math.max(0.5, Math.abs(x2 - x1) / 2), Math.max(0.5, Math.abs(y2 - y1) / 2), 0, 0, Math.PI * 2);
+  else { g.moveTo(x1, y1); g.lineTo(x2, y2); }
+  g.stroke();
+  g.restore();
+}
+function paintLine(g, st, s, line) {
+  if (line.f) fillAt(g, st, line);
+  else if (line.sh) drawShape(g, st, s, line);
+  else drawStroke(g, st, s, line);
+}
+// Paints a saved doodle onto any canvas, at any size (the gallery uses this for its frames and viewer).
+// It's painted full size first, so fills land in the right spots, then shrunk to fit.
+const artCv = document.createElement('canvas');
+artCv.width = CW; artCv.height = CH;
+const artG = artCv.getContext('2d', { willReadFrequently: true });
+export function renderDoodle(g, w, h, style, lines) {
+  const s = STYLES[style] ? style : 'white', st = STYLES[s];
+  artG.globalAlpha = 1; artG.shadowBlur = 0;
+  artG.drawImage(BGS[s], 0, 0);
+  for (const line of lines || []) if (line) paintLine(artG, st, s, line);
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.globalAlpha = 1; g.shadowBlur = 0;
+  g.drawImage(artCv, 0, 0, w, h);
+  g.restore();
+}
+hooks.renderDoodle = renderDoodle;
+// Everything up to the newest fill is kept in the cache; only lines after it are drawn fresh each time
+let cacheId = '', cacheSigs = [];
+function sigOf(key, l) { return key + '|' + (l.f ? 'f' : '') + (l.e ? 'e' : '') + (l.sh || '') + l.k + '|' + l.z + '|' + l.p; }
+function drawLines(list, s, st) {   // list is [key, line] pairs, oldest first
+  let lastFill = -1;
+  list.forEach(([, l], i) => { if (l.f) lastFill = i; });
+  const id = s + '|' + (doodling() ? 'd' : 'g' + (game.rn || 0));
+  const want = list.slice(0, lastFill + 1).map(([k, l]) => sigOf(k, l));
+  const same = cacheId === id && cacheSigs.length <= want.length && cacheSigs.every((x, i) => x === want[i]);
+  if (!same) { cacheG.globalAlpha = 1; cacheG.shadowBlur = 0; cacheG.drawImage(BGS[s], 0, 0); cacheSigs = []; cacheId = id; }
+  for (let i = cacheSigs.length; i <= lastFill; i++) { paintLine(cacheG, st, s, list[i][1]); cacheSigs.push(want[i]); }
+  g2.drawImage(cacheCv, 0, 0);
+  for (let i = lastFill + 1; i < list.length; i++) paintLine(g2, st, s, list[i][1]);
+}
 function fitText(g, text, size, y, color) {
   let s = size;
   g.font = `bold ${s}px Georgia`;
@@ -218,39 +336,112 @@ function idleScreen(g, st) {
     fitText(g, '✏️', 120, 290, st.ink[0]);
     fitText(g, `${nameOf(game.drawer)} is picking a word…`, 64, 460, st.ink[0]);
   } else if (game.st === 'over') {
-    fitText(g, game.winner ? `🏆 ${game.winner} wins!` : 'Game over', 84, 190, st.ink[2]);
+    fitText(g, game.winner ? `🏆 ${game.winner} wins!` : 'Game over', 84, 190, st.ink[9]);
     const list = Object.values(game.players || {}).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6);
     list.forEach((p, i) => fitText(g, `${p.name} · ${p.score || 0}`, 48, 320 + i * 66, st.ink[0]));
   } else {
-    fitText(g, SKETCH_NAME, 120, 330, st.ink[2]);
-    fitText(g, 'Click the board to play or doodle', 48, 470, st.ink[0]);
+    fitText(g, SKETCH_NAME, 120, 330, st.ink[9]);
+    fitText(g, 'Click the board to play', 48, 470, st.ink[0]);
   }
 }
-function strokeList() {
+function strokeList() {   // this round's lines in game mode
   const rn = game.rn || 0;
-  return Object.keys(strokes).sort().map(k => strokes[k]).filter(l => l && l.r === rn);
+  return Object.keys(strokes).sort().map(k => [k, strokes[k]]).filter(([, l]) => l && l.r === rn);
+}
+function doodleList() { return Object.keys(doodles).sort().map(k => [k, doodles[k]]).filter(([, l]) => l); }
+
+// ---------- Guess mode: the real doodles (loaded only when someone uses Guess mode, so phones don't download them otherwise) ----------
+let DOODLES = null, WORDLIST = [], doodlesLoading = false, doodlesFailed = false;
+function needDoodles() {
+  if (DOODLES || doodlesLoading) return;
+  doodlesLoading = true; doodlesFailed = false;
+  import('./doodles.js').then(m => {
+    DOODLES = m.DOODLES || {}; WORDLIST = Object.keys(DOODLES);
+    dirty = true; headDirty = true; refreshSketchUI(true);
+  }).catch(e => { console.warn('Sketch doodles', e); doodlesLoading = false; doodlesFailed = true; refreshSketchUI(true); });
+}
+const decoded = {};
+function doodleOf(word, idx) {   // the doodle's strokes as points, centered in a 256 by 256 box
+  const key = word + '#' + idx;
+  if (decoded[key]) return decoded[key];
+  const raw = DOODLES && DOODLES[word] && DOODLES[word][idx];
+  if (!raw) return null;
+  const strokes = raw.split(' ').map(t => { const pts = []; for (let i = 0; i + 3 < t.length; i += 4) pts.push([parseInt(t.slice(i, i + 2), 16), parseInt(t.slice(i + 2, i + 4), 16)]); return pts; }).filter(s => s.length);
+  let minX = 255, maxX = 0, minY = 255, maxY = 0;
+  for (const s of strokes) for (const [x, y] of s) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  const dx = (255 - (maxX - minX)) / 2 - minX, dy = (255 - (maxY - minY)) / 2 - minY;
+  const d = { strokes: strokes.map(s => s.map(([x, y]) => [x + dx, y + dy])), total: strokes.reduce((n, s) => n + s.length, 0) };
+  decoded[key] = d;
+  return d;
+}
+function botElapsed(b = bot) { return Math.max(0, (serverNow() - (b.at || 0)) / 1000); }
+function botFrac(b = bot) { return b.st === 'reveal' ? 1 : Math.min(1, botElapsed(b) / (b.dur || BOT_SECS.normal)); }
+function letterCount(w) { return String(w || '').replace(/ /g, '').length; }
+function botHintCount(b = bot) {   // how many letters are showing as hints right now (always at least one stays hidden)
+  if (b.st !== 'draw') return 0;
+  const after = botElapsed(b) - (b.dur || BOT_SECS.normal);
+  return after < 0 ? 0 : Math.max(0, Math.min(letterCount(b.word) - 1, Math.floor(after / HINT_SECS)));
+}
+function botAutoRevealDue(b = bot) {
+  return botElapsed(b) > (b.dur || BOT_SECS.normal) + HINT_SECS * Math.max(0, letterCount(b.word) - 1) + BOT_WAIT_SECS;
+}
+function hintOrder(word, round) {   // the order letters show up in: the same on everyone's screen
+  let h = 7;
+  for (const ch of word + '|' + round) h = (h * 31 + ch.charCodeAt(0)) % 2147483647;
+  const idx = [...word].map((ch, i) => i).filter(i => word[i] !== ' ');
+  for (let k = idx.length - 1; k > 0; k--) { h = (h * 16807) % 2147483647; const j = h % (k + 1); [idx[k], idx[j]] = [idx[j], idx[k]]; }
+  return idx;
+}
+function botBlanks() {
+  const w = bot.word || '';
+  if (bot.st === 'reveal' || bot.st === 'over') return w;
+  const shown = new Set(hintOrder(w, bot.round || 0).slice(0, botHintCount()));
+  return [...w].map((ch, i) => ch === ' ' ? ' ' : (shown.has(i) ? ch.toUpperCase() : '_')).join(' ') + `   (${letterCount(w)})`;
+}
+function drawDoodle(g, st, s, d, frac) {
+  const K = 2.6, ox = (CW - 256 * K) / 2, oy = 30;
+  let left = Math.max(1, Math.ceil(d.total * frac));
+  g.save();
+  g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 9;
+  g.strokeStyle = st.ink[0]; g.fillStyle = st.ink[0];
+  if (s === 'chalk') { g.globalAlpha = 0.9; g.shadowColor = st.ink[0]; g.shadowBlur = 2; }
+  for (const stroke of d.strokes) {
+    if (left <= 0) break;
+    const n = Math.min(stroke.length, left);
+    left -= n;
+    if (n === 1) { g.beginPath(); g.arc(ox + stroke[0][0] * K, oy + stroke[0][1] * K, 4.5, 0, Math.PI * 2); g.fill(); continue; }
+    g.beginPath(); g.moveTo(ox + stroke[0][0] * K, oy + stroke[0][1] * K);
+    for (let i = 1; i < n; i++) g.lineTo(ox + stroke[i][0] * K, oy + stroke[i][1] * K);
+    g.stroke();
+  }
+  g.restore();
+}
+function drawBot(g, st, s) {   // the board in Guess mode
+  g.drawImage(BGS[s], 0, 0);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  if (!DOODLES) { fitText(g, doodlesFailed ? 'Could not load doodles.js' : 'Loading doodles…', 64, 400, st.ink[0]); return; }
+  if (botPlaying()) {
+    const d = doodleOf(bot.word, bot.idx);
+    if (d) drawDoodle(g, st, s, d, botFrac());
+    if (bot.st === 'reveal') fitText(g, `It was: ${bot.word}`, 60, 750, st.ink[9]);
+  } else if (bot.st === 'over') {
+    fitText(g, bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over', 84, 190, st.ink[9]);
+    const list = Object.values(bot.scores || {}).sort((a, b) => (b.s || 0) - (a.s || 0)).slice(0, 6);
+    list.forEach((p, i) => fitText(g, `${p.name} · ${p.s || 0}`, 48, 320 + i * 66, st.ink[0]));
+  } else {
+    fitText(g, '🤖 Guess the doodle', 100, 330, st.ink[9]);
+    fitText(g, 'Click the board, then press Start', 48, 470, st.ink[0]);
+  }
 }
 function redraw() {
   const s = styleOf(), st = STYLES[s], g = g2;
   g.globalAlpha = 1; g.shadowBlur = 0;
-  g.drawImage(BGS[s], 0, 0);
-  if (game.st === 'draw' || game.st === 'reveal') for (const line of strokeList()) drawStroke(g, st, s, line);
-  else if (doodling()) for (const k of Object.keys(dlines).sort()) { if (dlines[k]) drawStroke(g, st, s, dlines[k]); }
-  else idleScreen(g, st);
+  if (guessing()) drawBot(g, st, s);
+  else if (doodling()) drawLines(doodleList(), s, st);
+  else if (game.st === 'draw' || game.st === 'reveal') drawLines(strokeList(), s, st);
+  else { g.drawImage(BGS[s], 0, 0); idleScreen(g, st); }
   tex.needsUpdate = true;
 }
-// Paints a saved doodle onto any canvas, at any size (the gallery uses this for its frames and viewer)
-export function renderDoodle(g, w, h, style, lines) {
-  const s = STYLES[style] ? style : 'white', st = STYLES[s];
-  g.save();
-  g.setTransform(w / CW, 0, 0, h / CH, 0, 0);
-  g.globalAlpha = 1; g.shadowBlur = 0;
-  g.drawImage(BGS[s], 0, 0);
-  for (const line of lines || []) if (line) drawStroke(g, st, s, line);
-  g.restore();
-}
-hooks.renderDoodle = renderDoodle;
-function doodlers() { return Object.values(doodle.a || {}).map(p => p && p.n).filter(Boolean); }
 function blanks() {
   const w = game.word || '', shown = new Set(Array.isArray(game.hint) ? game.hint : []);
   return [...w].map((ch, i) => ch === ' ' ? ' ' : (shown.has(i) ? ch.toUpperCase() : '_')).join(' ') + `   (${w.replace(/ /g, '').length})`;
@@ -259,7 +450,13 @@ function drawHead() {   // the sign above the board
   const g = headCtx, W = headCv.width, H = headCv.height;
   g.fillStyle = STYLES[styleOf()].head; g.fillRect(0, 0, W, H);
   let text = '✏️ ' + SKETCH_NAME;
-  if (doodling()) text = doodlers().length ? `🖍️ Doodle by ${doodlers().join(', ')}` : '🖍️ Doodle board';
+  if (guessing()) {
+    if (bot.st === 'draw') text = botBlanks();
+    else if (bot.st === 'reveal') text = `It was: ${bot.word}`;
+    else if (bot.st === 'over') text = bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over';
+    else text = '🤖 Guess the doodle';
+  }
+  else if (doodling()) text = penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
   else if (game.st === 'pick') text = `✏️ ${nameOf(game.drawer)} is picking…`;
   else if (game.st === 'draw') text = blanks();
   else if (game.st === 'reveal') text = `It was: ${game.word}`;
@@ -335,9 +532,8 @@ function joinGame() {
     return g;
   }).then(r => { if (r.committed) sound('join'); }).catch(e => console.warn('Sketch join', e));
 }
-function wipeDoodle() { remove(dstrokesRef).catch(() => {}); remove(doodleRef).catch(() => {}); remove(dbackRef).catch(() => {}); }
 function startGame() {
-  if (doodle.on && Object.keys(dlines).length && !confirm('Starting a game wipes the doodle off the board. Start anyway?')) return;
+  if (settings.mode === 'doodle') return;
   txGame(g => {
     if (g.st !== 'lobby') return;
     const ids = Object.keys(g.players || {}).filter(id => here(id) && !g.players[id].out);
@@ -348,7 +544,7 @@ function startGame() {
     const fresh = { st: 'lobby', players, order: ids, tn: -1, rn: g.rn || 0, used: [],
                     set: { turns: settings.turns, words: settings.words, hints: !!settings.hints } };
     return advance(fresh, serverNow());
-  }).then(r => { if (r && r.committed && doodle.on) wipeDoodle(); });
+  });
 }
 function leaveGame() {
   txGame(g => {
@@ -410,44 +606,163 @@ function doneDrawing() {   // the drawer ends the round and shows the answer
 function skipTheirTurn() {   // if the drawer wandered off, anyone playing can move things along
   txGame(g => (g.st === 'pick' && g.drawer !== myId && g.players && g.players[myId] ? advance(g, serverNow()) : undefined));
 }
-function setSetting(key, val) { update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e)); }
+function setSetting(key, val) {
+  if (key === 'mode') {   // the mode can only change when no game is running; going back to Game drops the pen
+    if (playing(game)) return;
+    if (val === 'game') remove(penRef).catch(() => {});
+    if (val !== 'guess' && botPlaying()) set(botRef, { st: 'idle' }).catch(() => {});   // leaving Guess mode ends its game
+    if (val === 'guess') needDoodles();
+  }
+  update(ref(db, 'room/sketch/settings'), { [key]: val }).catch(e => console.warn('Sketch settings', e));
+}
 
-// ---------- The doodle board ----------
-function startDoodle() {
-  if (!S.myName || playing(game)) return;
-  remove(dstrokesRef).catch(() => {});
-  remove(dbackRef).catch(() => {});
-  set(doodleRef, { on: true, at: serverNow() }).catch(e => console.warn('Doodle', e));
-  sound('flip');
+// ---------- Guess mode: moving its game along ----------
+function botPick(b) {   // a word that hasn't come up lately, and one of its doodles
+  const used = new Set(Array.isArray(b.used) ? b.used : []);
+  const pool = WORDLIST.filter(w => !used.has(w));
+  const list = pool.length ? pool : WORDLIST;
+  const word = list[Math.floor(Math.random() * list.length)];
+  b.word = word; b.idx = Math.floor(Math.random() * DOODLES[word].length);
+  b.used = [...(Array.isArray(b.used) ? b.used : []), word].slice(-120);
+  b.st = 'draw'; b.at = serverNow(); b.got = null; b.revealAt = 0;
+  return b;
 }
-let savedSig = '';   // the doodle as it was when it was last saved, so the same one isn't saved twice
-function doodleSig() { const ks = Object.keys(dlines).filter(k => dlines[k]).sort(); return ks.length + ':' + (ks[ks.length - 1] || ''); }
-function closeDoodle() {   // put the doodle away; the board goes back to LittleSketch
-  if (Object.keys(dlines).length && doodleSig() !== savedSig && !confirm('Put the doodle away? It will be wiped off the board (save it to the gallery first if you want to keep it).')) return;
+function botFinish(b) {
+  let best = null, tie = false;
+  for (const p of Object.values(b.scores || {})) {
+    if (!best || (p.s || 0) > (best.s || 0)) { best = p; tie = false; }
+    else if ((p.s || 0) === (best.s || 0)) tie = true;
+  }
+  b.winner = best && (best.s || 0) > 0 && !tie ? best.name : '';
+  b.st = 'over'; b.at = serverNow(); b.got = null;
+  return b;
+}
+function txBot(fn) {   // change the Guess game safely, even if several people click at once
+  const prevRound = bot.round || 0;
+  return runTransaction(botRef, b => fn(b || {})).then(r => {
+    if (!r.committed) return r;
+    const v = r.snapshot.val() || {};
+    if ((v.round || 0) !== prevRound || v.st === 'idle') remove(botGuessesRef).catch(() => {});   // fresh guesses each round
+    return r;
+  }).catch(e => console.warn('Sketch guess', e));
+}
+function botWatching() { return Object.keys(watchers).filter(id => here(id)); }
+function botAllGot(b) {
+  const ids = botWatching(), got = b.got || {};
+  return ids.length > 0 && ids.every(id => got[id]);
+}
+function startBot() {
+  if (!DOODLES || !WORDLIST.length) { needDoodles(); return; }
+  txBot(b => {
+    if (botPlaying(b)) return;
+    const fresh = { round: 1, rounds: settings.rounds || 10, dur: BOT_SECS[settings.speed] || BOT_SECS.normal,
+                    scores: {}, used: Array.isArray(b.used) ? b.used : [], winner: '' };
+    return botPick(fresh);
+  });
+}
+function botReveal() { txBot(b => (b.st === 'draw' ? { ...b, st: 'reveal', revealAt: serverNow() } : undefined)); }
+function botEnd() { txBot(b => (botPlaying(b) ? botFinish(b) : undefined)); }
+function botTick() {   // every second: show the answer when everyone has it or it's waited long enough, then the next doodle
+  const b = bot;
+  if (!S.myName || !botPlaying(b) || !DOODLES) return;
+  const now = serverNow();
+  const due = (b.st === 'draw' && (botAllGot(b) || botAutoRevealDue(b))) || (b.st === 'reveal' && now - (b.revealAt || 0) > REVEAL_SECS * 1000);
+  if (!due) return;
+  txBot(x => {
+    if (x.st === 'draw' && (botAllGot(x) || botAutoRevealDue(x))) { x.st = 'reveal'; x.revealAt = serverNow(); return x; }
+    if (x.st === 'reveal' && serverNow() - (x.revealAt || 0) > REVEAL_SECS * 1000) {
+      if ((x.round || 1) >= (x.rounds || 10)) return botFinish(x);
+      x.round = (x.round || 1) + 1;
+      return botPick(x);
+    }
+    return;
+  });
+}
+function botGuess(text) {
+  if (bot.st !== 'draw' || (bot.got && bot.got[myId])) return;
+  if (!matches(text, bot.word)) {
+    push(botGuessesRef, { n: S.myName, c: S.myHue, t: text, r: bot.round || 0, at: serverNow() }).catch(() => {});
+    return;
+  }
+  let rank = 0;
+  txBot(b => {
+    rank = 0;
+    if (b.st !== 'draw' || !matches(text, b.word)) return;
+    b.got = b.got || {};
+    if (b.got[myId]) return;
+    rank = Object.keys(b.got).length + 1;
+    b.got[myId] = rank;
+    b.scores = b.scores || {};
+    const was = b.scores[myId] || { s: 0 };
+    b.scores[myId] = { name: S.myName, c: S.myHue, s: (was.s || 0) + (rank === 1 ? 3 : rank === 2 ? 2 : 1) };
+    if (botAllGot(b)) { b.st = 'reveal'; b.revealAt = serverNow(); }
+    return b;
+  }).then(r => {
+    if (!r || !r.committed || !rank) return;
+    push(botGuessesRef, { n: S.myName, c: S.myHue, ok: 1, r: bot.round || 0, at: serverNow() }).catch(() => {});
+    sound('win');
+    banner(`✓ You got it! +${rank === 1 ? 3 : rank === 2 ? 2 : 1}`, 2.5);
+  });
+}
+let watching = false;
+function setWatching(on) {   // tell everyone you're at the board in Guess mode, so a round ends once all of you have it
+  if (on === watching || !S.myName) return;
+  watching = on;
+  if (on) { set(watchRef, { name: S.myName, c: S.myHue }).catch(() => {}); onDisconnect(watchRef).remove(); }
+  else { remove(watchRef).catch(() => {}); try { onDisconnect(watchRef).cancel(); } catch (e) {} }
+}
+
+// ---------- Doodle mode: one pen, passed around ----------
+function takePen() {
+  if (!S.myName) return;
+  runTransaction(penRef, p => {
+    if (p && p.id && p.id !== myId && S.presence[p.id]) return;   // someone else has it
+    return { id: myId, name: S.myName, c: S.myHue, at: serverNow() };
+  }).then(r => {
+    if (!r.committed) { banner('🖍 Someone else has the pen', 2); return; }
+    onDisconnect(penRef).remove();
+    myKeys = [];
+    sound('join');
+    banner('🖍 You have the pen! Draw anything', 2.5);
+  }).catch(e => console.warn('Sketch pen', e));
+}
+function givePen() {
   endLine();
-  wipeDoodle();
+  runTransaction(penRef, p => (p && p.id === myId ? null : undefined)).catch(() => {});
+  try { onDisconnect(penRef).cancel(); } catch (e) {}
 }
-function addMeAsArtist() {
+function artistNames() { return Object.values(artists || {}).map(p => p && p.n).filter(Boolean); }
+function addMeAsArtist() {   // everyone who draws on the doodle gets credit in the gallery
   const k = chipKey(S.myName);
-  if (doodle.a && doodle.a[k]) return;
-  set(ref(db, 'room/sketch/doodle/a/' + k), { n: S.myName, c: S.myHue }).catch(() => {});
+  if (artists && artists[k]) return;
+  artists = { ...(artists || {}), [k]: { n: S.myName, c: S.myHue } };
+  set(ref(db, 'room/sketch/doodleArt/' + k), { n: S.myName, c: S.myHue }).catch(() => {});
 }
+
+// ---------- Saving a doodle to the gallery ----------
+let savedSig = '';   // the doodle as it was when it was last saved, so the same one isn't saved twice
+function doodleSig() { const ks = Object.keys(doodles).filter(k => doodles[k]).sort(); return ks.length + ':' + (ks[ks.length - 1] || ''); }
 function saveDoodle() {   // hang a copy of the doodle in the gallery
   if (!doodling()) return;
   endLine();
-  const keys = Object.keys(dlines).sort().filter(k => dlines[k] && dlines[k].p);
-  if (!keys.length) { banner('🖍️ Draw something first', 2); return; }
+  const list = doodleList().filter(([, l]) => l.p);
+  if (!list.length) { banner('🖍 Draw something first', 2); return; }
   const sig = doodleSig();
   if (sig === savedSig) { banner('📸 This doodle is already in the gallery', 2.5); return; }
-  const lines = keys.map(k => { const l = dlines[k]; return { k: l.k || 0, z: l.z == null ? 1 : l.z, e: l.e ? 1 : 0, p: l.p }; });
+  const lines = list.map(([, l]) => {
+    const o = { k: l.k || 0, z: l.z == null ? 1 : l.z, e: l.e ? 1 : 0, p: l.p };
+    if (l.f) o.f = 1;
+    if (l.sh) o.sh = l.sh;
+    return o;
+  });
   const art = { s: styleOf(), l: lines };
   if (JSON.stringify(art).length > 3000000) { banner('This doodle is too big to save', 3); return; }
   const title = titleInput.value.trim().slice(0, 40) || 'Untitled';
-  const artists = doodle.a && Object.keys(doodle.a).length ? doodle.a : { [chipKey(S.myName)]: { n: S.myName, c: S.myHue } };
+  const by = artists && Object.keys(artists).length ? artists : { [chipKey(S.myName)]: { n: S.myName, c: S.myHue } };
   const id = push(ref(db, 'room/sketch/gallery')).key;
   savedSig = sig;
   set(ref(db, 'room/sketch/galleryArt/' + id), art)   // the lines first, then the label, so the wall never shows an empty picture
-    .then(() => set(ref(db, 'room/sketch/gallery/' + id), { t: title, s: art.s, a: artists, by: S.myName, at: serverNow() }))
+    .then(() => set(ref(db, 'room/sketch/gallery/' + id), { t: title, s: art.s, a: by, by: S.myName, at: serverNow() }))
     .then(() => {
       titleInput.value = '';
       banner('📸 Saved to the Doodle Gallery!', 2.5);
@@ -462,6 +777,7 @@ function sendGuess() {
   const text = guessInput.value.trim().slice(0, 40);
   if (!text) return;
   guessInput.value = '';
+  if (guessing()) { botGuess(text); return; }
   if (game.st !== 'draw' || !isPlayer() || game.drawer === myId || (game.got && game.got[myId])) return;
   if (!matches(text, game.word)) {
     push(guessesRef, { n: S.myName, c: S.myHue, t: text, r: game.rn || 0, at: serverNow() }).catch(() => {});
@@ -502,18 +818,21 @@ css.textContent = `
   .skFeed div { margin: 1px 0; }
   .skFeed .ok { color: #7dff8a; }
   .skButtons { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(243,230,207,0.2); }
+  .skCredit { margin-top: 6px; font-size: 11px; opacity: 0.6; }
   #skPad { display: none; position: fixed; left: 50%; top: 56px; transform: translateX(-50%); text-align: center; z-index: 2; }
   body.skPadOn #skPad { display: block; }
   #skPadWord { display: inline-block; font-size: 18px; color: #ffe9a0; background: rgba(30,20,12,0.88); padding: 5px 14px; border-radius: 14px; margin-bottom: 6px; }
-  #skCanvas { display: block; margin: 0 auto; width: min(56vw, calc((100vh - 210px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
+  #skCanvas { display: block; margin: 0 auto; width: min(56vw, calc((100vh - 240px) * 1.5)); height: auto; aspect-ratio: 3 / 2;
               border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.6); touch-action: none; cursor: crosshair; }
   body:not(.skDrawing) #skCanvas { cursor: default; }
-  #skTools { display: none; margin-top: 8px; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; }
+  body.skFill #skCanvas { cursor: cell; }
+  #skTools { display: none; margin-top: 8px; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; max-width: min(96vw, 760px); margin-left: auto; margin-right: auto; }
   body.skDrawing #skTools { display: flex; }
   #skTools button { font-family: Georgia, serif; font-size: 15px; padding: 6px 12px; border: none; border-radius: 16px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
   #skTools button:disabled { opacity: 0.45; cursor: default; }
-  #skTools button.dot { width: 30px; height: 30px; padding: 0; border-radius: 50%; }
+  #skTools button.dot { width: 28px; height: 28px; padding: 0; border-radius: 50%; border: 2px solid rgba(0,0,0,0.25); }
   #skTools button.on { outline: 3px solid #ffd54f; outline-offset: 2px; }
+  #skTools .skBreak { flex-basis: 100%; height: 0; }
   #skGuess { display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); width: min(420px, calc(100vw - 32px)); gap: 6px; z-index: 2; }
   body.skGuessOn #skGuess { display: flex; }
   #skGuess input { flex: 1; min-width: 0; font-size: 16px; padding: 9px 14px; border-radius: 16px; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
@@ -523,10 +842,10 @@ css.textContent = `
     #skPanel { left: 8px; right: 8px; width: auto; bottom: 8px; max-height: 36vh; padding: 8px 10px; }
     #skPad { top: 44px; width: 100vw; }
     #skPadWord { font-size: 15px; padding: 3px 10px; margin-bottom: 4px; }
-    #skCanvas { width: min(96vw, calc((100vh - 44px - var(--skPanelH, 200px) - 130px) * 1.5)); }
+    #skCanvas { width: min(96vw, calc((100vh - 44px - var(--skPanelH, 200px) - 160px) * 1.5)); }
     #skTools { gap: 4px; margin-top: 5px; }
     #skTools button { font-size: 13px; padding: 5px 9px; }
-    #skTools button.dot { width: 26px; height: 26px; }
+    #skTools button.dot { width: 24px; height: 24px; }
     #skGuess { bottom: calc(var(--skPanelH, 200px) + 16px); }
   }`;
 document.head.appendChild(css);
@@ -549,18 +868,27 @@ guessBox.append(guessInput, btn('Guess', sendGuess));
 document.body.appendChild(guessBox);
 guessInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendGuess(); if (e.key === 'Escape') guessInput.blur(); });
 
-// The drawer's tools: colors, eraser, brush sizes, undo, clear, hint, done and skip
-let myColor = 0, mySize = 1, erasing = false;
+// The drawer's tools: 12 colors, pen, bucket, line, square, circle, eraser, brush sizes,
+// undo, clear, undo clear, hint, done, skip, give up pen and save
+let myColor = 0, mySize = 1, tool = 'pen';   // tool is 'pen', 'fill', 'line', 'rect', 'oval' or 'erase'
+const SHAPE_OF = { line: 'l', rect: 'r', oval: 'o' };
 const colorBtns = [], sizeBtns = [];
-for (let k = 0; k < 7; k++) {
-  const b = btn('', () => { myColor = k; erasing = false; refreshTools(); }, 'dot');
-  b.title = 'Color';
+for (let k = 0; k < 12; k++) {
+  const b = btn('', () => { myColor = k; if (tool === 'erase') tool = 'pen'; refreshTools(); }, 'dot');
   colorBtns.push(b); tools.appendChild(b);
 }
-const eraserBtn = btn('🧽', () => { erasing = true; refreshTools(); });
-eraserBtn.title = 'Eraser';
-tools.appendChild(eraserBtn);
-['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
+tools.appendChild(el('div', 'skBreak'));
+function toolBtn(icon, name, title) { const b = btn(icon, () => { tool = name; refreshTools(); }); b.title = title; tools.appendChild(b); return b; }
+const toolBtns = {
+  pen: toolBtn('✏️', 'pen', 'Pen'),
+  fill: toolBtn('🪣', 'fill', 'Fill (paint bucket)'),
+  line: toolBtn('📏', 'line', 'Line (drag it out)'),
+  rect: toolBtn('⬜', 'rect', 'Square (drag it out; hold Shift for an exact square)'),
+  oval: toolBtn('⚪', 'oval', 'Circle (drag it out; hold Shift for a perfect circle)'),
+  erase: toolBtn('🧽', 'erase', 'Eraser')
+};
+['S', 'M', 'L'].forEach((label, k) => { const b = btn(label, () => { mySize = k; if (tool === 'fill') tool = 'pen'; refreshTools(); }); b.title = 'Brush size'; sizeBtns.push(b); tools.appendChild(b); });
+tools.appendChild(el('div', 'skBreak'));
 const undoBtn = btn('↶ Undo', undo);
 const clearBtn = btn('🗑 Clear', clearBoard);
 const undoClearBtn = btn('↩ Undo clear', undoClear);
@@ -568,74 +896,122 @@ undoClearBtn.title = 'Bring back what was on the board before the last Clear';
 const hintBtn = btn('💡 Hint', giveHint);
 const doneBtn = btn('✓ Done', doneDrawing);
 const skipBtn = btn('⏭ New words', newWords);
+const givePenBtn = btn('✋ Give up pen', givePen);
 const saveBtn = btn('📸 Save', saveDoodle);
 saveBtn.title = 'Save to the Doodle Gallery';
-tools.append(undoBtn, clearBtn, undoClearBtn, hintBtn, doneBtn, skipBtn, saveBtn);
+tools.append(undoBtn, clearBtn, undoClearBtn, hintBtn, doneBtn, skipBtn, givePenBtn, saveBtn);
 const titleInput = el('input');   // the doodle's title for the gallery (kept between panel redraws)
 titleInput.maxLength = 40; titleInput.placeholder = 'Title (optional)';
 titleInput.style.cssText = 'width: 100%; box-sizing: border-box; font-size: 15px; padding: 6px 10px; border-radius: 12px; margin-bottom: 4px;';
 titleInput.addEventListener('keydown', e => { if (e.key === 'Enter') saveDoodle(); if (e.key === 'Escape') titleInput.blur(); });
 function refreshTools() {
-  const st = STYLES[styleOf()];
-  colorBtns.forEach((b, k) => { b.style.background = st.ink[k]; b.classList.toggle('on', !erasing && myColor === k); });
-  eraserBtn.classList.toggle('on', erasing);
-  sizeBtns.forEach((b, k) => b.classList.toggle('on', mySize === k));
+  const st = STYLES[styleOf()], doodle = doodling();
+  colorBtns.forEach((b, k) => { b.style.background = st.ink[k]; b.title = st.names[k]; b.classList.toggle('on', tool !== 'erase' && myColor === k); });
+  for (const [name, b] of Object.entries(toolBtns)) b.classList.toggle('on', tool === name);
+  sizeBtns.forEach((b, k) => b.classList.toggle('on', tool !== 'fill' && mySize === k));
+  document.body.classList.toggle('skFill', tool === 'fill');
   const shown = new Set(Array.isArray(game.hint) ? game.hint : []);
   const lettersLeft = [...(game.word || '')].filter((ch, i) => ch !== ' ' && !shown.has(i)).length;
-  const dd = doodling();
-  hintBtn.style.display = !dd && game.set && game.set.hints ? '' : 'none';
-  doneBtn.style.display = skipBtn.style.display = dd ? 'none' : '';
-  saveBtn.style.display = dd ? '' : 'none';
+  hintBtn.style.display = !doodle && game.set && game.set.hints ? '' : 'none';
   hintBtn.disabled = lettersLeft <= 1;
+  doneBtn.style.display = doodle ? 'none' : '';
+  skipBtn.style.display = doodle ? 'none' : '';
   skipBtn.disabled = !!(game.got && Object.keys(game.got).length);
-  undoBtn.disabled = !myKeys.some(k => (dd ? dlines : strokes)[k]);
+  givePenBtn.style.display = doodle ? '' : 'none';
+  saveBtn.style.display = doodle ? '' : 'none';
+  const store = doodle ? doodles : strokes;
+  undoBtn.disabled = !myKeys.some(k => store[k]);
   undoClearBtn.style.display = canUndoClear() ? '' : 'none';
 }
 
 // ---------- Drawing with the mouse or a finger ----------
-let live = null, liveKey = '', liveTimer = 0;
-let myKeys = [];   // my lines this round, newest last (for Undo)
-function canDraw() { return S.atSketch && ((game.st === 'draw' && game.drawer === myId) || doodling()); }
+let live = null, liveKey = '', liveDoodle = false, liveTimer = 0;
+let myKeys = [];   // my lines and fills this round (or since I took the pen), newest last (for Undo)
+function canDraw() { return !!S.atSketch && (doodling() ? penHolder() === myId : (game.st === 'draw' && game.drawer === myId)); }
+function linesPath(doodle) { return doodle ? 'room/sketch/doodles/' : 'room/sketch/strokes/'; }
 function toPt(e) {
   const r = cv.getBoundingClientRect();
   return [Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * CW), Math.round(Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) * CH)];
 }
-function packed(l) { return { r: l.r, k: l.k, z: l.z, e: l.e, p: l.pts.map(a => a[0] + ',' + a[1]).join(' ') }; }
+function packed(l) {
+  const o = { r: l.r, k: l.k, z: l.z, e: l.e, p: l.pts.map(a => a[0] + ',' + a[1]).join(' ') };
+  if (l.sh) o.sh = l.sh;
+  return o;
+}
 function flush() {
   clearTimeout(liveTimer); liveTimer = 0;
   if (!live || !liveKey) return;
-  set(ref(db, (live.d ? 'room/sketch/dstrokes/' : 'room/sketch/strokes/') + liveKey), packed(live)).catch(e => console.warn('Sketch line', e));
+  set(ref(db, linesPath(liveDoodle) + liveKey), packed(live)).catch(e => console.warn('Sketch line', e));
 }
 function flushSoon() { if (!liveTimer) liveTimer = setTimeout(flush, 120); }   // send the line a few times a second while drawing
+function shapeEnd(start, p, sh, exact) {   // where a shape's far corner goes (Shift makes it exact)
+  if (!exact) return p;
+  const dx = p[0] - start[0], dy = p[1] - start[1];
+  if (sh === 'l') {   // a line snaps to flat, straight up or a 45° slant
+    const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
+    return [Math.round(start[0] + Math.cos(ang) * len), Math.round(start[1] + Math.sin(ang) * len)];
+  }
+  const m = Math.max(Math.abs(dx), Math.abs(dy));   // a square or circle: the same width and height
+  return [start[0] + (dx < 0 ? -m : m), start[1] + (dy < 0 ? -m : m)];
+}
 cv.addEventListener('pointerdown', e => {
   if (!canDraw()) return;
   e.preventDefault();
+  endLine();
+  const doodle = doodling(), store = doodle ? doodles : strokes;
+  const key = push(doodle ? doodlesRef : strokesRef).key;
+  if (doodle) addMeAsArtist();
+  if (tool === 'fill') {   // one tap fills; everyone's screen does the filling from just the spot and the color
+    const p = toPt(e), rec = { r: doodle ? 0 : (game.rn || 0), k: myColor, z: 0, e: 0, f: 1, p: p[0] + ',' + p[1] };
+    store[key] = rec; myKeys.push(key); dirty = true;
+    set(ref(db, linesPath(doodle) + key), rec).catch(err => console.warn('Sketch fill', err));
+    sound('flip');
+    refreshTools();
+    return;
+  }
   try { cv.setPointerCapture(e.pointerId); } catch (err) {}
-  const dd = doodling();   // a doodle line, or a line in the game
-  liveKey = push(dd ? dstrokesRef : strokesRef).key;
-  live = { d: dd, r: dd ? 0 : (game.rn || 0), k: myColor, z: mySize, e: erasing ? 1 : 0, pts: [toPt(e)] };
+  liveKey = key; liveDoodle = doodle;
+  const p = toPt(e), sh = SHAPE_OF[tool] || '';
+  live = { r: doodle ? 0 : (game.rn || 0), k: myColor, z: mySize, e: tool === 'erase' ? 1 : 0, pts: sh ? [p, p] : [p], sh };
   myKeys.push(liveKey);
-  (dd ? dlines : strokes)[liveKey] = packed(live); dirty = true;
-  if (dd) addMeAsArtist();
-  flushSoon();
+  store[liveKey] = packed(live); dirty = true;
+  if (!sh) flushSoon();   // a shape only goes up for everyone once you let go
 });
 cv.addEventListener('pointermove', e => {
   if (!live) return;
-  const p = toPt(e), last = live.pts[live.pts.length - 1];
+  const p = toPt(e);
+  if (live.sh) {   // stretch the shape from where you started to where you are
+    live.pts[1] = shapeEnd(live.pts[0], p, live.sh, e.shiftKey);
+    (liveDoodle ? doodles : strokes)[liveKey] = packed(live); dirty = true;
+    return;
+  }
+  const last = live.pts[live.pts.length - 1];
   if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 3) return;
   live.pts.push(p);
-  (live.d ? dlines : strokes)[liveKey] = packed(live); dirty = true;
+  (liveDoodle ? doodles : strokes)[liveKey] = packed(live); dirty = true;
   flushSoon();
 });
-function endLine() { if (!live) return; flush(); live = null; liveKey = ''; refreshTools(); }
+function endLine() {
+  if (!live) return;
+  if (live.sh) {
+    const [a, b] = live.pts;
+    if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 4) {   // just a tap, not a drag: no shape
+      delete (liveDoodle ? doodles : strokes)[liveKey];
+      myKeys = myKeys.filter(k => k !== liveKey);
+      dirty = true; live = null; liveKey = ''; refreshTools();
+      return;
+    }
+  }
+  flush(); live = null; liveKey = ''; refreshTools();
+}
 cv.addEventListener('pointerup', endLine);
 cv.addEventListener('pointercancel', endLine);
 cv.addEventListener('lostpointercapture', endLine);
 function undo() {
-  const dd = doodling(), lines = dd ? dlines : strokes, path = dd ? 'room/sketch/dstrokes/' : 'room/sketch/strokes/';
+  const doodle = doodling(), store = doodle ? doodles : strokes;
   while (myKeys.length) {
     const k = myKeys.pop();
-    if (lines[k]) { delete lines[k]; dirty = true; remove(ref(db, path + k)).catch(() => {}); break; }
+    if (store[k]) { delete store[k]; dirty = true; remove(ref(db, linesPath(doodle) + k)).catch(() => {}); break; }
   }
   refreshTools();
 }
@@ -644,26 +1020,26 @@ function clearBoard() {
   if (Date.now() - clearArmed > 2500) { clearArmed = Date.now(); banner('🗑 Press Clear again to wipe the board', 2.5); return; }
   clearArmed = 0;
   endLine();
-  if (doodling()) {   // a clean doodle board (and nobody has drawn on it yet)
-    if (!Object.keys(dlines).some(k => dlines[k])) return;   // nothing to clear
+  if (doodling()) {
+    if (!doodleList().length) return;   // nothing to clear
     const copy = {};   // keep what was there, so anyone at the board can press Undo clear
-    for (const [k, l] of Object.entries(dlines)) if (l) copy[k] = l;
-    dback = { l: copy, a: doodle.a || null };
+    for (const [k, l] of doodleList()) copy[k] = l;
+    dback = { l: copy, a: Object.keys(artists || {}).length ? artists : null };
     set(dbackRef, dback).catch(() => {});
-    remove(dstrokesRef).catch(() => {});
-    set(ref(db, 'room/sketch/doodle/a'), null).catch(() => {});
-    dlines = {}; myKeys = []; dirty = true; savedSig = '';
-    refreshTools(); refreshSketchUI(true);
-    return;
+    remove(doodlesRef).catch(() => {});
+    remove(artRef).catch(() => {});
+    doodles = {}; artists = {}; savedSig = '';
+  } else {
+    const mine = strokeList();
+    if (!mine.length) return;   // nothing to clear
+    const copy = {};   // the drawer keeps their drawing, so they can press Undo clear
+    for (const [k, l] of mine) copy[k] = l;
+    gBackup = { rn: game.rn || 0, l: copy };
+    remove(strokesRef).catch(() => {});
+    strokes = {};
   }
-  const mine = strokeList();
-  if (!mine.length) return;   // nothing to clear
-  const copy = {};   // the drawer keeps their drawing, so they can press Undo clear
-  for (const [k, l] of Object.entries(strokes)) if (l && l.r === (game.rn || 0)) copy[k] = l;
-  gBackup = { rn: game.rn || 0, l: copy };
-  remove(strokesRef).catch(() => {});
-  strokes = {}; myKeys = []; dirty = true;
-  refreshTools();
+  myKeys = []; dirty = true;
+  refreshTools(); refreshSketchUI(true);
 }
 function canUndoClear() {
   if (doodling()) return !!(dback && dback.l);
@@ -675,9 +1051,9 @@ function undoClear() {   // put the cleared drawing back (anything drawn since s
   if (doodling()) {
     const back = dback;
     dback = null;
-    update(dstrokesRef, back.l).catch(e => console.warn('Undo clear', e));
-    for (const [k, l] of Object.entries(back.l)) if (!dlines[k]) dlines[k] = l;
-    if (back.a) update(ref(db, 'room/sketch/doodle/a'), back.a).catch(() => {});
+    update(doodlesRef, back.l).catch(e => console.warn('Undo clear', e));
+    for (const [k, l] of Object.entries(back.l)) if (!doodles[k]) doodles[k] = l;
+    if (back.a) { update(artRef, back.a).catch(() => {}); artists = { ...back.a, ...(artists || {}) }; }
     remove(dbackRef).catch(() => {});
   } else {
     const back = gBackup;
@@ -701,42 +1077,118 @@ function settingRow(label, key, options) {
   }
   return row;
 }
+const MODE_OPTIONS = [['game', '🎲 Game'], ['doodle', '🖍 Doodle'], ['guess', '🤖 Guess']];
+const BOARD_OPTIONS = [['white', 'Whiteboard'], ['chalk', 'Chalkboard']];
+function doodlePanel() {   // the panel in doodle mode
+  const holder = penHolder();
+  let status;
+  if (holder === myId) status = 'You have the pen. Draw anything, take your time!';
+  else if (holder) status = `🖍 ${pen.name} is doodling…`;
+  else status = 'Nobody has the pen. Take it to draw!';
+  panel.appendChild(el('div', 'skStatus', status));
+  const names = artistNames();
+  panel.appendChild(el('div', 'skLabel', names.length ? 'Drawn by: ' + names.join(', ') : 'Nobody has drawn on it yet.'));
+  panel.appendChild(el('div', 'skLabel', 'Save it to the Doodle Gallery on the left wall:'));
+  panel.appendChild(titleInput);
+  const srow = el('div');
+  srow.appendChild(btn('📸 Save to gallery', saveDoodle, '', !doodleList().length));
+  panel.appendChild(srow);
+  panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
+  const row = el('div', 'skButtons');
+  if (!holder) row.appendChild(btn('🖍 Take the pen', takePen));
+  if (holder === myId) row.appendChild(btn('✋ Give up pen', givePen));
+  row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
+  panel.appendChild(row);
+}
+function guessPanel() {   // the panel in Guess mode
+  const st = bot.st || 'idle', got = !!(bot.got && bot.got[myId]);
+  let status;
+  if (!DOODLES) status = doodlesFailed ? 'Could not load doodles.js. Is it uploaded next to sketch.js?' : 'Loading the doodles…';
+  else if (st === 'draw') status = got ? 'You got it! ✓ Waiting for the others…' : 'What is it? Type your guess below!';
+  else if (st === 'reveal') status = `It was "${bot.word}"!`;
+  else if (st === 'over') status = bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over';
+  else status = 'The board draws a real doodle. Guess what it is! Press Start when everyone is here.';
+  panel.appendChild(el('div', 'skStatus', status));
+  if (botPlaying()) panel.appendChild(el('div', 'skLabel', `Doodle ${bot.round || 1} of ${bot.rounds || 10}`));
+  if (st === 'draw') panel.appendChild(el('div', 'skWord', botBlanks()));
+
+  // Scores
+  const list = el('div', 'skPlayers');
+  const rows = Object.entries(bot.scores || {}).sort((a, b) => (b[1].s || 0) - (a[1].s || 0));
+  for (const [id, p] of rows) {
+    const row = el('div');
+    const dot = el('span', '', '● '); dot.style.color = RAINBOW_CSS[Number.isInteger(p.c) && p.c >= 0 && p.c < 7 ? p.c : 0];
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${p.s || 0}${bot.got && bot.got[id] ? ' ✓' : ''}`));
+    list.appendChild(row);
+  }
+  if (rows.length) panel.appendChild(list);
+
+  // This round's guesses
+  const rn = bot.round || 0;
+  const guesses = Object.values(botGuessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));
+  if (botPlaying() && guesses.length) {
+    const feed = el('div', 'skFeed');
+    for (const gu of guesses.slice(-6)) {
+      const line = el('div', gu.ok ? 'ok' : '');
+      if (gu.ok) line.textContent = `✓ ${gu.n} got it!`;
+      else {
+        const nm = el('b', '', gu.n + ': ');
+        if (Number.isInteger(gu.c) && gu.c >= 0 && gu.c < 7) nm.style.color = RAINBOW_CSS[gu.c];
+        line.append(nm, document.createTextNode(gu.t));
+      }
+      feed.appendChild(line);
+    }
+    panel.appendChild(feed);
+  }
+
+  // Settings
+  panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
+  if (!botPlaying()) {
+    panel.appendChild(settingRow('Doodles:', 'rounds', [[5, '5'], [10, '10'], [20, '20']]));
+    panel.appendChild(settingRow('Drawing speed:', 'speed', [['slow', 'Slow'], ['normal', 'Normal']]));
+  }
+
+  // Buttons
+  const row = el('div', 'skButtons');
+  if (!botPlaying()) row.appendChild(btn(st === 'over' ? 'New game' : '▶ Start', startBot, '', !DOODLES));
+  if (st === 'draw') row.appendChild(btn('👀 Reveal', botReveal));
+  if (botPlaying()) row.appendChild(btn('End game', () => { if (confirm('End this Guess game for everyone?')) botEnd(); }));
+  row.appendChild(btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
+  panel.appendChild(row);
+  panel.appendChild(el('div', 'skCredit', 'Doodles from Google\'s "Quick, Draw!" (CC BY 4.0)'));
+}
 export function refreshSketchUI(force) {
-  const at = !!S.atSketch, dd = doodling();
-  const drawing = at && ((game.st === 'draw' && game.drawer === myId) || dd);
+  const at = !!S.atSketch, doodle = doodling(), guess = guessing();
+  const drawing = canDraw();
   const got = !!(game.got && game.got[myId]);
+  setWatching(at && guess);
+  if (guess) needDoodles();
   document.body.classList.toggle('skDrawing', drawing);
-  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (game.st === 'draw' || game.st === 'reveal'))));
-  document.body.classList.toggle('skGuessOn', at && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got);
-  padWord.textContent = dd ? '🖍️ Doodle · everyone at the board can draw' : drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
+  document.body.classList.toggle('skPadOn', at && (drawing || (narrow() && (doodle || guess || game.st === 'draw' || game.st === 'reveal'))));
+  const guessOn = guess ? bot.st === 'draw' && !(bot.got && bot.got[myId])
+                        : !doodle && game.st === 'draw' && isPlayer() && game.drawer !== myId && !got;
+  document.body.classList.toggle('skGuessOn', at && guessOn);
+  if (guess) padWord.textContent = bot.st === 'draw' ? botBlanks() : bot.st === 'reveal' ? `It was: ${bot.word}` : '🤖 Guess the doodle';
+  else if (doodle) padWord.textContent = drawing ? '🖍 Doodle anything · take your time' : penHolder() ? `🖍 ${pen.name} is doodling` : '🖍 Doodle board';
+  else padWord.textContent = drawing ? `Draw: ${game.word} · take your time` : game.st === 'reveal' ? `It was: ${game.word}` : blanks();
   if (drawing) refreshTools();
   if (!at) { lastSig = ''; return; }
   const rn = game.rn || 0;
   const guesses = Object.values(guessesRaw).filter(x => x && x.r === rn).sort((a, b) => (a.at || 0) - (b.at || 0));   // only this round's
-  const sig = JSON.stringify([game, settings, guesses, wins, Object.keys(S.presence), narrow(), doodle, !!dback]);
+  const botSig = guess ? [bot, botGuessesRaw, botHintCount(), !!DOODLES, doodlesFailed] : 0;
+  const doodleSigs = doodle ? [artists, doodleList().length > 0] : 0;
+  const sig = JSON.stringify([game, settings, pen, guesses, wins, Object.keys(S.presence), narrow(), botSig, doodleSigs]);
   if (!force && sig === lastSig) return;
   lastSig = sig;
 
   const typing = document.activeElement === titleInput;
   panel.textContent = '';
-  if (dd) {   // the doodle board's panel
-    panel.appendChild(el('h3', '', '🖍️ Doodle board'));
-    panel.appendChild(el('div', 'skStatus', 'No words, no points: everyone at the board can draw together.'));
-    panel.appendChild(el('div', 'skLabel', doodlers().length ? 'Drawn by: ' + doodlers().join(', ') : 'Nobody has drawn yet.'));
-    panel.appendChild(el('div', 'skLabel', 'Save it to the Doodle Gallery on the left wall:'));
-    panel.appendChild(titleInput);
-    const srow = el('div');
-    srow.append(btn('📸 Save to gallery', saveDoodle), btn('🧽 Clear', clearBoard));
-    if (canUndoClear()) srow.append(btn('↩ Undo clear', undoClear));
-    panel.appendChild(srow);
-    panel.appendChild(settingRow('Board:', 'style', [['white', 'Whiteboard'], ['chalk', 'Chalkboard']]));
-    const drow = el('div', 'skButtons');
-    drow.append(btn('✖ Put the doodle away', closeDoodle), btn('← Back', () => { if (hooks.sketchBack) hooks.sketchBack(); }));
-    panel.appendChild(drow);
-    if (typing) titleInput.focus();
-    return;
-  }
   panel.appendChild(el('h3', '', '✏️ ' + SKETCH_NAME));
+  if (guess) { guessPanel(); return; }
+  if (doodle) { doodlePanel(); if (typing) titleInput.focus(); return; }
   const me = isPlayer(), drawerName = nameOf(game.drawer), st = game.st || 'lobby';
   let status = '';
   if (st === 'lobby') status = activeCount(game) >= 2 ? 'Ready! Press Start when everyone is in.' : 'Join, then start when 2 or more are in.';
@@ -788,8 +1240,9 @@ export function refreshSketchUI(force) {
     panel.appendChild(feed);
   }
 
-  // Settings (the board style can change any time)
-  panel.appendChild(settingRow('Board:', 'style', [['white', 'Whiteboard'], ['chalk', 'Chalkboard']]));
+  // Settings (the board style can change any time; the mode only when no game is running)
+  if (!playing(game)) panel.appendChild(settingRow('Mode:', 'mode', MODE_OPTIONS));
+  panel.appendChild(settingRow('Board:', 'style', BOARD_OPTIONS));
   if (st === 'lobby' || st === 'over') {
     panel.appendChild(settingRow('Turns each:', 'turns', [[1, '1'], [2, '2'], [3, '3']]));
     panel.appendChild(settingRow('Words:', 'words', [['easy', 'Easy'], ['mixed', 'Mixed'], ['hard', 'Hard']]));
@@ -801,7 +1254,6 @@ export function refreshSketchUI(force) {
   if (!me) row.appendChild(btn(playing(game) ? 'Join game' : 'Join', joinGame));
   if (st === 'lobby' && me) row.appendChild(btn('Start', startGame, '', activeCount(game) < 2));
   if (st === 'over') row.appendChild(btn('New game', newGame));
-  if (!playing(game)) row.appendChild(btn('🖍️ Doodle', startDoodle));
   if (st === 'pick' && me && game.drawer !== myId) row.appendChild(btn('⏭ Skip their turn', skipTheirTurn));
   if (me) row.appendChild(btn('Leave game', leaveGame));
   if (me && playing(game)) row.appendChild(btn('End game', () => { if (confirm('End this LittleSketch game for everyone?')) endGame(); }));
@@ -810,9 +1262,9 @@ export function refreshSketchUI(force) {
 }
 window.addEventListener('resize', () => refreshSketchUI(true));
 
-// The room calls these when you walk up to the board and step away
+// The room calls these when you walk up to the board and step away (you keep the doodle pen until you give it up or leave the room)
 export function sketchEnter() { refreshSketchUI(true); }
-export function sketchLeave() { endLine(); refreshSketchUI(true); }
+export function sketchLeave() { endLine(); setWatching(false); refreshSketchUI(true); }
 
 // ---------- Little heads-ups when the game changes ----------
 let firstGame = true;
@@ -855,46 +1307,70 @@ function tick() {
 let tickAt = 0;
 export function updateSketch(dt) {
   const t = performance.now();
+  if (guessing() && bot.st === 'draw' && DOODLES && botFrac() < 1) dirty = true;   // the doodle is still being drawn
   if (dirty && t - lastDraw > 50) { lastDraw = t; dirty = false; redraw(); }
   if (headDirty) { headDirty = false; drawHead(); }
-  if (t - tickAt > 1000) { tickAt = t; tick(); if (S.atSketch) refreshSketchUI(); }
+  if (t - tickAt > 1000) {
+    tickAt = t; tick();
+    if (guessing()) { botTick(); headDirty = true; dirty = true; }   // hints show up as time passes
+    if (doodling()) headDirty = true;   // notices when the pen holder leaves the room
+    if (S.atSketch) refreshSketchUI();
+  }
 }
 
 // ---------- Listening ----------
 export function startSketch() {
+  let prevMode = settings.mode;
   onValue(ref(db, 'room/sketch/settings'), s => {
     settings = { ...DEFAULTS, ...(s.val() || {}) };
+    if (settings.mode !== prevMode) { prevMode = settings.mode; endLine(); myKeys = []; }
+    if (settings.mode === 'guess') needDoodles();
     applyStyle(); refreshSketchUI();
   });
+  onValue(botRef, s => {
+    const prev = bot;
+    bot = s.val() || {};
+    if (botPlaying()) needDoodles();
+    if (guessing() && S.atSketch) {   // little heads-ups for whoever is at the board
+      if (bot.st === 'reveal' && prev.st === 'draw') banner(`It was "${bot.word}"!`, 3);
+      if (bot.st === 'draw' && (prev.round !== bot.round || prev.st !== 'draw')) sound('flip');
+      if (bot.st === 'over' && prev.st !== 'over') { banner(bot.winner ? `🏆 ${bot.winner} wins!` : 'Game over', 4); if (bot.winner) sound('win'); }
+    }
+    dirty = true; headDirty = true;
+    refreshSketchUI();
+  });
+  onValue(botGuessesRef, s => { botGuessesRaw = s.val() || {}; refreshSketchUI(); });
+  onValue(ref(db, 'room/sketch/watch'), s => { watchers = s.val() || {}; });
   onValue(gameRef, s => {
-    const prev = game, wasDoodle = doodling();
+    const prev = game;
     game = s.val() || {};
-    if (doodling() !== wasDoodle) { endLine(); myKeys = []; }   // a game started (or ended) under the doodle
     notice(prev, game);
     dirty = true; headDirty = true;
     refreshSketchUI();
   });
-  const keep = s => { if (s.key !== liveKey) { strokes[s.key] = s.val(); dirty = true; } };   // my own line in progress is drawn from here, not echoed back
-  onChildAdded(strokesRef, keep);
-  onChildChanged(strokesRef, keep);
-  onChildRemoved(strokesRef, s => { delete strokes[s.key]; dirty = true; });
-  onValue(guessesRef, s => { guessesRaw = s.val() || {}; refreshSketchUI(); });
-  onValue(doodleRef, s => {
-    const was = doodling();
-    doodle = s.val() || {};
-    if (doodling() !== was) { endLine(); myKeys = []; savedSig = ''; }
-    dirty = true; headDirty = true;
+  onValue(penRef, s => {
+    pen = s.val() || {};
+    if (pen.id !== myId && live && liveDoodle) endLine();
+    headDirty = true;
     refreshSketchUI();
   });
+  // my own line in progress is drawn from here, not echoed back
+  const keepGame = s => { if (s.key !== liveKey) { strokes[s.key] = s.val(); dirty = true; } };
+  const keepDoodle = s => { if (s.key !== liveKey) { doodles[s.key] = s.val(); dirty = true; } };
+  onChildAdded(strokesRef, keepGame);
+  onChildChanged(strokesRef, keepGame);
+  onChildRemoved(strokesRef, s => { delete strokes[s.key]; dirty = true; });
+  onChildAdded(doodlesRef, keepDoodle);
+  onChildChanged(doodlesRef, keepDoodle);
+  onChildRemoved(doodlesRef, s => { delete doodles[s.key]; dirty = true; });
+  onValue(guessesRef, s => { guessesRaw = s.val() || {}; refreshSketchUI(); });
+  onValue(ref(db, 'room/sketch/wins'), s => { wins = s.val() || {}; refreshSketchUI(); });
+  onValue(artRef, s => { artists = s.val() || {}; refreshSketchUI(); });
   onValue(dbackRef, s => {
     dback = s.val();
-    if (S.atSketch) { refreshTools(); refreshSketchUI(); }
+    if (canDraw()) refreshTools();
+    refreshSketchUI();
   });
-  const keepD = s => { if (s.key !== liveKey) { dlines[s.key] = s.val(); dirty = true; } };
-  onChildAdded(dstrokesRef, keepD);
-  onChildChanged(dstrokesRef, keepD);
-  onChildRemoved(dstrokesRef, s => { delete dlines[s.key]; dirty = true; });
-  onValue(ref(db, 'room/sketch/wins'), s => { wins = s.val() || {}; refreshSketchUI(); });
 }
 
 // Show the empty board right away, before anyone joins
