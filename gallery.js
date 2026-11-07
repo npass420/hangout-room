@@ -1,21 +1,28 @@
 // =====================================================================
-// gallery.js — the Doodle Gallery on the left wall
-// The newest six doodles from LittleSketch's doodle board hang in frames, each with a little name card.
-// Click the wall to open the viewer: flip through every saved doodle, like it, download it as a picture,
-// or take it down (only the people who drew it can). sketch.js saves the doodles and loads this file.
+// gallery.js — the Doodle Gallery, filling the left wall
+// 27 frames: pinned doodles first, then the most liked, then the newest (anyone can pin, up to 27).
+// Click a frame to open the viewer: flip through every saved doodle in that same order, like it, pin it,
+// download it as a picture, or take it down (only the people who drew it can). sketch.js saves the doodles and loads this file.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, get, set, remove, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, S, hooks, scene, camera, canvas, ROOM, std } from './core.js';
 
 const DW = 1200, DH = 800;          // a doodle's full size
-const SLOTS = 6;                    // frames on the wall
+const COLS = 9, ROWS = 3;
+const SLOTS = COLS * ROWS;          // frames on the wall (27)
+const MAX_PINS = SLOTS;             // pinned doodles can fill the whole wall, no more
 const keyOf = name => String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?';
-let items = [];                     // every saved doodle, newest first: { id, t, s, a, by, at, likes }
+let items = [];                     // every saved doodle in wall order: { id, t, s, a, by, at, likes, pin }
 const art = {};                     // id -> { s, l } (the doodle's lines), once loaded
 const loading = {};                 // id -> the promise loading it
 function namesOf(it) { return Object.values(it.a || {}).map(p => p && p.n).filter(Boolean); }
 function likesOf(it) { return Object.keys(it.likes || {}).length; }
+function pinned(it) { return !!(it && it.pin); }
+function pinCount() { return items.filter(pinned).length; }
+function wallOrder(p, q) {   // pinned first, then the most liked, then the newest
+  return (pinned(q) - pinned(p)) || (likesOf(q) - likesOf(p)) || (q.at - p.at);
+}
 function iLike(it) { return !!(S.myName && it.likes && it.likes[keyOf(S.myName)]); }
 function mine(it) { return !!(S.myName && it.a && it.a[keyOf(S.myName)]); }
 function loadArt(id) {   // fetch a doodle's lines only when it's needed
@@ -43,17 +50,18 @@ function paper(g, w, h, text) {   // an empty frame, or one still loading
   g.fillText(text, w / 2, h * 0.64);
 }
 
-// ---------- The wall: two rows of three frames, between the window and the corner by the door ----------
+// ---------- The wall: 9 across and 3 high, filling the left wall ----------
 const wall = new THREE.Group();
-wall.position.set(-ROOM / 2 + 0.02, 0, 2.7);
+wall.position.set(-ROOM / 2 + 0.02, 0, 0);
 wall.rotation.y = Math.PI / 2;   // facing into the room
 scene.add(wall);
-const COLS_X = [-0.95, 0, 0.95], ROWS_Y = [2.25, 1.5];
+const STEP_X = 0.9, STEP_Y = 0.64;               // center to center, across and up
+const TOP_Y = 2.72;                              // the top row's middle; the bottom row sits just above the chair rail
 const PW = 0.72, PH = 0.48;      // picture size in meters (3 wide by 2 tall, like the board)
 const wood = std(0x3b2414, 0.55);
 const frames = [];
 for (let j = 0; j < SLOTS; j++) {
-  const x = COLS_X[j % 3], y = ROWS_Y[Math.floor(j / 3)];
+  const x = (j % COLS - (COLS - 1) / 2) * STEP_X, y = TOP_Y - Math.floor(j / COLS) * STEP_Y;
   const add = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.userData.gallery = true; m.userData.slot = j; wall.add(m); return m; };
   const cv = document.createElement('canvas'); cv.width = 600; cv.height = 400;
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
@@ -62,47 +70,11 @@ for (let j = 0; j < SLOTS; j++) {
     add(new THREE.BoxGeometry(PW + 0.08, 0.04, 0.04), wood, x, y + s * (PH / 2 + 0.02), 0.02).castShadow = true;
     add(new THREE.BoxGeometry(0.04, PH + 0.08, 0.04), wood, x + s * (PW / 2 + 0.02), y, 0.02).castShadow = true;
   }
-  const ccv = document.createElement('canvas'); ccv.width = 512; ccv.height = 64;
-  const ctex = new THREE.CanvasTexture(ccv); ctex.colorSpace = THREE.SRGBColorSpace;
-  add(new THREE.PlaneGeometry(0.62, 0.0775), new THREE.MeshBasicMaterial({ map: ctex, toneMapped: false, color: 0xdddddd }), x, y - PH / 2 - 0.085, 0.01);
-  frames.push({ g: cv.getContext('2d'), tex, cg: ccv.getContext('2d'), ctex, sig: '' });
-}
-(function sign() {   // "Doodle Gallery" above the frames
-  const c = document.createElement('canvas'); c.width = 1024; c.height = 160;
-  const g = c.getContext('2d');
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.font = 'bold 84px Georgia';
-  g.shadowColor = 'rgba(0,0,0,0.5)'; g.shadowBlur = 8;
-  g.fillStyle = '#3b2414'; g.fillText('🖼️ Doodle Gallery', 512, 64);
-  g.shadowBlur = 0;
-  g.font = 'italic 34px Georgia'; g.fillStyle = 'rgba(59,36,20,0.75)';
-  g.fillText('click to look closer', 512, 132);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.234), new THREE.MeshBasicMaterial({ map: t, transparent: true, depthWrite: false }));
-  m.position.set(0, 2.82, 0.01);
-  m.userData.gallery = true; m.userData.slot = 0;
-  wall.add(m);
-})();
-function paintCard(f, it) {   // the little name card under a frame
-  const g = f.cg, W = 512, H = 64;
-  g.fillStyle = '#f4ecd8'; g.fillRect(0, 0, W, H);
-  g.strokeStyle = '#3b2414'; g.lineWidth = 3; g.strokeRect(2, 2, W - 4, H - 4);
-  if (it) {
-    const likes = likesOf(it), right = likes ? `❤️ ${likes}` : '';
-    g.textBaseline = 'middle';
-    g.font = '26px Georgia';
-    const rw = right ? g.measureText(right).width + 16 : 0;
-    g.textAlign = 'right'; g.fillStyle = '#b0304a'; if (right) g.fillText(right, W - 12, H / 2 + 1);
-    let text = `${it.t || 'Untitled'} · ${namesOf(it).join(', ') || it.by || ''}`;
-    g.font = 'italic 26px Georgia';
-    while (g.measureText(text).width > W - 28 - rw && text.length > 4) text = text.slice(0, -2) + '…';
-    g.textAlign = 'left'; g.fillStyle = '#2a1c10'; g.fillText(text, 14, H / 2 + 1);
-  }
-  f.ctex.needsUpdate = true;
+  frames.push({ g: cv.getContext('2d'), tex, sig: '' });
 }
 function paintFrame(j) {
   const f = frames[j], it = items[j];
-  const sig = it ? `${it.id}|${it.t}|${likesOf(it)}|${art[it.id] ? 1 : 0}` : 'empty';
+  const sig = it ? `${it.id}|${art[it.id] ? 1 : 0}` : 'empty';
   if (sig === f.sig) return;
   f.sig = sig;
   if (!it) paper(f.g, 600, 400, 'Your doodle here');
@@ -111,7 +83,6 @@ function paintFrame(j) {
     loadArt(it.id).then(a => { if (a) paintFrame(j); });
   }
   f.tex.needsUpdate = true;
-  paintCard(f, it);
 }
 function paintWall() { for (let j = 0; j < SLOTS; j++) paintFrame(j); }
 paintWall();
@@ -130,6 +101,7 @@ css.textContent = `
   #glBtns button { font-family: inherit; font-size: 16px; padding: 8px 16px; border: none; border-radius: 18px; background: #e9c98f; color: #2a1c10; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
   #glBtns button:disabled { opacity: 0.4; cursor: default; }
   #glBtns button.liked { background: #ff9db2; }
+  #glBtns button.pinned { background: #ffd54f; }
   @media (max-width: 700px) { #glCanvas { width: 96vw; } #glTitle { font-size: 19px; } #glBtns button { font-size: 14px; padding: 7px 12px; } }`;
 document.head.appendChild(css);
 function el(tag, id, text) { const e = document.createElement(tag); if (id) e.id = id; if (text != null) e.textContent = text; return e; }
@@ -138,11 +110,12 @@ const vcv = el('canvas', 'glCanvas'); vcv.width = DW; vcv.height = DH;
 const vg = vcv.getContext('2d');
 const vTitle = el('div', 'glTitle'), vInfo = el('div', 'glInfo'), vBtns = el('div', 'glBtns');
 function vbtn(text, fn) { const b = el('button', '', text); b.addEventListener('click', e => { e.stopPropagation(); fn(); b.blur(); }); vBtns.appendChild(b); return b; }
-const prevBtn = vbtn('◀ Newer', () => step(-1));
+const prevBtn = vbtn('◀ Prev', () => step(-1));
 const likeBtn = vbtn('❤️', toggleLike);
+const pinBtn = vbtn('📌 Pin', togglePin);
 const dlBtn = vbtn('⬇ Download', download);
 const delBtn = vbtn('🗑 Take down', takeDown);
-const nextBtn = vbtn('Older ▶', () => step(1));
+const nextBtn = vbtn('Next ▶', () => step(1));
 vbtn('✕ Close', closeViewer);
 view.append(vcv, vTitle, vInfo, vBtns);
 document.body.appendChild(view);
@@ -157,21 +130,27 @@ function showItem() {
     paper(vg, DW, DH, 'No doodles yet');
     vTitle.textContent = 'No doodles yet';
     vInfo.textContent = 'Make one on the board by the door: click the board, then 🖍️ Doodle.';
-    prevBtn.disabled = nextBtn.disabled = likeBtn.disabled = dlBtn.disabled = true;
+    prevBtn.disabled = nextBtn.disabled = likeBtn.disabled = pinBtn.disabled = dlBtn.disabled = true;
     delBtn.style.display = 'none';
     likeBtn.textContent = '❤️';
+    pinBtn.textContent = '📌 Pin'; pinBtn.classList.remove('pinned'); pinBtn.title = '';
     return;
   }
   idx = Math.max(0, Math.min(items.length - 1, idx));
   const it = items[idx];
   vTitle.textContent = it.t || 'Untitled';
   const when = it.at ? new Date(it.at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
-  vInfo.textContent = `by ${namesOf(it).join(', ') || it.by || 'someone'}${when ? ' · ' + when : ''} · ${idx + 1} of ${items.length}`;
+  vInfo.textContent = `${pinned(it) ? '📌 Pinned · ' : ''}by ${namesOf(it).join(', ') || it.by || 'someone'}${when ? ' · ' + when : ''} · ${idx + 1} of ${items.length}`;
   prevBtn.disabled = idx === 0;
   nextBtn.disabled = idx === items.length - 1;
   likeBtn.disabled = !S.myName;
   likeBtn.textContent = `❤️ ${likesOf(it)}`;
   likeBtn.classList.toggle('liked', iLike(it));
+  const full = !pinned(it) && pinCount() >= MAX_PINS;   // the wall is all pins: unpin one first
+  pinBtn.disabled = !S.myName || full;
+  pinBtn.textContent = pinned(it) ? '📌 Pinned' : full ? '📌 Wall full' : '📌 Pin';
+  pinBtn.title = pinned(it) ? 'Click to unpin' : full ? `All ${MAX_PINS} frames are pinned, so unpin one first` : 'Pin it to the wall';
+  pinBtn.classList.toggle('pinned', pinned(it));
   delBtn.style.display = mine(it) ? '' : 'none';
   if (shownId === it.id) return;   // already showing this one
   if (paint(vg, DW, DH, art[it.id])) { shownId = it.id; dlBtn.disabled = false; return; }
@@ -186,6 +165,13 @@ function toggleLike() {
   const it = current();
   if (!it || !S.myName) return;
   set(ref(db, `room/sketch/gallery/${it.id}/likes/${keyOf(S.myName)}`), iLike(it) ? null : true).catch(e => console.warn('Gallery like', e));
+}
+function togglePin() {   // anyone can pin or unpin
+  const it = current();
+  if (!it || !S.myName) return;
+  if (!pinned(it) && pinCount() >= MAX_PINS) return;
+  set(ref(db, `room/sketch/gallery/${it.id}/pin`), pinned(it) ? null : true).catch(e => console.warn('Gallery pin', e));
+  if (hooks.banner) hooks.banner(pinned(it) ? '📌 Unpinned' : '📌 Pinned to the wall', 1.5);
 }
 function download() {   // save the doodle as a picture
   const it = current();
@@ -240,7 +226,7 @@ const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 let downAt = null;
 function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
 function canOpen() {
-  return !!S.myName && !isOpen && !S.inPool && !(S.atSlot >= 0) && !S.atArcade && !S.atSketch && !S.trailFull && !S.boardView;
+  return !!S.myName && !isOpen && !S.inPool && !S.atSketch && !S.trailFull && !S.boardView;
 }
 canvas.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
 window.addEventListener('pointerup', e => {
@@ -256,12 +242,12 @@ window.addEventListener('pointerup', e => {
 // ---------- Listening ----------
 onValue(ref(db, 'room/sketch/gallery'), s => {
   const v = s.val() || {};
-  items = Object.entries(v).filter(([, m]) => m && m.at).map(([id, m]) => ({ id, ...m })).sort((p, q) => q.at - p.at);
+  items = Object.entries(v).filter(([, m]) => m && m.at).map(([id, m]) => ({ id, ...m })).sort(wallOrder);
   for (const id of Object.keys(art)) if (!v[id]) { delete art[id]; delete loading[id]; }   // taken down
   paintWall();
   if (isOpen) {
     const at = shownId ? items.findIndex(it => it.id === shownId) : -1;
-    if (at >= 0) idx = at;               // stay on the same doodle even if a new one was just added
+    if (at >= 0) idx = at;               // stay on the same doodle even if likes or pins moved it
     else shownId = '';                   // the one you were looking at was taken down
     showItem();
   }
