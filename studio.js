@@ -1,88 +1,74 @@
 // =====================================================================
-// room.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
+// studio.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
 // walking around, the people in the room, chat, and the main loop
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
-         paintTexture, box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
+         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
 import { sfx, setupMute } from './sounds.js';
 
-// ---------- Black marble with gold veins (painted in code, the same for everyone) ----------
-// Everything is drawn wrapped around the edges, so the texture tiles with no seams.
-function wrapped(g, w, h, draw) { for (const dx of [-w, 0, w]) for (const dy of [-h, 0, h]) { g.save(); g.translate(dx, dy); draw(); g.restore(); } }
-function vein(x, y, ang, steps, step, bend, pull = 0) {   // a wandering line, as a list of points (pull keeps it near its first heading)
-  const pts = [[x, y]], a0 = ang;
-  for (let i = 0; i < steps; i++) {
-    ang += (rnd() - 0.5) * bend + (a0 - ang) * pull;
-    x += Math.cos(ang) * step; y += Math.sin(ang) * step;
-    pts.push([x, y]);
-  }
-  return pts;
+// ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
+// The picture is big enough to use once per surface, so nothing repeats: each wall shows a different part of it,
+// the floor gets thin gold seams drawn on so it reads as big polished tiles, and the ceiling is a darker copy.
+// Until the picture has loaded, everything is plain black stone.
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+const wallMats = [0, 1, 2, 3].map(() => std(0x0b0a0c, 0.55, { envMap, envMapIntensity: 0.06 }));
+const floorMat = std(0x0b0a0c, 0.25, { envMap, envMapIntensity: 0.15 });
+const ceilMat = std(0x0b0a0c, 0.8);
+function stoneTex(src) {
+  const t = new THREE.Texture(src);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.anisotropy = MAX_ANISO;
+  t.needsUpdate = true;
+  return t;
 }
-function strokePts(g, pts) { g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) g.lineTo(x, y); g.stroke(); }
-function paintMarble(g, w, h, opts = {}) {
-  const sc = w / 1024;                                   // everything is sized for a 1024 texture, then scaled
-  g.fillStyle = opts.base || '#0b0a0c'; g.fillRect(0, 0, w, h);
-  for (let i = 0; i < 70; i++) {                         // soft dark clouds in the stone
-    const x = rnd() * w, y = rnd() * h, r = (60 + rnd() * 220) * sc;
-    const light = rnd() < 0.5;
-    wrapped(g, w, h, () => {
-      const grd = g.createRadialGradient(x, y, 0, x, y, r);
-      grd.addColorStop(0, light ? 'rgba(48,44,52,0.22)' : 'rgba(0,0,0,0.35)');
-      grd.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = grd; g.fillRect(x - r, y - r, r * 2, r * 2);
-    });
+const marbleImg = new Image();
+marbleImg.onload = () => {
+  // Phones get a smaller copy, so the picture fits in their memory
+  let src = marbleImg;
+  const maxSize = PHONE ? 1536 : 3072;
+  if (marbleImg.width > maxSize) {
+    const c = document.createElement('canvas');
+    c.width = c.height = maxSize;
+    c.getContext('2d').drawImage(marbleImg, 0, 0, maxSize, maxSize);
+    src = c;
   }
-  for (let i = 0; i < 4000 * sc * sc; i++) {             // fine grain
-    g.fillStyle = `rgba(${rnd() < 0.5 ? '255,255,255' : '0,0,0'},${0.02 + rnd() * 0.04})`;
-    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
+  // Walls: 9 wide by 4 tall, so each one uses a strip of the picture, a different strip (and some flipped) per wall
+  const strips = [[0, false], [0.19, true], [0.37, false], [0.556, true]];
+  wallMats.forEach((m, i) => {
+    const t = stoneTex(src);
+    const [y, flip] = strips[i];
+    t.repeat.set(flip ? -1 : 1, HEIGHT / ROOM);
+    t.offset.set(flip ? 1 : 0, y);
+    m.map = t; m.color.setHex(0xffffff); m.needsUpdate = true;
+  });
+  // Floor: the whole picture, with thin gold seams every 1.5 meters (6 by 6 tiles)
+  const SZ = src.width, fc = document.createElement('canvas');
+  fc.width = fc.height = SZ;
+  const g = fc.getContext('2d');
+  g.drawImage(src, 0, 0, SZ, SZ);
+  const step = SZ / 6, lw = Math.max(2, SZ / 900);
+  for (let i = 0; i <= 6; i++) {
+    const p = Math.round(i * step);
+    g.fillStyle = 'rgba(0,0,0,0.55)';          // a dark groove
+    g.fillRect(p - lw, 0, lw * 2, SZ); g.fillRect(0, p - lw, SZ, lw * 2);
+    g.fillStyle = 'rgba(205,165,70,0.75)';     // with a thin gold line in it
+    g.fillRect(p - lw / 2, 0, lw, SZ); g.fillRect(0, p - lw / 2, SZ, lw);
   }
-  g.lineJoin = 'round'; g.lineCap = 'round';
-  const flow = -0.55;                                    // the veins mostly run one way, like real stone
-  for (let i = 0; i < 14; i++) {                         // faint pale veins
-    const pts = vein(rnd() * w, rnd() * h, flow + (rnd() - 0.5) * 0.9, 110, 6 * sc, 0.22, 0.06);
-    const lw = (0.8 + rnd() * 1.6) * sc;
-    wrapped(g, w, h, () => { g.strokeStyle = 'rgba(170,165,175,0.09)'; g.lineWidth = lw; strokePts(g, pts); });
-  }
-  const golds = opts.golds == null ? 7 : opts.golds;
-  for (let i = 0; i < golds; i++) {                      // gold veins: long and flowing, with a soft haze and a few thin offshoots
-    const main = vein(rnd() * w, rnd() * h, flow + (rnd() - 0.5) * 0.6, 100 + Math.floor(rnd() * 45), 7 * sc, 0.2, 0.05);   // never longer than the texture, so it wraps cleanly
-    const branches = [];
-    const nb = Math.floor(rnd() * 3);
-    for (let b = 0; b < nb; b++) {
-      const at = main[Math.floor(rnd() * main.length)];
-      branches.push(vein(at[0], at[1], flow + (rnd() < 0.5 ? 0.7 : -0.7), 15 + Math.floor(rnd() * 30), 5 * sc, 0.3));
-    }
-    const thick = (0.5 + rnd() * 1.6) * Math.max(sc, 0.75);
-    wrapped(g, w, h, () => {
-      g.strokeStyle = 'rgba(200,160,60,0.05)'; g.lineWidth = 22 * thick; strokePts(g, main);
-      g.strokeStyle = 'rgba(212,170,60,0.12)'; g.lineWidth = 7 * thick; strokePts(g, main);
-      g.strokeStyle = 'rgba(222,180,70,0.45)'; g.lineWidth = 2.6 * thick; strokePts(g, main);
-      g.strokeStyle = 'rgba(255,226,145,0.85)'; g.lineWidth = 1 * thick; strokePts(g, main);
-      for (const br of branches) {
-        g.strokeStyle = 'rgba(212,170,60,0.3)'; g.lineWidth = 1.2 * thick; strokePts(g, br);
-        g.strokeStyle = 'rgba(255,224,140,0.5)'; g.lineWidth = 0.45 * thick; strokePts(g, br);
-      }
-    });
-  }
-  if (opts.tiles) {                                      // floor tiles: thin gold seams, 2 by 2 per texture
-    g.fillStyle = 'rgba(190,150,60,0.55)';
-    for (const p of [0, w / 2]) { g.fillRect(p - 1, 0, 2, h); g.fillRect(0, p - 1, w, 2); }
-    g.fillRect(w - 1, 0, 1, h); g.fillRect(0, h - 1, w, 1);   // the other half of the seam at the texture's edge
-  }
-}
-const SIZE = PHONE ? 512 : 1024;
-const wallTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h), ROOM / 3, HEIGHT / 3);   // one texture covers 3 meters
-const floorTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h, { tiles: true, golds: 6 }), ROOM / 3, ROOM / 3);
-const ceilTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h, { base: '#08080a', golds: 4 }), ROOM / 3, ROOM / 3);
+  floorMat.map = stoneTex(fc); floorMat.color.setHex(0xffffff); floorMat.needsUpdate = true;
+  // Ceiling: the picture again, turned and darker
+  const ct = stoneTex(src);
+  ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
+  ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
+};
+marbleImg.onerror = () => console.warn('marble.jpg did not load; the room stays plain black');
+marbleImg.src = 'marble.jpg';
 
 // ---------- The room: four walls, the floor and the ceiling ----------
-const wallMat = std(0xffffff, 0.35, { map: wallTex, envMap, envMapIntensity: 0.08 });
-const floorMat = std(0xffffff, 0.22, { map: floorTex, envMap, envMapIntensity: 0.18 });
-const ceilMat = std(0xffffff, 0.6, { map: ceilTex });
 function plane(w, h, mat, x, y, z, rx, ry) {
   const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
   m.position.set(x, y, z); m.rotation.set(rx, ry, 0); m.receiveShadow = true;
@@ -90,10 +76,10 @@ function plane(w, h, mat, x, y, z, rx, ry) {
   return m;
 }
 const H2 = HEIGHT / 2, R2 = ROOM / 2;
-plane(ROOM, HEIGHT, wallMat, 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
-plane(ROOM, HEIGHT, wallMat, 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
-plane(ROOM, HEIGHT, wallMat, -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
-plane(ROOM, HEIGHT, wallMat, R2, H2, 0, 0, -Math.PI / 2);    // the right wall (pictures)
+plane(ROOM, HEIGHT, wallMats[0], 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
+plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
+plane(ROOM, HEIGHT, wallMats[2], -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
+plane(ROOM, HEIGHT, wallMats[3], R2, H2, 0, 0, -Math.PI / 2);    // the right wall (pictures)
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
@@ -246,61 +232,79 @@ function makeDoor(x, z, rotY, tag) {
 makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
 
 // ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.6));
+scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.85));   // soft, even light everywhere
 // The room's main light, a soft warm white from the middle of the ceiling (gentle, so nothing glares white)
-const roomLight = new THREE.PointLight(0xfff0dc, 9, 0, 1);
+const roomLight = new THREE.PointLight(0xfff0dc, 5, 0, 1);
 roomLight.position.set(0, HEIGHT - 0.3, 0);
 roomLight.castShadow = true;
 roomLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
 roomLight.shadow.bias = -0.002;
 scene.add(roomLight);
 
-// ---------- Neon: a ring hanging from the middle of the ceiling, and a strip all the way around the top of the walls ----------
+// ---------- Neon: a ring hanging from the middle of the ceiling, and a tube all the way around the top corners of the room ----------
 const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
                      ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
 const neonMats = [];   // { mat, core } for every neon layer in the room
-const GLOW = [[1, 1.0, true], [2.2, 0.5, false], [5, 0.15, false], [10, 0.05, false]];   // core, inner glow, soft glow, faint haze
-function neonMat(opacity, core) {
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false,
+// A neon tube is a thin bright core with layers of colored glow around it. The layers are kept faint so they add up
+// to the color itself instead of washing out to white.
+const GLOW = [[1, 1.0, true], [2.2, 0.42, false], [4.5, 0.16, false], [9, 0.06, false]];   // [size, opacity, is the core]
+function neonMat(opacity, core, map) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: map || null, transparent: true, opacity, depthWrite: false,
     blending: THREE.AdditiveBlending, toneMapped: false });
   neonMats.push({ mat, core });
   return mat;
 }
-// The ring: hangs down from the ceiling on four thin cables
+// The ring: hangs down from the ceiling on four thin gold cables
 const RING_R = 1.3, RING_Y = HEIGHT - 0.7;
 const ring = new THREE.Group();
 scene.add(ring);
-const ringBase = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.035, 12, 160), goldMat);
-ringBase.rotation.x = Math.PI / 2; ringBase.position.y = RING_Y + 0.03;
-ring.add(ringBase);
 for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
-  const len = HEIGHT - RING_Y - 0.03;
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 6), goldMat);
-  rod.position.set(Math.cos(a) * RING_R, RING_Y + 0.03 + len / 2, Math.sin(a) * RING_R);
+  const len = HEIGHT - RING_Y;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, len, 6), goldMat);
+  rod.position.set(Math.cos(a) * RING_R, RING_Y + len / 2, Math.sin(a) * RING_R);
   ring.add(rod);
 }
 for (const [k, op, core] of GLOW) {
-  const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.014 * k, 12, 160), neonMat(op, core));
+  const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.011 * k, 12, 180), neonMat(op, core));
   m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
   ring.add(m);
 }
-// The strip: sits on a little gold ledge just under the ceiling, all the way around the room
-const COVE_Y = HEIGHT - 0.1, IN = 0.09;              // how high, and how far out from the walls
-const SIDE = ROOM - IN * 2;
-for (const [x, z, w, d] of [[0, -R2 + 0.07, ROOM, 0.14], [0, R2 - 0.07, ROOM, 0.14], [-R2 + 0.07, 0, 0.14, ROOM], [R2 - 0.07, 0, 0.14, ROOM]]) {
-  box(w, 0.03, d, goldMat, x, COVE_Y - 0.035, z, scene).castShadow = false;   // the ledge
+// The corner tube: runs around the room right where the walls meet the ceiling, with its glow washing
+// onto the ceiling and down the wall, like real cove lighting
+function fadeTex(brightAtTop) {   // white fading to black, for the glow wash (black adds nothing when glowing)
+  const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+  const g = c.getContext('2d'), grd = g.createLinearGradient(0, 0, 0, 256);
+  const stops = [[0, 1], [0.25, 0.45], [0.55, 0.14], [1, 0]];
+  for (const [at, v] of stops) grd.addColorStop(brightAtTop ? at : 1 - at, `rgb(${Math.round(v * 255)},${Math.round(v * 255)},${Math.round(v * 255)})`);
+  g.fillStyle = grd; g.fillRect(0, 0, 4, 256);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }
-for (const [k, op, core] of GLOW) {
-  const mat = neonMat(op * 0.9, core);
-  for (const [x, z, rotY] of [[0, -R2 + IN, 0], [0, R2 - IN, 0], [-R2 + IN, 0, Math.PI / 2], [R2 - IN, 0, Math.PI / 2]]) {
-    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.01 * k, 0.01 * k, SIDE, 10), mat);
-    m.rotation.set(0, rotY, Math.PI / 2);   // lying along the wall
-    m.position.set(x, COVE_Y, z);
-    scene.add(m);
-  }
+const COVE_Y = HEIGHT - 0.06, IN = 0.06;   // how high the tube runs, and how far out from the wall
+const SIDE = ROOM - IN * 2;                // each run of tube, so the four meet at the corners
+const washDown = fadeTex(true), washOut = fadeTex(false);
+const ceilWashMat = neonMat(0.55, false, washOut), wallWashMat = neonMat(0.5, false, washDown);
+const tubeMats = GLOW.map(([, op, core]) => neonMat(op, core));
+for (const turn of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {   // the far wall, then turned around to the other three
+  const side = new THREE.Group();
+  side.rotation.y = turn;
+  scene.add(side);
+  GLOW.forEach(([k], i) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.009 * k, 0.009 * k, SIDE, 10), tubeMats[i]);
+    m.rotation.z = Math.PI / 2;   // lying along the wall
+    m.position.set(0, COVE_Y, -R2 + IN);
+    side.add(m);
+  });
+  const ceilWash = new THREE.Mesh(new THREE.PlaneGeometry(ROOM, 0.8), ceilWashMat);   // glow on the ceiling, brightest at the wall
+  ceilWash.rotation.x = Math.PI / 2;
+  ceilWash.position.set(0, HEIGHT - 0.004, -R2 + 0.4);
+  side.add(ceilWash);
+  const wallWash = new THREE.Mesh(new THREE.PlaneGeometry(ROOM, 0.6), wallWashMat);   // and down the top of the wall
+  wallWash.position.set(0, HEIGHT - 0.3, -R2 + 0.004);
+  side.add(wallWash);
 }
 // A little of the neon color spills into the room
-const tintLight = new THREE.PointLight(0xffe8c4, 3, 0, 1.2);
+const tintLight = new THREE.PointLight(0xffe8c4, 4, 0, 1.2);
 tintLight.position.set(0, RING_Y, 0);   // at the ring, so its color washes up onto the ceiling too
 scene.add(tintLight);
 let neonIndex = -1;
@@ -309,7 +313,7 @@ function setNeon(i) {
   if (i === neonIndex) return;
   neonIndex = i;
   const col = new THREE.Color(NEON_COLORS[i][1]);
-  const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.65);   // the core looks almost white, tinted
+  const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.3);    // the core is a little white-hot, but clearly the color
   for (const n of neonMats) n.mat.color.copy(n.core ? hot : col);
   tintLight.color.copy(col);
   switchGlow.color.copy(col);
