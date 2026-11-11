@@ -1,104 +1,112 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Doodle Gallery</title>
-<style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0908; font-family: Georgia, serif; }
-  #c { display: block; width: 100%; height: 100%; touch-action: none; }
-  #ui { position: fixed; left: 0; right: 0; top: 12px; text-align: center; pointer-events: none; color: #f3e6cf; text-shadow: 0 2px 6px #000; }
-  #ui h1 { margin: 0; font-size: 22px; font-weight: normal; letter-spacing: 1px; color: #ffe9a0; }
-  #hint { font-size: 14px; opacity: 0.85; margin-top: 4px; }
-  .panel { position: fixed; background: rgba(20,16,12,0.86); color: #f3e6cf; padding: 12px 14px; border-radius: 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(201,162,39,0.35); }
-  .panel button { font-family: inherit; font-size: 14px; padding: 6px 12px; margin: 0 6px 6px 0; border: none; border-radius: 14px; background: #e9c98f; color: #2a1c10; cursor: pointer; }
-  .panel button:disabled { opacity: 0.5; cursor: default; }
-  .panel button.sw { background: rgba(233,201,143,0.25); color: #f3e6cf; }
-  .panel button.sw.on { background: #e9c98f; color: #2a1c10; }
-  #banner { position: fixed; top: 70px; left: 50%; transform: translate(-50%, -12px) scale(0.85); max-width: 90vw; padding: 10px 24px; font-size: 22px; text-align: center; background: rgba(20,16,12,0.92); color: #ffe9a0; border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s; }
-  #banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
-  #who { right: 16px; top: 16px; min-width: 160px; max-width: 240px; font-size: 14px; }
-  #who h2 { margin: 0 0 6px; font-size: 15px; font-weight: normal; opacity: 0.8; }
-  #conn { font-size: 12px; opacity: 0.7; margin-top: 6px; }
-  #whoBtns { margin-top: 8px; }
-  #whoBtns button { font-size: 13px; padding: 4px 10px; margin: 0 6px 0 0; }
-  #chat { right: 16px; bottom: 16px; width: 280px; }
-  #msgs { height: 150px; overflow-y: auto; font-size: 14px; margin-bottom: 8px; word-wrap: break-word; }
-  #msgs b { color: #e9c98f; }
-  #chatRow { display: flex; gap: 6px; }
-  input { font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 10px; background: #f3e6cf; color: #2a1c10; }
-  #chatInput { flex: 1; min-width: 0; }
-  #chatRow button { margin: 0; }
-  /* The Cave (cave.js): the front door, drawn over everything until you go through the orb */
-  #cave { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 20; touch-action: none; transition: opacity 0.9s; }
-  #cave.gone { opacity: 0; pointer-events: none; }
-  #nameBox { position: fixed; left: 0; right: 0; bottom: 5%; z-index: 30; display: flex; justify-content: center; pointer-events: none; transition: opacity 0.5s; }
-  #nameBox.leaving { opacity: 0; }
-  #nameBox .panel { position: static; pointer-events: auto; text-align: center; padding: 14px 20px; background: rgba(14,22,52,0.62); color: #e6f2ff;
-                    box-shadow: 0 4px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(150,215,255,0.45); backdrop-filter: blur(4px); }
-  #nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; }
-  #nameBox input { background: #e9f3ff; text-align: center; font-size: 16px; }
-  #nameBox #enter { display: none; }
-  #nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
-  #nameBox.nudge .panel { animation: nudge 0.4s; }
-  @keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
-  #phoneBar { display: none; }
+	<head>
+		<meta charset="utf-8">
+			<meta name="viewport" content="width=device-width,initial-scale=1">
+				<title>Doodle Gallery</title>
+				<style>
+					html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0908; font-family: Georgia, serif; }
+					#c { display: block; width: 100%; height: 100%; touch-action: none; }
+					#ui { position: fixed; left: 0; right: 0; top: 12px; text-align: center; pointer-events: none; color: #f3e6cf; text-shadow: 0 2px 6px #000; }
+					#ui h1 { margin: 0; font-size: 22px; font-weight: normal; letter-spacing: 1px; color: #ffe9a0; }
+					#hint { font-size: 14px; opacity: 0.85; margin-top: 4px; }
+					.panel { position: fixed; background: rgba(20,16,12,0.86); color: #f3e6cf; padding: 12px 14px; border-radius: 12px; box-shadow: 0 3px 10px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(201,162,39,0.35); }
+					.panel button { font-family: inherit; font-size: 14px; padding: 6px 12px; margin: 0 6px 6px 0; border: none; border-radius: 14px; background: #e9c98f; color: #2a1c10; cursor: pointer; }
+					.panel button:disabled { opacity: 0.5; cursor: default; }
+					.panel button.sw { background: rgba(233,201,143,0.25); color: #f3e6cf; }
+					.panel button.sw.on { background: #e9c98f; color: #2a1c10; }
+					#banner { position: fixed; top: 70px; left: 50%; transform: translate(-50%, -12px) scale(0.85); max-width: 90vw; padding: 10px 24px; font-size: 22px; text-align: center; background: rgba(20,16,12,0.92); color: #ffe9a0; border-radius: 18px; box-shadow: 0 4px 14px rgba(0,0,0,0.6); opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s; }
+					#banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+					#who { right: 16px; top: 16px; min-width: 160px; max-width: 240px; font-size: 14px; }
+					#who h2 { margin: 0 0 6px; font-size: 15px; font-weight: normal; opacity: 0.8; }
+					#conn { font-size: 12px; opacity: 0.7; margin-top: 6px; }
+					#whoBtns { margin-top: 8px; }
+					#whoBtns button { font-size: 13px; padding: 4px 10px; margin: 0 6px 0 0; }
+					#chat { right: 16px; bottom: 16px; width: 280px; }
+					#msgs { height: 150px; overflow-y: auto; font-size: 14px; margin-bottom: 8px; word-wrap: break-word; }
+					#msgs b { color: #e9c98f; }
+					#chatRow { display: flex; gap: 6px; }
+					input { font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 10px; background: #f3e6cf; color: #2a1c10; }
+					#chatInput { flex: 1; min-width: 0; }
+					#chatRow button { margin: 0; }
+					/* The Cave (cave.js): the front door, drawn over everything until you go through the orb */
+					#cave { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 20; touch-action: none; transition: opacity 0.9s; }
+					#cave.gone { opacity: 0; pointer-events: none; }
+					#nameBox { position: fixed; left: 0; right: 0; bottom: 5%; z-index: 30; display: flex; justify-content: center; pointer-events: none; transition: opacity 0.5s; }
+					#nameBox.leaving { opacity: 0; }
+					#nameBox .panel { position: static; pointer-events: auto; text-align: center; padding: 14px 20px; background: rgba(14,22,52,0.62); color: #e6f2ff;
+					box-shadow: 0 4px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(150,215,255,0.45); backdrop-filter: blur(4px); }
+					#nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; }
+					#nameBox input { background: #e9f3ff; text-align: center; font-size: 16px; }
+					#nameBox #enter { display: none; }
+					#nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
+					#nameBox.nudge .panel { animation: nudge 0.4s; }
+					@keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+					#phoneBar { display: none; }
 
-  /* ---------- Phones and narrow screens ---------- */
-  @media (max-width: 700px) {
-    #ui { top: 8px; text-align: left; left: 12px; }
-    #ui h1 { font-size: 18px; }
-    #hint { display: none; }
-    #phoneBar { display: flex; gap: 6px; position: fixed; top: 8px; right: 8px; }
-    #phoneBar button { position: relative; font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 14px; background: rgba(20,16,12,0.85); color: #f3e6cf; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
-    #newDot { display: none; position: absolute; top: 2px; right: 2px; width: 9px; height: 9px; border-radius: 50%; background: #ff3b2f; }
-    #who, #chat { display: none; left: 8px; right: 8px; top: 48px; bottom: auto; width: auto; max-width: none; }
-    body.whoOpen #who { display: block; }
-    body.chatOpen #chat { display: block; }
-    #msgs { height: 110px; }
-    .panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
-    #banner { top: 92px; font-size: 17px; padding: 8px 16px; }
-  }
-</style>
-</head>
-<body>
-<canvas id="c"></canvas>
-<div id="ui">
-  <h1>Doodle Gallery</h1>
-  <div id="hint"></div>
-</div>
-<div id="banner"></div>
-<div id="who" class="panel">
-  <h2>In the gallery</h2>
-  <div id="whoList"></div>
-  <div id="conn">Connecting…</div>
-  <div id="whoBtns"><button id="leaveRoom">🚪 Leave</button><button id="mute" title="Sound">🔊</button></div>
-</div>
-<div id="chat" class="panel">
-  <div id="msgs"></div>
-  <div id="chatRow"><input id="chatInput" maxlength="200" placeholder="Say something…"><button id="send">Send</button></div>
-</div>
-<div id="phoneBar">
-  <button id="chatBtn">💬 Chat<span id="newDot"></span></button><button id="whoBtn">👥 0</button>
-</div>
-<canvas id="cave"></canvas>
-<div id="nameBox">
-  <div class="panel">
-    <h2>Welcome! What's your name?</h2>
-    <input id="nameInput" maxlength="20" placeholder="Your name"><button id="enter">Enter</button>
-    <div class="tip">then touch the orb ✦</div>
-  </div>
-</div>
+					/* ---------- Phones and narrow screens ---------- */
+					@media (max-width: 700px) {
+					#ui { top: 8px; text-align: left; left: 12px; }
+					#ui h1 { font-size: 18px; }
+					#hint { display: none; }
+					#phoneBar { display: flex; gap: 6px; position: fixed; top: 8px; right: 8px; }
+					#phoneBar button { position: relative; font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 14px; background: rgba(20,16,12,0.85); color: #f3e6cf; box-shadow: 0 3px 10px rgba(0,0,0,0.5); }
+					#newDot { display: none; position: absolute; top: 2px; right: 2px; width: 9px; height: 9px; border-radius: 50%; background: #ff3b2f; }
+					#who, #chat { display: none; left: 8px; right: 8px; top: 48px; bottom: auto; width: auto; max-width: none; }
+					body.whoOpen #who { display: block; }
+					body.chatOpen #chat { display: block; }
+					#msgs { height: 110px; }
+					.panel button { font-size: 13px; padding: 5px 10px; margin: 0 4px 4px 0; }
+					#banner { top: 92px; font-size: 17px; padding: 8px 16px; }
+					}
+				</style>
+			</head>
+	<body>
+		<canvas id="c"></canvas>
+		<div id="ui">
+			<h1>Doodle Gallery</h1>
+			<div id="hint"></div>
+		</div>
+		<div id="banner"></div>
+		<div id="who" class="panel">
+			<h2>In the gallery</h2>
+			<div id="whoList"></div>
+			<div id="conn">Connecting…</div>
+			<div id="whoBtns">
+				<button id="leaveRoom">🚪 Leave</button>
+				<button id="mute" title="Sound">🔊</button>
+			</div>
+		</div>
+		<div id="chat" class="panel">
+			<div id="msgs"></div>
+			<div id="chatRow">
+				<input id="chatInput" maxlength="200" placeholder="Say something…">
+					<button id="send">Send</button>
+			</div>
+		</div>
+		<div id="phoneBar">
+			<button id="chatBtn">
+				💬 Chat<span id="newDot"></span>
+			</button>
+			<button id="whoBtn">👥 0</button>
+		</div>
+		<canvas id="cave"></canvas>
+		<div id="nameBox">
+			<div class="panel">
+				<h2>Welcome! What's your name?</h2>
+				<input id="nameInput" maxlength="20" placeholder="Your name">
+					<button id="enter">Enter</button>
+					<div class="tip">then touch the orb ✦ or an open door</div>
+				</div>
+		</div>
 
-<script type="importmap">
-{ "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-} }
-</script>
-<!-- The Cave (cave.js) is the front door; it runs first so it shows right away -->
-<script type="module" src="cave.js"></script>
-<!-- The gallery's code lives in studio.js, which loads core.js, sketch.js (the doodle board), gallery.js (the picture walls) and sounds.js -->
-<script type="module" src="studio.js"></script>
-</body>
+		<script type="importmap">
+			{ "imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+			} }
+		</script>
+		<!-- The Cave (cave.js) is the front door. It loads the room you pick: studio.js (the Doodle Gallery) or tables.js (the Table Room) -->
+		<script type="module" src="cave.js"></script>
+	</body>
 </html>

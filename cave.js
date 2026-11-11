@@ -1,19 +1,20 @@
 // =====================================================================
 // cave.js — the Cave: the front door of the site. A night igloo drawn flat like a Flash cartoon, with the
 // swirling orb in the middle (orb.png) and two frozen ancient doors on the sides. Type your name, touch the orb,
-// and the screen spirals into it and lands you in the Doodle Gallery. The gallery loads quietly behind the Cave.
-// More places later: add them to PLACES below (the doors thaw when their room is open).
+// and the screen spirals into it and lands you in the Doodle Gallery. An open door (the Table Room) leads to its room.
+// Each room's code loads only when you pick it. More places later: give a door its file in PLACES below and it thaws open.
 // =====================================================================
 const PLACES = {
-  orb:   { name: 'Doodle Gallery', open: true },
-  left:  { name: 'Table Room', open: false },
-  right: { name: 'Game Room', open: false }
+  orb:   { name: 'Doodle Gallery', file: './studio.js' },
+  left:  { name: 'Table Room', file: './tables.js' },
+  right: { name: 'Game Room', file: null }
 };
 
 const cv = document.getElementById('cave');
 const g = cv.getContext('2d');
 const nameBox = document.getElementById('nameBox');
 const nameInput = document.getElementById('nameInput');
+try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
 const PHONE = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || Math.min(window.innerWidth, window.innerHeight) < 600;
 const DEG = Math.PI / 180;
 const M = 40;   // extra edge drawn around the layers, so they can drift with the mouse without showing a gap
@@ -120,6 +121,7 @@ function build() {
   for (const [side, s] of [['left', -1], ['right', 1]]) {
     const d = { az: s * az, hw, top: doorTop };
     d.uv = (u, v) => P(d.az + u * d.hw, lerp(e0, d.top, v));
+    d.open = !!PLACES[side].file;
     drawDoor(w, d, LW, rnd);
     doors[side] = d;
   }
@@ -196,6 +198,7 @@ function drawDoor(w, d, LW, rnd) {
   const OU = 1.3, outer = u => VS + (1.13 - VS) * Math.sqrt(Math.max(0, 1 - (u / OU) ** 2));
   const path = (pts) => { w.beginPath(); pts.forEach(([u, v], i) => { const [x, y] = d.uv(u, v); i ? w.lineTo(x, y) : w.moveTo(x, y); }); w.closePath(); };
   const archPts = (fn, U, n = 28) => { const p = [[-U, 0]]; for (let i = 0; i <= n; i++) { const u = -U + 2 * U * i / n; p.push([u, Math.min(1.2, fn(u))]); } p.push([U, 0]); return p; };
+  d.shape = { archPts, inner, outer, OU };
 
   // The stone frame: jamb stones up the sides, wedge stones around the arch, a big keystone at the top
   const stone = (pts, L) => {
@@ -227,6 +230,7 @@ function drawDoor(w, d, LW, rnd) {
     w.stroke();
   }
 
+  if (d.open) { drawOpenDoor(w, d, LW, rnd, path, archPts, inner); return; }
   // The door itself: two great stone leaves with a carved ring of runes
   path(archPts(inner, 1));
   w.fillStyle = '#26304f'; w.fill();
@@ -276,7 +280,10 @@ function drawDoor(w, d, LW, rnd) {
     w.fillStyle = 'rgba(220,244,255,0.95)'; w.fill();
     w.strokeStyle = '#121735'; w.lineWidth = LW * 0.6; w.stroke();
   }
-  // Remember the opening's outline, for clicks and the frosty shimmer
+  doorOutline(d, archPts, inner, outer, OU);
+}
+// Remember the opening's outline, for clicks and the shimmer
+function doorOutline(d, archPts, inner, outer, OU) {
   d.path = new window.Path2D();
   archPts(inner, 1).forEach(([u, v], i) => { const [x, y] = d.uv(u, v); i ? d.path.lineTo(x, y) : d.path.moveTo(x, y); });
   d.path.closePath();
@@ -285,6 +292,35 @@ function drawDoor(w, d, LW, rnd) {
   d.hit.closePath();
   [d.labelX, d.labelY] = d.uv(0, 1.22);
   d.size = Math.abs(d.uv(1, 0.5)[0] - d.uv(-1, 0.5)[0]);
+}
+
+// ---------- A door that's open: the ice is gone, the stone leaves stand open, and warm light comes through ----------
+function drawOpenDoor(w, d, LW, rnd, path, archPts, inner) {
+  path(archPts(inner, 1));
+  const [bx, by] = d.uv(0, 0), [, ty] = d.uv(0, 1);
+  const warm = w.createRadialGradient(bx, by, 0, bx, by, (by - ty) * 1.1);
+  warm.addColorStop(0, '#ffd89a'); warm.addColorStop(0.45, '#d48a3e'); warm.addColorStop(1, '#4a2410');
+  w.fillStyle = warm; w.fill();
+  w.save(); w.clip();
+  // The two stone leaves, swung open against the sides of the arch
+  for (const s of [-1, 1]) {
+    path([[s * 1, 0], [s * 0.72, 0.06], [s * 0.72, 0.9], [s * 1, 1.05]]);
+    w.fillStyle = '#2a3352'; w.fill();
+    w.strokeStyle = '#141a3a'; w.lineWidth = LW; w.stroke();
+    path([[s * 0.86, 0.3], [s * 0.78, 0.32], [s * 0.78, 0.6], [s * 0.86, 0.6]]);
+    w.strokeStyle = 'rgba(130,235,255,0.35)'; w.lineWidth = LW * 0.7; w.stroke();
+  }
+  w.restore();
+  path(archPts(inner, 1));
+  w.strokeStyle = '#121735'; w.lineWidth = LW; w.stroke();
+  // A few drips left from the melted ice
+  for (let i = 0; i < 6; i++) {
+    const u = -0.8 + 1.6 * rnd(), v = inner(u) - 0.01, [x, y] = d.uv(u, v);
+    w.beginPath(); w.ellipse(x, y + LW * 2, LW * 0.9, LW * 1.6, 0, 0, Math.PI * 2);
+    w.fillStyle = 'rgba(220,244,255,0.85)'; w.fill();
+  }
+  const { outer, OU } = d.shape;
+  doorOutline(d, archPts, inner, outer, OU);
 }
 
 // ---------- Looking around a little: the layers drift with the mouse (or tilting a phone) ----------
@@ -313,9 +349,9 @@ function whatIsAt(x, y) {
 // ---------- Touching things ----------
 let note = null;          // a little message near something you touched: { text, x, y, t }
 let shake = { side: null, t: 0 };
-let wantIn = false, entering = 0, entered = false;
-function galleryReady() { const h = document.getElementById('hint'); return !!(h && h.textContent); }   // the gallery fills this in once it's loaded
-function tryEnter() {
+let wantIn = null, entering = 0, entered = false, goingTo = 'orb';
+function roomReady() { const h = document.getElementById('hint'); return !!(h && h.textContent); }   // each room fills this in once it's loaded
+function tryEnter(place) {
   const name = nameInput.value.trim();
   if (!name) {
     nameBox.classList.remove('nudge'); void nameBox.offsetWidth; nameBox.classList.add('nudge');
@@ -323,13 +359,19 @@ function tryEnter() {
     return;
   }
   nameInput.blur();
-  wantIn = true;
+  try { localStorage.setItem('hangoutName', name); } catch (e) {}
+  wantIn = place;
+  import(PLACES[place].file).catch(e => {   // load just that room's code
+    console.warn('Room load', e);
+    wantIn = null;
+    note = { text: `${PLACES[place].name} couldn't load, try again in a moment`, side: place === 'orb' ? null : place, t: performance.now() };
+  });
 }
 cv.addEventListener('click', e => {
   if (entering) return;
   const what = whatIsAt(e.clientX, e.clientY);
-  if (what === 'orb') tryEnter();
-  else if (what && !PLACES[what].open) {
+  if (what && PLACES[what].file) tryEnter(what);
+  else if (what) {
     shake = { side: what, t: performance.now() };
     note = { text: `${PLACES[what].name} is still frozen shut… coming soon`, side: what, t: performance.now() };
   }
@@ -338,7 +380,7 @@ cv.addEventListener('click', e => {
 nameInput.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   e.preventDefault(); e.stopImmediatePropagation();
-  if (!entering) tryEnter();
+  if (!entering) tryEnter('orb');
 });
 window.addEventListener('resize', build);
 
@@ -354,7 +396,7 @@ function frame(now) {
     hover = whatIsAt(mouse.x, mouse.y);
     cv.style.cursor = hover ? 'pointer' : 'default';
   }
-  if (wantIn && !entering && galleryReady()) { entering = now; wantIn = false; nameBox.classList.add('leaving'); }
+  if (wantIn && !entering && roomReady()) { entering = now; goingTo = wantIn; wantIn = null; nameBox.classList.add('leaving'); }
 
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
@@ -362,8 +404,15 @@ function frame(now) {
   let k = 0;
   if (entering) {
     k = Math.min(1, (now - entering) / 1700);
-    const e = k * k * k, ox = orb.x, oy = orb.y + bob;
-    g.translate(ox, oy); g.rotate(k * k * 3.2); g.scale(1 + e * 14, 1 + e * 14); g.translate(-ox, -oy);
+    const e = k * k * k;
+    if (goingTo === 'orb') {   // spiral into the swirl
+      const ox = orb.x, oy = orb.y + bob;
+      g.translate(ox, oy); g.rotate(k * k * 3.2); g.scale(1 + e * 14, 1 + e * 14); g.translate(-ox, -oy);
+    } else {                   // walk in through the door
+      const [dx, dy] = doors[goingTo].uv(0, 0.42), [wx, wy] = offset(DEPTH.wall);
+      const ox = dx + wx, oy = dy + wy;
+      g.translate(ox, oy); g.scale(1 + e * 16, 1 + e * 16); g.translate(-ox, -oy);
+    }
     if (k > 0.62 && !entered) { entered = true; document.getElementById('enter').click(); }
   }
   const pulse = 0.5 + 0.5 * Math.sin(t * 1.6);
@@ -387,7 +436,7 @@ function frame(now) {
     const d = doors[side], sh = shake.side === side ? Math.max(0, 1 - (now - shake.t) / 500) : 0;
     const a = (hover === side ? 0.22 : 0.07) + 0.05 * Math.sin(t * 2 + (side === 'left' ? 0 : 2)) + sh * 0.3;
     g.save(); g.translate(wx + Math.sin(now * 0.08) * sh * 4, wy);
-    g.fillStyle = `rgba(140,225,255,${a})`; g.fill(d.path);
+    g.fillStyle = d.open ? `rgba(255,190,110,${a * 1.3})` : `rgba(140,225,255,${a})`; g.fill(d.path);
     g.restore();
   }
   g.globalCompositeOperation = 'source-over';
@@ -395,7 +444,7 @@ function frame(now) {
   for (const side of ['left', 'right']) {
     const d = doors[side], fs = clamp(d.size * 0.15, 12, 30);
     g.font = `italic ${fs}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'bottom';
-    g.shadowColor = 'rgba(120,220,255,0.9)'; g.shadowBlur = 10;
+    g.shadowColor = d.open ? 'rgba(255,170,80,0.9)' : 'rgba(120,220,255,0.9)'; g.shadowBlur = 10;
     g.fillStyle = hover === side ? '#ffffff' : 'rgba(215,240,255,0.85)';
     g.fillText(PLACES[side].name, d.labelX + wx, d.labelY + wy);
     g.shadowBlur = 0;
@@ -471,12 +520,12 @@ function frame(now) {
   }
   g.fillStyle = haze; g.fillRect(-M, -M, W + M * 2, H + M * 2);
 
-  // A note near a frozen door you touched
+  // A note near a door you touched
   if (note) {
     const age = (now - note.t) / 1000;
     if (age > 2.6) note = null;
     else {
-      const d = doors[note.side], a = Math.min(1, age * 4, (2.6 - age) * 2);
+      const d = doors[note.side] || { size: 200, uv: () => [orb.x, 0], labelY: orb.y + orb.r * 1.3 }, a = Math.min(1, age * 4, (2.6 - age) * 2);
       g.globalAlpha = a; g.font = `${clamp(d.size * 0.1, 12, 18)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'top';
       g.fillStyle = '#e6f7ff'; g.shadowColor = '#000'; g.shadowBlur = 6;
       const [nx] = d.uv(0, 0);
@@ -490,8 +539,10 @@ function frame(now) {
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     if (k > 0.55) {
       const a = Math.min(1, (k - 0.55) / 0.4);
-      const fl = g.createRadialGradient(orb.x, orb.y, 0, orb.x, orb.y, Math.hypot(W, H));
-      fl.addColorStop(0, `rgba(255,240,255,${a})`); fl.addColorStop(1, `rgba(150,110,255,${a})`);
+      const [fx0, fy0] = goingTo === 'orb' ? [orb.x, orb.y] : doors[goingTo].uv(0, 0.42);
+      const fl = g.createRadialGradient(fx0, fy0, 0, fx0, fy0, Math.hypot(W, H));
+      if (goingTo === 'orb') { fl.addColorStop(0, `rgba(255,240,255,${a})`); fl.addColorStop(1, `rgba(150,110,255,${a})`); }
+      else { fl.addColorStop(0, `rgba(255,226,170,${a})`); fl.addColorStop(1, `rgba(60,30,12,${a})`); }
       g.fillStyle = fl; g.fillRect(0, 0, W, H);
     }
     if (k >= 1 && !cv.classList.contains('gone')) {
