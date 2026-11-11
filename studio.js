@@ -96,10 +96,10 @@ const skyTex = new THREE.CanvasTexture(skyCanvas);
 skyTex.colorSpace = THREE.SRGBColorSpace;
 const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
 const windowLights = [];
-{                                                  // light coming in through the window
-  const l = new THREE.DirectionalLight(0x8fa8ff, 0.35);
-  l.position.set(0, 4, 8);
-  l.target.position.set(0, 0, 0);
+{                                                  // light falling in through the window onto the floor in front of it
+  const l = new THREE.SpotLight(0x8fa8ff, 0.8, 7, 0.75, 1, 0);
+  l.position.set(-1.6, 2.3, ROOM / 2 - 0.1);
+  l.target.position.set(-1.6, 0, ROOM / 2 - 3.2);
   scene.add(l, l.target);
   windowLights.push(l);
 }
@@ -128,7 +128,7 @@ function updateSky() {
     g.globalAlpha = 1;
   }
   skyTex.needsUpdate = true;
-  for (const l of windowLights) { l.color.setHex(s.light); l.intensity = s.power; }
+  for (const l of windowLights) { l.color.setHex(s.light); l.intensity = s.power * 2.5; }
 }
 updateSky();
 
@@ -233,14 +233,6 @@ makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.85));   // soft, even light everywhere
-// The room's main light, a soft warm white hanging in the middle of the room (well below the ceiling, so it
-// doesn't make a bright patch up there)
-const roomLight = new THREE.PointLight(0xfff0dc, 5, 0, 1);
-roomLight.position.set(0, 2.2, 0);
-roomLight.castShadow = true;
-roomLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
-roomLight.shadow.bias = -0.002;
-scene.add(roomLight);
 
 // ---------- Neon: a ring floating under the middle of the ceiling, and a tube all the way around the top corners of the room ----------
 const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
@@ -275,6 +267,14 @@ for (const [k, op, core] of GLOW) {
   m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
   ring.add(m);
 }
+// The ring is the room's light: it shines down and out onto the floor and walls (never up, so the ceiling stays dark)
+const ringLight = new THREE.SpotLight(0xfff0dc, 6, 0, 1.25, 0.6, 1);
+ringLight.position.set(0, RING_Y - 0.05, 0);
+ringLight.target.position.set(0, 0, 0);
+ringLight.castShadow = true;
+ringLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
+ringLight.shadow.bias = -0.002;
+scene.add(ringLight, ringLight.target);
 // The corner tube: runs around the room right where the walls meet the ceiling, with its glow washing
 // onto the ceiling and down the wall, like real cove lighting
 function fadeTex(brightAtTop) {   // white fading to black, for the glow wash (black adds nothing when glowing)
