@@ -1,149 +1,106 @@
 // =====================================================================
-// room.js — the room itself, people, chat, sitting, camera and the main loop
+// room.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
+// walking around, the people in the room, chat, and the main loop
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, myId, S, hooks, ROOM, HEIGHT, SEATS, CHAIR_R, TABLE_Y, seatAngle, rnd,
-         renderer, scene, camera, controls, canvas, BASE_FOV,
-         paintTexture, box, std, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, FONT, PHONE } from './core.js';
-import { othelloGroup, validPlayer, felt, HALF, CELL, BOARD_TOP, canPlayAt, play, refreshPanel, refreshCounters,
-         othelloSeatChanged, startOthello, updateOthello } from './othello.js';
-import { trailGroup, trailInUse, hideTrail, mountainMesh, spotMeshes, MTN_TARGET, showSpotInfo, refreshTrail,
-         trailSeatChanged, startTrail, updateTrail, trailFullChanged } from './trail.js';
-import { stackGroup, stackInUse, hideStack, STACK_TARGET, stackPickables, stackHover, stackGrab, stackDrag,
-         stackRelease, stackTap, refreshStack, stackSeatChanged, startStack, updateStack } from './stack.js';
-import { checkersGroup, chessGroup, boardGamesInUse, boardGameTap, boardGameCanTap, boardGamePickables, refreshBoardGames,
-         hideBoardGames, startBoardGames, updateBoardGames } from './boardgames.js';
-import { sketchPickables, sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME } from './sketch.js';
-import { poolScene, poolEnter, poolLeave, startPool, updatePool, POOL_NAME } from './pool.js';
+import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
+         paintTexture, box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
+import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
 import { sfx, setupMute } from './sounds.js';
 
-// ---------- Painted textures ----------
-const floorTex = paintTexture(512, 512, (g, w, h) => {
-  const rows = 8, ph = h / rows;
-  for (let r = 0; r < rows; r++) {
-    let x = -(r % 2) * w / 4;
-    while (x < w) {
-      const len = w / 2;
-      g.fillStyle = `hsl(28, 45%, ${30 + rnd() * 18}%)`;
-      g.fillRect(x, r * ph, len, ph);
-      g.strokeStyle = 'rgba(0,0,0,0.08)';
-      for (let i = 0; i < 6; i++) {
-        const y = r * ph + rnd() * ph;
-        g.beginPath(); g.moveTo(x, y); g.lineTo(x + len, y + (rnd() - 0.5) * 4); g.stroke();
-      }
-      g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 2;
-      g.strokeRect(x, r * ph, len, ph); g.lineWidth = 1;
-      x += len;
+// ---------- Black marble with gold veins (painted in code, the same for everyone) ----------
+// Everything is drawn wrapped around the edges, so the texture tiles with no seams.
+function wrapped(g, w, h, draw) { for (const dx of [-w, 0, w]) for (const dy of [-h, 0, h]) { g.save(); g.translate(dx, dy); draw(); g.restore(); } }
+function vein(x, y, ang, steps, step, bend, pull = 0) {   // a wandering line, as a list of points (pull keeps it near its first heading)
+  const pts = [[x, y]], a0 = ang;
+  for (let i = 0; i < steps; i++) {
+    ang += (rnd() - 0.5) * bend + (a0 - ang) * pull;
+    x += Math.cos(ang) * step; y += Math.sin(ang) * step;
+    pts.push([x, y]);
+  }
+  return pts;
+}
+function strokePts(g, pts) { g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) g.lineTo(x, y); g.stroke(); }
+function paintMarble(g, w, h, opts = {}) {
+  const sc = w / 1024;                                   // everything is sized for a 1024 texture, then scaled
+  g.fillStyle = opts.base || '#0b0a0c'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 70; i++) {                         // soft dark clouds in the stone
+    const x = rnd() * w, y = rnd() * h, r = (60 + rnd() * 220) * sc;
+    const light = rnd() < 0.5;
+    wrapped(g, w, h, () => {
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      grd.addColorStop(0, light ? 'rgba(48,44,52,0.22)' : 'rgba(0,0,0,0.35)');
+      grd.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = grd; g.fillRect(x - r, y - r, r * 2, r * 2);
+    });
+  }
+  for (let i = 0; i < 4000 * sc * sc; i++) {             // fine grain
+    g.fillStyle = `rgba(${rnd() < 0.5 ? '255,255,255' : '0,0,0'},${0.02 + rnd() * 0.04})`;
+    g.fillRect(rnd() * w, rnd() * h, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
+  }
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  const flow = -0.55;                                    // the veins mostly run one way, like real stone
+  for (let i = 0; i < 14; i++) {                         // faint pale veins
+    const pts = vein(rnd() * w, rnd() * h, flow + (rnd() - 0.5) * 0.9, 110, 6 * sc, 0.22, 0.06);
+    const lw = (0.8 + rnd() * 1.6) * sc;
+    wrapped(g, w, h, () => { g.strokeStyle = 'rgba(170,165,175,0.09)'; g.lineWidth = lw; strokePts(g, pts); });
+  }
+  const golds = opts.golds == null ? 7 : opts.golds;
+  for (let i = 0; i < golds; i++) {                      // gold veins: long and flowing, with a soft haze and a few thin offshoots
+    const main = vein(rnd() * w, rnd() * h, flow + (rnd() - 0.5) * 0.6, 100 + Math.floor(rnd() * 45), 7 * sc, 0.2, 0.05);   // never longer than the texture, so it wraps cleanly
+    const branches = [];
+    const nb = Math.floor(rnd() * 3);
+    for (let b = 0; b < nb; b++) {
+      const at = main[Math.floor(rnd() * main.length)];
+      branches.push(vein(at[0], at[1], flow + (rnd() < 0.5 ? 0.7 : -0.7), 15 + Math.floor(rnd() * 30), 5 * sc, 0.3));
     }
+    const thick = (0.5 + rnd() * 1.6) * Math.max(sc, 0.75);
+    wrapped(g, w, h, () => {
+      g.strokeStyle = 'rgba(200,160,60,0.05)'; g.lineWidth = 22 * thick; strokePts(g, main);
+      g.strokeStyle = 'rgba(212,170,60,0.12)'; g.lineWidth = 7 * thick; strokePts(g, main);
+      g.strokeStyle = 'rgba(222,180,70,0.45)'; g.lineWidth = 2.6 * thick; strokePts(g, main);
+      g.strokeStyle = 'rgba(255,226,145,0.85)'; g.lineWidth = 1 * thick; strokePts(g, main);
+      for (const br of branches) {
+        g.strokeStyle = 'rgba(212,170,60,0.3)'; g.lineWidth = 1.2 * thick; strokePts(g, br);
+        g.strokeStyle = 'rgba(255,224,140,0.5)'; g.lineWidth = 0.45 * thick; strokePts(g, br);
+      }
+    });
   }
-}, 3, 3);
-
-const wallTex = paintTexture(512, 256, (g, w, h) => {
-  g.fillStyle = '#c9a77c'; g.fillRect(0, 0, w, h);                // warm wallpaper
-  for (let x = 0; x < w; x += 16) { g.fillStyle = 'rgba(255,240,210,0.12)'; g.fillRect(x, 0, 6, h); }
-  const panelTop = h * 0.7;
-  g.fillStyle = '#4a2f1d'; g.fillRect(0, panelTop, w, h - panelTop); // wood wainscot
-  g.fillStyle = '#5a3a24';
-  for (let x = 8; x < w; x += 64) g.fillRect(x, panelTop + 10, 48, h - panelTop - 24);
-  g.fillStyle = '#2e1d12'; g.fillRect(0, panelTop - 4, w, 6);         // chair rail
-  g.fillRect(0, h - 8, w, 8);                                          // baseboard
-}, 4, 1);
-
-const tableTex = paintTexture(512, 512, (g, w, h) => {
-  g.fillStyle = '#5b3a22'; g.fillRect(0, 0, w, h);
-  for (let i = 0; i < 70; i++) {
-    g.strokeStyle = `rgba(${rnd() < 0.5 ? '30,15,5' : '120,80,45'},0.25)`;
-    const y = rnd() * h;
-    g.beginPath(); g.moveTo(0, y);
-    g.bezierCurveTo(w * 0.3, y + (rnd() - 0.5) * 20, w * 0.7, y + (rnd() - 0.5) * 20, w, y + (rnd() - 0.5) * 10);
-    g.stroke();
+  if (opts.tiles) {                                      // floor tiles: thin gold seams, 2 by 2 per texture
+    g.fillStyle = 'rgba(190,150,60,0.55)';
+    for (const p of [0, w / 2]) { g.fillRect(p - 1, 0, 2, h); g.fillRect(0, p - 1, w, 2); }
+    g.fillRect(w - 1, 0, 1, h); g.fillRect(0, h - 1, w, 1);   // the other half of the seam at the texture's edge
   }
-});
-
-const rugTex = paintTexture(512, 512, (g, w, h) => {
-  const cx = w / 2, cy = h / 2;
-  const rings = ['#6e2a20', '#e8d5b0', '#9c3b2a', '#d9b56f', '#7a2e22', '#e8d5b0', '#5c2a1e'];
-  rings.forEach((col, i) => {
-    g.fillStyle = col; g.beginPath();
-    g.arc(cx, cy, (w / 2) * (1 - i / rings.length), 0, Math.PI * 2); g.fill();
-  });
-  g.fillStyle = '#e8d5b0';
-  for (let a = 0; a < 48; a++) {
-    const ang = (a / 48) * Math.PI * 2;
-    g.beginPath(); g.arc(cx + Math.cos(ang) * w * 0.43, cy + Math.sin(ang) * h * 0.43, 5, 0, Math.PI * 2); g.fill();
-  }
-});
-
-// ---------- Room shell ----------
-const wallMat = std(0xffffff, 0.9, { map: wallTex, side: THREE.BackSide });
-const roomMats = [
-  wallMat, wallMat,
-  std(0xe9dcc4, 0.95, { side: THREE.BackSide }),             // ceiling
-  std(0xffffff, 0.7, { map: floorTex, side: THREE.BackSide }), // floor
-  wallMat, wallMat
-];
-const room = new THREE.Mesh(new THREE.BoxGeometry(ROOM, HEIGHT, ROOM), roomMats);
-room.position.y = HEIGHT / 2;
-room.receiveShadow = true;
-scene.add(room);
-
-// Round rug
-const rug = new THREE.Mesh(new THREE.CircleGeometry(2.6, 64), std(0xffffff, 1, { map: rugTex }));
-rug.rotation.x = -Math.PI / 2; rug.position.y = 0.005; rug.receiveShadow = true;
-scene.add(rug);
-
-// ---------- Round table ----------
-const tableMat = std(0xffffff, 0.55, { map: tableTex });
-const table = new THREE.Group(); scene.add(table);
-const top = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.0, 0.06, 64), tableMat);
-top.position.y = TABLE_Y - 0.03;
-const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.14, 0.7, 24), tableMat);
-leg.position.y = 0.38;
-const base = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.5, 0.06, 32), tableMat);
-base.position.y = 0.03;
-[top, leg, base].forEach(m => { m.castShadow = true; m.receiveShadow = true; table.add(m); });
-
-// Neon tubes: a bright core with layered glow. Their color follows the light switch (see "Ceiling ring light" below).
-const neonMats = [];   // { mat, core } for every neon layer in the room
-function neonTube(parent, radius, tube, opacity, core, y) {
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false,
-    blending: THREE.AdditiveBlending, toneMapped: false });
-  const m = new THREE.Mesh(new THREE.TorusGeometry(radius, tube, 12, 160), mat);
-  m.rotation.x = Math.PI / 2;
-  m.position.y = y;
-  parent.add(m);
-  neonMats.push({ mat, core });
 }
-// Strip around the side of the table edge
-neonTube(table, 1.004, 0.004, 1.0, true, TABLE_Y - 0.03);    // hot core
-neonTube(table, 1.004, 0.009, 0.55, false, TABLE_Y - 0.03);  // inner glow
-neonTube(table, 1.004, 0.02, 0.18, false, TABLE_Y - 0.03);   // soft outer glow
-neonTube(table, 1.004, 0.04, 0.06, false, TABLE_Y - 0.03);   // faint haze
+const SIZE = PHONE ? 512 : 1024;
+const wallTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h), ROOM / 3, HEIGHT / 3);   // one texture covers 3 meters
+const floorTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h, { tiles: true, golds: 6 }), ROOM / 3, ROOM / 3);
+const ceilTex = paintTexture(SIZE, SIZE, (g, w, h) => paintMarble(g, w, h, { base: '#08080a', golds: 4 }), ROOM / 3, ROOM / 3);
 
-// ---------- Chairs ----------
-const chairs = [];
-function makeChair(i) {
-  const g = new THREE.Group();
-  const wood = std(0x6b4226, 0.7);
-  const cushion = std(0x8c2f2f, 0.95);
-  box(0.46, 0.05, 0.46, wood, 0, 0.46, 0, g);       // seat
-  box(0.42, 0.05, 0.42, cushion, 0, 0.51, 0, g);    // cushion
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.04, 0.46, 0.04, wood, sx * 0.19, 0.23, sz * 0.19, g); // legs
-  for (const sx of [-1, 1]) box(0.04, 0.5, 0.04, wood, sx * 0.19, 0.73, -0.21, g); // back posts
-  box(0.42, 0.1, 0.03, wood, 0, 0.92, -0.21, g);    // top rail
-  box(0.42, 0.05, 0.03, wood, 0, 0.7, -0.21, g);    // middle rail
-
-  const a = seatAngle(i);
-  g.position.set(Math.sin(a) * CHAIR_R, 0, Math.cos(a) * CHAIR_R);
-  g.lookAt(0, 0, 0); // front of the chair faces the table
-  g.userData = { seat: i, mats: [wood, cushion] };
-  g.traverse(o => { if (o.isMesh) o.userData.chair = g; });
-  scene.add(g);
-  chairs.push(g);
+// ---------- The room: four walls, the floor and the ceiling ----------
+const wallMat = std(0xffffff, 0.35, { map: wallTex, envMap, envMapIntensity: 0.08 });
+const floorMat = std(0xffffff, 0.22, { map: floorTex, envMap, envMapIntensity: 0.18 });
+const ceilMat = std(0xffffff, 0.6, { map: ceilTex });
+function plane(w, h, mat, x, y, z, rx, ry) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  m.position.set(x, y, z); m.rotation.set(rx, ry, 0); m.receiveShadow = true;
+  scene.add(m);
+  return m;
 }
-for (let i = 0; i < SEATS; i++) makeChair(i);
+const H2 = HEIGHT / 2, R2 = ROOM / 2;
+plane(ROOM, HEIGHT, wallMat, 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
+plane(ROOM, HEIGHT, wallMat, 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
+plane(ROOM, HEIGHT, wallMat, -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
+plane(ROOM, HEIGHT, wallMat, R2, H2, 0, 0, -Math.PI / 2);    // the right wall (pictures)
+const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
+floor.userData.floor = true;
+plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
+// Gold baseboards along the bottom of every wall
+for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
+  box(w, 0.09, d, goldMat, x, 0.045, z, scene).castShadow = false;
+}
 
 // ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
 const skyCanvas = document.createElement('canvas');
@@ -155,7 +112,7 @@ const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
 const windowLights = [];
 {                                                  // light coming in through the window
   const l = new THREE.DirectionalLight(0x8fa8ff, 0.35);
-  l.position.set(8, 4, 0);
+  l.position.set(0, 4, 8);
   l.target.position.set(0, 0, 0);
   scene.add(l, l.target);
   windowLights.push(l);
@@ -191,7 +148,7 @@ updateSky();
 
 function makeWindow(x, z, rotY) {
   const g = new THREE.Group();
-  const frame = std(0xe8dcc4, 0.6);
+  const frame = goldMat;
   const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), new THREE.MeshBasicMaterial({ map: skyTex }));
   g.add(glass);
   box(1.75, 0.08, 0.06, frame, 0, 0.64, 0, g);
@@ -201,14 +158,24 @@ function makeWindow(x, z, rotY) {
   box(0.05, 1.2, 0.05, frame, 0, 0, 0, g);
   box(1.6, 0.05, 0.05, frame, 0, 0, 0, g);
   box(1.9, 0.06, 0.18, frame, 0, -0.7, 0.06, g); // sill
-  g.position.set(x, 1.7, z);
+  g.position.set(x, 1.8, z);
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWindow(ROOM / 2 - 0.02, 0, -Math.PI / 2);     // the right wall (across from the gallery), centered
+makeWindow(-1.6, ROOM / 2 - 0.02, Math.PI);      // on the entry wall, left of the door
 
 // ---------- A green dot-matrix wall clock (your local time, with A or P) ----------
 const CLK_FONT = {
+  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
+  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
+  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
+  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
+  '5': ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
+  '6': ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
+  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
+  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
+  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100'],
   ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
   'A': ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
   'P': ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
@@ -225,15 +192,15 @@ let clockShown = '';
 function makeWallClock(x, z, rotY) {
   const g = new THREE.Group();
   const w = 0.74, h = w * CLK_ROWS / CLK_COLS;
-  box(w + 0.05, h + 0.05, 0.05, std(0x1c1f1d, 0.7), 0, 0, 0, g);
+  box(w + 0.05, h + 0.05, 0.05, goldMat, 0, 0, 0, g);
   const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: clockTex, toneMapped: false }));
   face.position.z = 0.026;
   g.add(face);
-  g.position.set(x, 2.0, z);
+  g.position.set(x, 2.65, z);
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(ROOM / 2 - 0.03, -1.5, -Math.PI / 2);   // beside the window
+makeWallClock(1.6, ROOM / 2 - 0.03, Math.PI);   // above the door
 
 function updateClock() {
   const d = new Date();
@@ -243,7 +210,7 @@ function updateClock() {
   clockShown = text;
   const lit = new Set();
   [...text].forEach((ch, i) => {
-    const glyph = FONT[ch] || CLK_FONT[ch] || CLK_FONT[' '];
+    const glyph = CLK_FONT[ch] || CLK_FONT[' '];
     glyph.forEach((row, r) => [...row].forEach((bit, c) => {
       if (bit === '1') lit.add((r + 1) * CLK_COLS + (1 + i * 6 + c));
     }));
@@ -258,17 +225,16 @@ function updateClock() {
   clockTex.needsUpdate = true;
 }
 
-// ---------- Doors: the way in on the front wall (click it twice to leave), and the game room door on the back wall ----------
+// ---------- The door on the entry wall (click it twice to leave) ----------
 function makeDoor(x, z, rotY, tag) {
   const g = new THREE.Group();
-  const trim = std(0xe8dcc4, 0.6);
-  const wood = std(0x5a3a24, 0.65);
+  const wood = std(0x2a1a10, 0.55, { envMap, envMapIntensity: 0.2 });
   box(0.9, 2.05, 0.05, wood, 0, 1.025, 0, g);                 // door
-  for (const y of [0.55, 1.45]) box(0.66, 0.62, 0.02, std(0x4a2f1d, 0.7), 0, y, 0.03, g);   // raised panels
-  box(0.08, 2.15, 0.07, trim, -0.49, 1.075, 0, g);             // frame
-  box(0.08, 2.15, 0.07, trim, 0.49, 1.075, 0, g);
-  box(1.06, 0.08, 0.07, trim, 0, 2.15, 0, g);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), std(0xc9a227, 0.3, { metalness: 0.8 }));
+  for (const y of [0.55, 1.45]) box(0.66, 0.62, 0.02, std(0x1e130b, 0.6), 0, y, 0.03, g);   // raised panels
+  box(0.08, 2.15, 0.07, goldMat, -0.49, 1.075, 0, g);          // frame
+  box(0.08, 2.15, 0.07, goldMat, 0.49, 1.075, 0, g);
+  box(1.06, 0.08, 0.07, goldMat, 0, 2.15, 0, g);
+  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
   knob.position.set(0.34, 1.0, 0.06);
   g.add(knob);
   g.position.set(x, 0, z);
@@ -277,56 +243,64 @@ function makeDoor(x, z, rotY, tag) {
   scene.add(g);
   return g;
 }
-const doorGroup = makeDoor(1.5, ROOM / 2 - 0.03, Math.PI, 'door');
-const gameDoorGroup = makeDoor(0, -ROOM / 2 + 0.03, 0, 'gameDoor');
-(function gameDoorSign() {   // a glowing sign over the game room door
-  const t = paintTexture(1024, 256, (g, w, h) => {
-    g.clearRect(0, 0, w, h);
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.font = 'bold 110px Georgia';
-    g.shadowColor = '#7af0ff'; g.shadowBlur = 36;
-    g.strokeStyle = '#7af0ff'; g.lineWidth = 8; g.strokeText('Game Room', w / 2 + 40, h / 2 + 6);
-    g.shadowBlur = 10; g.fillStyle = '#e8fdff'; g.fillText('Game Room', w / 2 + 40, h / 2 + 6);
-    g.font = '96px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif';
-    g.shadowBlur = 0; g.fillText('🎱', 150, h / 2 + 6);
-  });
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.375), new THREE.MeshBasicMaterial({ map: t, transparent: true, toneMapped: false, depthWrite: false }));
-  sign.position.set(0, 2.5, 0.01);
-  sign.userData.gameDoor = true;
-  gameDoorGroup.add(sign);
-})();
+makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
 
 // ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xffe2b8, 0x3a2618, 0.8));
-
-// ---------- Ceiling ring light over the table: its neon color is shared, and the table's neon matches it ----------
-const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
-                     ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
-const RING_R = 1.3, RING_Y = 2.75;   // hangs down from the ceiling on four thin cables so you can see it
-const ring = new THREE.Group();
-scene.add(ring);
-const ringBase = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.035, 12, 160), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
-ringBase.rotation.x = Math.PI / 2; ringBase.position.y = RING_Y + 0.03;
-ring.add(ringBase);
-for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {   // four thin cables up to the ceiling
-  const len = HEIGHT - RING_Y - 0.03;
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 6), std(0x2a2a2a, 0.5, { metalness: 0.6 }));
-  rod.position.set(Math.cos(a) * RING_R, RING_Y + 0.03 + len / 2, Math.sin(a) * RING_R);
-  ring.add(rod);
-}
-neonTube(ring, RING_R, 0.014, 1.0, true, RING_Y);    // hot core
-neonTube(ring, RING_R, 0.03, 0.5, false, RING_Y);    // inner glow
-neonTube(ring, RING_R, 0.07, 0.15, false, RING_Y);   // soft outer glow
-neonTube(ring, RING_R, 0.14, 0.05, false, RING_Y);   // faint haze
+scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.6));
 // The room's main light, a soft warm white from the middle of the ceiling (gentle, so nothing glares white)
-const roomLight = new THREE.PointLight(0xfff0dc, 6, 0, 1);
-roomLight.position.set(0, HEIGHT - 0.25, 0);
+const roomLight = new THREE.PointLight(0xfff0dc, 9, 0, 1);
+roomLight.position.set(0, HEIGHT - 0.3, 0);
 roomLight.castShadow = true;
 roomLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
 roomLight.shadow.bias = -0.002;
 scene.add(roomLight);
+
+// ---------- Neon: a ring hanging from the middle of the ceiling, and a strip all the way around the top of the walls ----------
+const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
+                     ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
+const neonMats = [];   // { mat, core } for every neon layer in the room
+const GLOW = [[1, 1.0, true], [2.2, 0.5, false], [5, 0.15, false], [10, 0.05, false]];   // core, inner glow, soft glow, faint haze
+function neonMat(opacity, core) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false,
+    blending: THREE.AdditiveBlending, toneMapped: false });
+  neonMats.push({ mat, core });
+  return mat;
+}
+// The ring: hangs down from the ceiling on four thin cables
+const RING_R = 1.3, RING_Y = HEIGHT - 0.7;
+const ring = new THREE.Group();
+scene.add(ring);
+const ringBase = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.035, 12, 160), goldMat);
+ringBase.rotation.x = Math.PI / 2; ringBase.position.y = RING_Y + 0.03;
+ring.add(ringBase);
+for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
+  const len = HEIGHT - RING_Y - 0.03;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, len, 6), goldMat);
+  rod.position.set(Math.cos(a) * RING_R, RING_Y + 0.03 + len / 2, Math.sin(a) * RING_R);
+  ring.add(rod);
+}
+for (const [k, op, core] of GLOW) {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.014 * k, 12, 160), neonMat(op, core));
+  m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
+  ring.add(m);
+}
+// The strip: sits on a little gold ledge just under the ceiling, all the way around the room
+const COVE_Y = HEIGHT - 0.1, IN = 0.09;              // how high, and how far out from the walls
+const SIDE = ROOM - IN * 2;
+for (const [x, z, w, d] of [[0, -R2 + 0.07, ROOM, 0.14], [0, R2 - 0.07, ROOM, 0.14], [-R2 + 0.07, 0, 0.14, ROOM], [R2 - 0.07, 0, 0.14, ROOM]]) {
+  box(w, 0.03, d, goldMat, x, COVE_Y - 0.035, z, scene).castShadow = false;   // the ledge
+}
+for (const [k, op, core] of GLOW) {
+  const mat = neonMat(op * 0.9, core);
+  for (const [x, z, rotY] of [[0, -R2 + IN, 0], [0, R2 - IN, 0], [-R2 + IN, 0, Math.PI / 2], [R2 - IN, 0, Math.PI / 2]]) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.01 * k, 0.01 * k, SIDE, 10), mat);
+    m.rotation.set(0, rotY, Math.PI / 2);   // lying along the wall
+    m.position.set(x, COVE_Y, z);
+    scene.add(m);
+  }
+}
 // A little of the neon color spills into the room
-const tintLight = new THREE.PointLight(0xffe8c4, 2.2, 0, 1.2);
+const tintLight = new THREE.PointLight(0xffe8c4, 3, 0, 1.2);
 tintLight.position.set(0, RING_Y, 0);   // at the ring, so its color washes up onto the ceiling too
 scene.add(tintLight);
 let neonIndex = -1;
@@ -345,11 +319,11 @@ function setNeon(i) {
 const switchGroup = new THREE.Group();
 const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: false });
 (function lightSwitch() {
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.015), std(0xf2ead8, 0.5));
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.015), goldMat);
   const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
   toggle.position.z = 0.015;
   switchGroup.add(plate, toggle);
-  switchGroup.position.set(2.45, 1.25, ROOM / 2 - 0.015);
+  switchGroup.position.set(2.5, 1.25, R2 - 0.015);
   switchGroup.rotation.y = Math.PI;
   switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
   scene.add(switchGroup);
@@ -365,56 +339,54 @@ function nextNeon() {
   sfx.ping();
 }
 
-// ---------- Other people: a snowman in their chair with a name tag ----------
+// ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
+const WALK = 2.2;     // walking speed, meters a second
 const avatars = {};   // id -> { g, name, c }
 function makeAvatar(name, c) {
   const g = new THREE.Group();
   const mat = std(new THREE.Color(RAINBOW[c]), 0.75);
-  // Three stacked snowballs: big bottom, middle, small head
-  const balls = [[0.2, 0.72], [0.15, 1.02], [0.11, 1.25]];
-  for (const [r, y] of balls) {
+  for (const [r, y] of [[0.28, 0.28], [0.21, 0.74], [0.15, 1.1]]) {   // three stacked snowballs: big bottom, middle, small head
     const b = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat);
     b.position.y = y;
     b.castShadow = true;
     g.add(b);
   }
-  // Solid arms in the body color, reaching forward so the hands rest on the table
-  for (const side of [-1, 1]) {
-    const from = new THREE.Vector3(side * 0.15, 1.06, -0.03);   // shoulder on the middle ball
-    const to = new THREE.Vector3(side * 0.2, 0.825, -(CHAIR_R + 0.03 - 0.92));   // hand resting just inside the table edge
-    const dir = new THREE.Vector3().subVectors(to, from);
-    const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, dir.length(), 6, 12), mat);
-    arm.position.copy(from).add(to).multiplyScalar(0.5);
-    arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-    arm.castShadow = true;
-    g.add(arm);
-  }
   const label = makeLabel(name, RAINBOW_CSS[c]);
-  label.position.y = 1.56;
+  label.position.y = 1.47;
   g.add(label);
+  g.traverse(o => { o.userData.avatar = true; });
   scene.add(g);
   return { g, name, c };
+}
+function spotOf(p) {   // where someone is standing (kept inside the room)
+  const lim = R2 - 0.5;
+  const x = Number.isFinite(p.x) ? p.x : 0, z = Number.isFinite(p.z) ? p.z : R2 - 1.3;
+  return { x: Math.max(-lim, Math.min(lim, x)), z: Math.max(-lim, Math.min(lim, z)) };
 }
 function refreshAvatars() {
   for (const id of Object.keys(avatars)) {
     const p = S.presence[id];
-    if (!p || p.pool || p.seat < 0 || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
+    if (!p || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
       scene.remove(avatars[id].g);
       delete avatars[id];
     }
   }
   for (const [id, p] of Object.entries(S.presence)) {
-    if (id === myId || p.pool || p.seat < 0) continue;   // people in the game room are drawn in there
-    if (!avatars[id]) avatars[id] = makeAvatar(p.name, colorIndex(p));
-    const g = avatars[id].g;
-    g.visible = !S.trailFull;   // the big board hides the room
-    const a = seatAngle(p.seat);
-    g.position.set(Math.sin(a) * (CHAIR_R + 0.03), 0, Math.cos(a) * (CHAIR_R + 0.03));
-    g.rotation.y = a;   // turned so the arms reach toward the table
+    if (id === myId) continue;
+    const fresh = !avatars[id];
+    if (fresh) avatars[id] = makeAvatar(p.name, colorIndex(p));
+    const a = avatars[id], to = spotOf(p);
+    a.tx = to.x; a.tz = to.z;
+    if (fresh) a.g.position.set(to.x, 0, to.z);   // someone new just appears where they are
   }
 }
-function seatTakenByOther(s) {
-  return Object.entries(S.presence).some(([id, p]) => id !== myId && p.seat === s);
+function moveAvatars(dt) {   // everyone else glides toward where they're walking
+  for (const a of Object.values(avatars)) {
+    const p = a.g.position, dx = a.tx - p.x, dz = a.tz - p.z, d = Math.hypot(dx, dz);
+    if (d < 0.001) continue;
+    const step = Math.min(d, WALK * dt);
+    p.x += dx / d * step; p.z += dz / d * step;
+  }
 }
 
 // ---------- Who's here list ----------
@@ -424,7 +396,7 @@ const whoBtn = document.getElementById('whoBtn');
 function refreshWho() {
   whoList.textContent = '';
   const people = Object.entries(S.presence);
-  document.querySelector('#who h2').textContent = `In the room (${people.length})`;
+  document.querySelector('#who h2').textContent = `In the gallery (${people.length})`;
   whoBtn.textContent = `👥 ${people.length}`;
   for (const [id, p] of people) {
     const div = document.createElement('div');
@@ -432,69 +404,24 @@ function refreshWho() {
     dot.textContent = '● ';
     dot.style.color = RAINBOW_CSS[colorIndex(p)];
     div.appendChild(dot);
-    const where = p.pool ? '🎱 Game room' : p.seat >= 0 ? 'seat ' + (p.seat + 1) : 'standing';
-    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''} · ${where}`));
+    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''}${p.b ? ' · 🖍 at the board' : ''}`));
     whoList.appendChild(div);
   }
 }
 hooks.refreshWho = refreshWho;
 
 function refreshAll() {
-  refreshPanel();
-  refreshCounters();
   refreshAvatars();
   refreshWho();
-  refreshTrail();
-  refreshStack();
-  refreshBoardGames();
-  refreshSwitch();
 }
 hooks.refreshAll = refreshAll;
-
-// ---------- Switching which game is on the table ----------
-const GAMES = {
-  othello: { group: othelloGroup, ui: 'othelloUI', btn: 'swOthello', hide() {} },
-  checkers: { group: checkersGroup, ui: 'checkersUI', btn: 'swCheckers', hide: hideBoardGames },
-  chess:   { group: chessGroup,   ui: 'chessUI',   btn: 'swChess',   hide: hideBoardGames },
-  trail:   { group: trailGroup,   ui: 'trailUI',   btn: 'swTrail',   hide: hideTrail },
-  stack:   { group: stackGroup,   ui: 'stackUI',   btn: 'swStack',   hide: hideStack }
-};
-function tableIsFree() {   // you can only switch games when nobody is playing one
-  return !(validPlayer(1) || validPlayer(2)) && !trailInUse() && !stackInUse() && !boardGamesInUse();
-}
-function refreshSwitch() {
-  const free = tableIsFree();
-  for (const [name, g] of Object.entries(GAMES)) {
-    const b = document.getElementById(g.btn);
-    b.classList.toggle('on', S.activeGame === name);
-    b.disabled = S.activeGame !== name && !free;
-  }
-}
-hooks.refreshSwitch = refreshSwitch;
-function applyActive(name) {
-  S.activeGame = GAMES[name] ? name : 'othello';
-  if (S.trailFull && S.activeGame !== 'trail') setTrailFull(false);
-  document.body.dataset.game = S.activeGame;   // lets the page show only this game's ⋯ button
-  for (const [n, g] of Object.entries(GAMES)) {
-    g.group.visible = S.activeGame === n;
-    document.getElementById(g.ui).style.display = S.activeGame === n ? '' : 'none';
-    if (S.activeGame !== n) g.hide();
-  }
-  refreshAll();
-}
-for (const [name, g] of Object.entries(GAMES)) {
-  document.getElementById(g.btn).addEventListener('click', () => {
-    if (name === S.activeGame || !tableIsFree()) return;
-    set(ref(db, 'room/active'), name);
-  });
-}
 
 // ---------- Chat ----------
 const msgs = document.getElementById('msgs');
 const chatInput = document.getElementById('chatInput');
 const newDot = document.getElementById('newDot');
 
-// Two tabs on the chat box: 💬 Chat is only what people type, 🔔 Room is joins, leaves and game news
+// Two tabs on the chat box: 💬 Chat is only what people type, 🔔 Room is joins, leaves and gallery news
 const tabStyle = document.createElement('style');
 tabStyle.textContent = `#chatTabs { display: flex; gap: 6px; margin-bottom: 6px; }
   #chatTabs button { position: relative; margin: 0; font-size: 13px; padding: 4px 12px; background: rgba(233,201,143,0.25); color: #f3e6cf; }
@@ -559,7 +486,7 @@ function addSys(text, c) {   // grey line in the Room tab, like "Sam joined the 
 }
 hooks.addSys = addSys;
 
-// ---------- Big on-screen messages, like "Your turn!" ----------
+// ---------- Big on-screen messages, like "Saved to the Doodle Gallery!" ----------
 const banner = document.getElementById('banner');
 let bannerTimer = 0;
 function showBanner(text, secs = 3) {
@@ -602,25 +529,6 @@ whoBtn.addEventListener('click', () => {
 });
 setupMute(document.getElementById('mute'));
 
-// Phones: the ▾ button shrinks the game panel to just its status line
-const collapseBtn = document.getElementById('collapse');
-function setPanelSmall(small) {
-  document.body.classList.toggle('panelSmall', small);
-  collapseBtn.textContent = small ? '▴' : '▾';
-  collapseBtn.title = small ? 'Show the whole panel' : 'Shrink the panel';
-  try { localStorage.setItem('hangoutPanelSmall', small ? '1' : '0'); } catch (e) {}
-}
-let startSmall = false;
-try { startSmall = localStorage.getItem('hangoutPanelSmall') === '1'; } catch (e) {}
-setPanelSmall(startSmall);
-collapseBtn.addEventListener('click', () => setPanelSmall(!document.body.classList.contains('panelSmall')));
-
-// Keep the action buttons just above the game panel on phones, however tall the panel gets
-const gamePanel = document.getElementById('game');
-function trackPanelHeight() { document.documentElement.style.setProperty('--panelH', gamePanel.offsetHeight + 'px'); }
-if (window.ResizeObserver) new ResizeObserver(trackPanelHeight).observe(gamePanel);
-trackPanelHeight();
-
 // ---------- Leaving the room: the 🚪 button or the door, clicked twice ----------
 const leaveBtn = document.getElementById('leaveRoom');
 let leaveArmed = 0;
@@ -630,10 +538,10 @@ function leaveRoom() {
     leaveArmed = Date.now();
     leaveBtn.textContent = 'Sure? Click again';
     showBanner('🚪 Click again to leave the room', 3);
-    setTimeout(() => { if (Date.now() - leaveArmed >= 3000) leaveBtn.textContent = '🚪 Leave room'; }, 3100);
+    setTimeout(() => { if (Date.now() - leaveArmed >= 3000) leaveBtn.textContent = '🚪 Leave'; }, 3100);
     return;
   }
-  // Leaving frees your chair and drops you out of any game; the page reloads to the name screen
+  // Leaving drops the pen if you have it; the page reloads to the name screen
   sketchLeave();
   remove(ref(db, 'room/presence/' + myId)).finally(() => location.reload());
 }
@@ -665,7 +573,7 @@ function enterRoom() {
           if (hue >= 7) hue = Object.keys(ps.val() || {}).length % 7;   // more than 7 people: colors repeat
           S.myHue = hue;
         }
-        set(meRef, { name: S.myName, seat: S.seated, c: S.myHue, t: Date.now(), pool: S.inPool ? true : null });
+        set(meRef, { name: S.myName, c: S.myHue, t: Date.now(), ...mySpot() });
       });
       connEl.textContent = 'Online';
     } else {
@@ -681,13 +589,7 @@ function enterRoom() {
     refreshAll();
   });
 
-  onValue(ref(db, 'room/active'), s => applyActive(s.val()));   // which game is on the table
-  startOthello();   // the Othello game
-  startTrail();     // LittleTrail
-  startStack();     // LittleStack
-  startBoardGames(); // Checkers and Chess
-  startSketch();    // LittleSketch, the drawing board by the door
-  startPool();      // LittlePool, in the game room
+  startSketch();    // LittleSketch, the big doodle board
 
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
@@ -702,93 +604,69 @@ function enterRoom() {
 document.getElementById('enter').addEventListener('click', enterRoom);
 nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
 
-function setMySeat(seat) {
-  if (S.myName) update(ref(db, 'room/presence/' + myId), { seat });
-}
-
-// ---------- Sitting, standing, board view, zoom ----------
+// ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
 const hint = document.getElementById('hint');
-const standBtn = document.getElementById('stand');
-const boardBtn = document.getElementById('boardView');
-const TABLE_CENTER = new THREE.Vector3(0, TABLE_Y, 0);
-
-let anim = null;      // camera move in progress
-let yaw = 0, pitch = 0;
-const baseQuat = new THREE.Quaternion();
-const savedView = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
-const boardSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion() };
-const mtnView = { flat: new THREE.Vector3(), dist: 1, yaw: 0, tilt: 0.5, minTilt: 0.1, target: MTN_TARGET };
-
-function seatEye(i) {
-  const a = seatAngle(i);
-  const r = CHAIR_R - 0.05;
-  return new THREE.Vector3(Math.sin(a) * r, 1.18, Math.cos(a) * r);
+const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap the board to doodle · tap a picture to see it'
+                        : 'Drag to look · click the floor to walk (or W A S D) · click the board to doodle · click a picture to see it';
+hint.textContent = HINT_WALK;
+const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
+const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
+let yaw = 0, pitch = -0.05;                   // facing the doodle board
+let anim = null;                              // a camera move in progress (walking up to the board and back)
+const boardSaved = { x: 0, z: 0, yaw: 0, pitch: 0 };
+const boardSpot = { x: 0, z: 0 };            // where your snowman stands while you're at the board
+function clampSpot(x, z) { return [Math.max(-LIMIT, Math.min(LIMIT, x)), Math.max(-LIMIT, Math.min(LIMIT, z))]; }
+function mySpot() {   // what everyone else sees: where you're standing (or walking to), and whether you're at the board
+  if (S.atSketch) return { x: +boardSpot.x.toFixed(2), z: +boardSpot.z.toFixed(2), b: true };
+  const x = me.tx != null ? me.tx : me.x, z = me.tz != null ? me.tz : me.z;
+  return { x: +x.toFixed(2), z: +z.toFixed(2), b: null };
 }
-function lookQuat(pos, target, up = new THREE.Vector3(0, 1, 0)) {
-  const m = new THREE.Matrix4().lookAt(pos, target, up);
-  return new THREE.Quaternion().setFromRotationMatrix(m);
+let sentAt = 0, sendTimer = 0;
+function sendSpot(now) {   // tell everyone where you're going (a few times a second at most)
+  if (!S.myName) return;
+  clearTimeout(sendTimer); sendTimer = 0;
+  if (!now && performance.now() - sentAt < 250) { sendTimer = setTimeout(() => sendSpot(true), 250); return; }
+  sentAt = performance.now();
+  update(ref(db, 'room/presence/' + myId), mySpot()).catch(() => {});
 }
-function mtnViewPos() {   // where the camera sits while circling the hill or tower
-  const flat = mtnView.flat.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), mtnView.yaw);
-  return mtnView.target.clone()
-    .addScaledVector(flat, mtnView.dist * Math.cos(mtnView.tilt))
-    .add(new THREE.Vector3(0, mtnView.dist * Math.sin(mtnView.tilt), 0));
-}
-function moveCamera(toPos, toQuat, done) {
-  anim = { fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(), toPos, toQuat, t: 0, dur: 0.8, done };
+function walkTo(x, z) {
+  [me.tx, me.tz] = clampSpot(x, z);
+  marker.position.set(me.tx, 0.012, me.tz);
+  marker.visible = true; markerFade = 1;
+  sendSpot(true);
 }
 function setFov(f) {
   camera.fov = Math.max(20, Math.min(BASE_FOV, f));
   camera.updateProjectionMatrix();
 }
-
-function sit(i) {
-  if (anim || S.boardView || !S.myName || seatTakenByOther(i)) return;
-  if (S.seated < 0) { savedView.pos.copy(camera.position); savedView.target.copy(controls.target); }
-  controls.enabled = false;
-  S.seated = i; yaw = 0; pitch = 0;
-  setFov(BASE_FOV);
-  const pos = seatEye(i);
-  baseQuat.copy(lookQuat(pos, TABLE_CENTER));
-  moveCamera(pos, baseQuat.clone(), null);
-  hint.textContent = `You're in seat ${i + 1} · drag to look · scroll to zoom · B for board view`;
-  standBtn.style.display = 'block';
-  setMySeat(i);
-  othelloSeatChanged(i);
-  trailSeatChanged(i);
-  stackSeatChanged(i);
-  refreshAll();
+function lookQuat(pos, target) {
+  const m = new THREE.Matrix4().lookAt(pos, target, new THREE.Vector3(0, 1, 0));
+  return new THREE.Quaternion().setFromRotationMatrix(m);
 }
-
-function stand() {
-  if (S.seated < 0 || anim || S.boardView || S.atSketch || S.trailFull) return;
-  S.seated = -1;
-  setFov(BASE_FOV);
-  moveCamera(savedView.pos.clone(), lookQuat(savedView.pos, savedView.target), () => {
-    controls.target.copy(savedView.target);
-    controls.enabled = true;
-    controls.update();
-  });
-  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
-  standBtn.style.display = 'none';
-  setMySeat(-1);
-  refreshAll();
+function viewQuat(y, p) { return new THREE.Quaternion().setFromEuler(new THREE.Euler(p, y, 0, 'YXZ')); }
+function moveCamera(toPos, toQuat, done) {
+  anim = { fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(), toPos, toQuat, t: 0, dur: 0.9, done };
 }
+camera.position.set(me.x, EYE, me.z);
+camera.rotation.set(pitch, yaw, 0);
 
-// ---------- Walking up to the LittleSketch board by the door ----------
-const sketchSaved = { pos: new THREE.Vector3(), target: new THREE.Vector3() };   // where you were, to step back to
+// A soft gold ring on the floor showing where you'll walk
+const marker = new THREE.Mesh(new THREE.RingGeometry(0.17, 0.22, 40),
+  new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+marker.rotation.x = -Math.PI / 2;
+marker.visible = false;
+scene.add(marker);
+let markerFade = 0;
+
+// ---------- Walking up to the doodle board, and stepping back ----------
 function enterSketch() {
-  if (anim || S.boardView || S.atSketch || S.trailFull || !S.myName) return;
-  if (S.seated >= 0) {   // get up from your chair first; when you step back you'll be standing
-    sketchSaved.pos.copy(savedView.pos); sketchSaved.target.copy(savedView.target);
-    S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
-  } else {
-    sketchSaved.pos.copy(camera.position); sketchSaved.target.copy(controls.target);
-  }
-  if (Math.hypot(sketchSaved.pos.x, sketchSaved.pos.y, sketchSaved.pos.z) < 0.1) {   // no saved view yet: use the starting view
-    sketchSaved.pos.set(2.6, 2.6, 2.6); sketchSaved.target.set(0, 0.8, 0);
-  }
-  controls.enabled = false;
+  if (anim || S.atSketch || !S.myName) return;
+  boardSaved.x = me.x; boardSaved.z = me.z; boardSaved.yaw = yaw; boardSaved.pitch = pitch;
+  me.tx = me.tz = null;
+  const others = Object.entries(S.presence).filter(([id, p]) => id !== myId && p.b).length;
+  const side = others % 2 ? 1 : -1, row = Math.floor(others / 2);   // off to the sides of the board, so nobody blocks the view
+  boardSpot.x = BOARD_SPOT.x + side * Math.min(LIMIT, BOARD_SPOT.side + row * 0.7);
+  boardSpot.z = BOARD_SPOT.z;
   S.atSketch = true;
   setFov(BASE_FOV);
   const v = sketchViewPose(camera.aspect);
@@ -796,184 +674,54 @@ function enterSketch() {
   document.body.classList.add('atSketch');
   hint.textContent = `${SKETCH_NAME} · Esc or Back to step away`;
   sketchEnter();
-  refreshAll();
+  sendSpot(true);
 }
 function leaveSketch() {
   if (!S.atSketch || anim) return;
   S.atSketch = false;
   document.body.classList.remove('atSketch');
   sketchLeave();
-  moveCamera(sketchSaved.pos.clone(), lookQuat(sketchSaved.pos, sketchSaved.target), () => {
-    controls.target.copy(sketchSaved.target);
-    controls.enabled = true;
-    controls.update();
-  });
-  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
-  refreshAll();
+  me.x = boardSaved.x; me.z = boardSaved.z; yaw = boardSaved.yaw; pitch = boardSaved.pitch;
+  moveCamera(new THREE.Vector3(me.x, EYE, me.z), viewQuat(yaw, pitch), null);
+  hint.textContent = HINT_WALK;
+  sendSpot(true);
 }
 hooks.sketchBack = leaveSketch;
 
-// ---------- Going through the 🎱 door into the game room (LittlePool), and back ----------
-const poolSaved = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
-function enterPool() {
-  if (anim || S.boardView || S.atSketch || S.trailFull || S.inPool || !S.myName) return;
-  if (S.seated >= 0) {   // get up from your chair first; when you come back you'll be standing
-    poolSaved.pos.copy(savedView.pos); poolSaved.target.copy(savedView.target);
-    S.seated = -1; setMySeat(-1); standBtn.style.display = 'none';
-  } else {
-    poolSaved.pos.copy(camera.position); poolSaved.target.copy(controls.target);
-  }
-  if (Math.hypot(poolSaved.pos.x, poolSaved.pos.y, poolSaved.pos.z) < 0.1) { poolSaved.pos.set(2.6, 2.6, 2.6); poolSaved.target.set(0, 0.8, 0); }
-  controls.enabled = false;
-  S.inPool = true;
-  document.body.classList.add('inPool');
-  update(ref(db, 'room/presence/' + myId), { pool: true });
-  hint.textContent = `${POOL_NAME} · drag to walk around the table · scroll to zoom · T for top view · Esc to go back`;
-  poolEnter();
-  refreshAll();
-}
-function leavePool() {
-  if (!S.inPool) return;
-  S.inPool = false;
-  document.body.classList.remove('inPool');
-  update(ref(db, 'room/presence/' + myId), { pool: null });
-  poolLeave();
-  camera.position.copy(poolSaved.pos);
-  controls.target.copy(poolSaved.target);
-  camera.lookAt(poolSaved.target);
-  controls.enabled = true;
-  controls.update();
-  hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
-  refreshAll();
-}
-hooks.poolBack = leavePool;
-
-// ---------- LittleTrail's big board: the game fills the window and the room is hidden (and not drawn) ----------
-const fullSaved = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), target: new THREE.Vector3(), hidden: [], bg: null };
-const fullLight = new THREE.DirectionalLight(0xfff4e0, 0);   // the lamps are hidden too, so the board gets its own light
-fullLight.position.set(1.2, 3, 1.6);
-scene.add(fullLight);
-const FULL_BG = new THREE.Color(0x141826);
-function fullDist() {   // far enough back to see the whole board
-  const halfH = Math.tan(Math.PI / 6);
-  return Math.max(1.7, Math.min(4.2, Math.max(1.2 / halfH, 1.2 / (halfH * Math.max(0.3, camera.aspect)))));
-}
-function setTrailFull(on) {
-  if (on === !!S.trailFull || anim) return;
-  if (on) {
-    if (S.activeGame !== 'trail' || S.atSketch || !S.myName) return;
-    if (S.boardView) { S.boardView = false; boardBtn.textContent = 'Board view'; }
-    fullSaved.pos.copy(camera.position); fullSaved.quat.copy(camera.quaternion); fullSaved.target.copy(controls.target);
-    fullSaved.hidden = scene.children.filter(c => c !== trailGroup && c !== fullLight && !c.isLight && c.visible);
-    fullSaved.hidden.forEach(c => { c.visible = false; });
-    fullSaved.bg = scene.background; scene.background = FULL_BG;
-    fullLight.intensity = 1.2;
-    controls.enabled = false;
-    S.trailFull = true;
-    document.body.classList.add('trailFull');
-    const side = new THREE.Vector3();
-    if (S.seated >= 0) { const a = seatAngle(S.seated); side.set(Math.sin(a), 0, Math.cos(a)); }
-    else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
-    mtnView.target = MTN_TARGET; mtnView.flat.copy(side); mtnView.yaw = 0;
-    mtnView.tilt = 0.95; mtnView.minTilt = 0.35; mtnView.dist = fullDist();
-    setFov(BASE_FOV);
-    const pos = mtnViewPos();
-    moveCamera(pos, lookQuat(pos, mtnView.target), null);
-    hint.textContent = 'LittleTrail · drag to turn the board · scroll to zoom · Esc for the room';
-  } else {
-    S.trailFull = false;
-    fullSaved.hidden.forEach(c => { c.visible = true; });
-    fullSaved.hidden = [];
-    scene.background = fullSaved.bg; fullLight.intensity = 0;
-    document.body.classList.remove('trailFull');
-    setFov(BASE_FOV);
-    if (S.seated >= 0) {   // back to your chair
-      yaw = 0; pitch = 0;
-      const pos = seatEye(S.seated);
-      baseQuat.copy(lookQuat(pos, TABLE_CENTER));
-      moveCamera(pos, baseQuat.clone(), null);
-      standBtn.style.display = 'block';
-      hint.textContent = `You're in seat ${S.seated + 1} · drag to look · scroll to zoom · B for board view`;
-    } else {
-      moveCamera(fullSaved.pos.clone(), fullSaved.quat.clone(), () => { controls.target.copy(fullSaved.target); controls.enabled = true; controls.update(); });
-      hint.textContent = 'Drag to look around · scroll to zoom · click a chair to sit';
-    }
-  }
-  trailFullChanged();
-  refreshAll();
-}
-hooks.setTrailFull = setTrailFull;
-hooks.quietSit = () => {   // joining from the big board: take the first free chair without moving the camera
-  if (S.seated >= 0) return S.seated;
-  for (let i = 0; i < SEATS; i++) {
-    if (seatTakenByOther(i)) continue;
-    savedView.pos.copy(fullSaved.pos); savedView.target.copy(fullSaved.target);
-    S.seated = i; yaw = 0; pitch = 0;
-    setMySeat(i);
-    othelloSeatChanged(i); trailSeatChanged(i); stackSeatChanged(i);
-    refreshAll();
-    return i;
-  }
-  return -1;
-};
-
-function toggleBoardView() {
-  if (anim || S.atSketch || S.trailFull) return;
-  if (!S.boardView) {
-    boardSaved.pos.copy(camera.position);
-    boardSaved.quat.copy(camera.quaternion);
-    controls.enabled = false;
-    // Angled view from behind your side of the table, looking down
-    const side = new THREE.Vector3();
-    if (S.seated >= 0) { const a = seatAngle(S.seated); side.set(Math.sin(a), 0, Math.cos(a)); }
-    else { camera.getWorldDirection(side); side.y = 0; side.normalize().negate(); }
-    setFov(BASE_FOV);
-    if (S.activeGame === 'trail' || S.activeGame === 'stack') {
-      // Up above the hill or tower: drag left and right to walk around it, up and down to tilt
-      const stack = S.activeGame === 'stack';
-      mtnView.target = stack ? STACK_TARGET : MTN_TARGET;
-      const across = stack ? 0.95 : 1.15, upBy = TABLE_Y + (stack ? 0.75 : 1.3) - mtnView.target.y;
-      mtnView.flat.copy(side);
-      mtnView.dist = Math.hypot(across, upBy);
-      mtnView.tilt = Math.atan2(upBy, across);
-      mtnView.minTilt = stack ? 0.05 : 0.25;
-      mtnView.yaw = 0;
-      const pos = mtnViewPos();
-      moveCamera(pos, lookQuat(pos, mtnView.target), null);
-    } else {
-      const pos = side.clone().multiplyScalar(0.85);
-      pos.y = BOARD_TOP + 1.0;
-      moveCamera(pos, lookQuat(pos, new THREE.Vector3(0, BOARD_TOP, 0)), null);
-    }
-    S.boardView = true;
-    boardBtn.textContent = S.seated >= 0 ? 'Back to seat' : 'Back';
-    standBtn.style.display = 'none';
-  } else {
-    setFov(BASE_FOV);
-    moveCamera(boardSaved.pos.clone(), boardSaved.quat.clone(), () => {
-      if (S.seated < 0) { controls.enabled = true; controls.update(); }
-    });
-    S.boardView = false;
-    boardBtn.textContent = 'Board view';
-    if (S.seated >= 0) standBtn.style.display = 'block';
-  }
-  refreshAll();
-}
-
-standBtn.addEventListener('click', stand);
-boardBtn.addEventListener('click', toggleBoardView);
+// ---------- Keys ----------
+const keys = new Set();
+function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
 window.addEventListener('keydown', e => {
-  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat or name box
-  if (S.inPool) return;   // the game room handles its own keys
-  if (e.key === 'Escape') { if (S.trailFull) setTrailFull(false); else if (S.atSketch) leaveSketch(); else if (S.boardView) toggleBoardView(); else stand(); }
-  if (e.key === 'b' || e.key === 'B') toggleBoardView();
+  if (typing() || !S.myName) return;
+  if (e.key === 'Escape') { if (S.atSketch) leaveSketch(); return; }
+  const k = e.key.toLowerCase();
+  if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+    keys.add(k);
+    if (k.startsWith('arrow')) e.preventDefault();   // don't scroll the page
+  }
 });
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+window.addEventListener('blur', () => keys.clear());
+function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right turn
+  if (!keys.size || S.atSketch || anim || S.galleryOpen || typing()) return;
+  if (keys.has('arrowleft')) yaw += 1.8 * dt;
+  if (keys.has('arrowright')) yaw -= 1.8 * dt;
+  const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+  const sdir = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
+  if (!f && !sdir) return;
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);   // the way you're facing, flat on the floor
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw);    // to your right
+  let mx = fx * f + rx * sdir, mz = fz * f + rz * sdir;
+  const len = Math.hypot(mx, mz);
+  mx /= len; mz /= len;
+  me.tx = me.tz = null; marker.visible = false;
+  [me.x, me.z] = clampSpot(me.x + mx * WALK * dt, me.z + mz * WALK * dt);
+  sendSpot(false);
+}
 
-// Scroll to zoom while seated or in board view (standing uses the normal zoom)
+// Scroll to zoom
 canvas.addEventListener('wheel', e => {
-  if (S.inPool) return;   // the game room handles its own zoom
-  if (S.trailFull) { e.preventDefault(); mtnView.dist = Math.max(0.9, Math.min(4.5, mtnView.dist * (1 + e.deltaY * 0.001))); return; }   // big board: zoom in and out
-  if (S.seated < 0 && !S.boardView) return;
+  if (S.atSketch) return;
   e.preventDefault();
   setFov(camera.fov + e.deltaY * 0.03);
 }, { passive: false });
@@ -981,129 +729,66 @@ canvas.addEventListener('wheel', e => {
 // ---------- Mouse / touch ----------
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let hovered = null;
 let down = null;
 let lastX = 0, lastY = 0;
-
-// Aim the pointer ray at where the mouse or finger is
-function aim(e) {
+function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
+function pickUnder(e) {   // the first real thing under the pointer (not the neon glow, the marker or other people)
   pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(pointer, camera);
-  return raycaster.ray;
+  const hit = raycaster.intersectObjects(scene.children, true).find(h => shown(h.object) && !h.object.userData.avatar
+    && h.object !== marker && !(h.object.material && h.object.material.blending === THREE.AdditiveBlending));
+  if (!hit) return null;
+  const u = hit.object.userData;
+  if (u.sketch) return { sketch: true };
+  if (u.door) return { door: true };
+  if (u.lightSwitch) return { lightSwitch: true };
+  if (u.gallery) return { gallery: true };   // the gallery opens its own viewer
+  if (u.floor) return { floor: hit.point };
+  return null;
 }
-// What's under the pointer: a chair, a square on the board, a trail stone, or a tower block
-function pickUnder(e) {
-  aim(e);
-  if (S.atSketch) return null;   // at the LittleSketch board, its own pad and buttons handle everything
-  if (S.trailFull) {   // on the big board only the trail can be pointed at
-    const hit = raycaster.intersectObjects([mountainMesh, ...spotMeshes], true)[0];
-    return hit && hit.object.userData.spot !== undefined ? { spot: hit.object.userData.spot } : null;
-  }
-  const targets = S.activeGame === 'trail' ? [...chairs, mountainMesh, ...spotMeshes]
-    : S.activeGame === 'stack' ? [...chairs, ...stackPickables()]
-    : S.activeGame === 'checkers' || S.activeGame === 'chess' ? [...chairs, ...boardGamePickables()] : [...chairs, felt];
-  const hits = raycaster.intersectObjects([...targets, ...sketchPickables(), doorGroup, gameDoorGroup, switchGroup], true);
-  if (!hits.length) return null;
-  const h = hits[0];
-  if (h.object.userData.door) return S.boardView ? null : { door: true };
-  if (h.object.userData.sketch) return S.boardView ? null : { sketch: true };
-  if (h.object.userData.gameDoor) return S.boardView ? null : { gameDoor: true };
-  if (h.object.userData.lightSwitch) return S.boardView ? null : { lightSwitch: true };
-  if (h.object.userData.slot !== undefined) return { slot: h.object.userData.slot };
-  if (h.object.userData.block !== undefined) return { block: h.object.userData.block };
-  if (h.object.userData.sq !== undefined) return { cell: h.object.userData.sq };   // a checkers or chess piece
-  if (h.object.userData.spot !== undefined) return { spot: h.object.userData.spot };
-  if (h.object.userData.mountain) return null;
-  if (h.object.userData.isBoard) {
-    const c = Math.floor((h.point.x + HALF) / CELL);
-    const r = Math.floor((h.point.z + HALF) / CELL);
-    if (c < 0 || c > 7 || r < 0 || r > 7) return null;
-    return { cell: r * 8 + c };
-  }
-  if (S.boardView) return null;
-  return { chair: h.object.userData.chair };
-}
-function setHover(chair) {
-  if (hovered === chair) return;
-  if (hovered) hovered.userData.mats.forEach(m => m.emissive.setHex(0x000000));
-  hovered = chair;
-  if (hovered) hovered.userData.mats.forEach(m => m.emissive.setHex(0x3a2a10));
-}
-
-// Two-finger pinch zooms while seated or in board view (phones)
+// Two-finger pinch zooms (phones)
 const touchPts = new Map();
 let pinchDist = 0;
-let grabbing = false;   // holding a tower block
-function pinchSpread() {
-  const [a, b] = [...touchPts.values()];
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+function pinchSpread() { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); }
 canvas.addEventListener('pointerdown', e => {
-  if (S.inPool) return;   // the game room handles its own mouse and touch
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
   touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; if (grabbing) { stackRelease(); grabbing = false; } return; }   // a pinch, not a tap
-  if (S.activeGame === 'stack') {   // grab a tower block on your turn
-    const p = pickUnder(e);
-    if (p && p.block !== undefined && stackGrab(p.block, raycaster.ray)) { grabbing = true; down = null; canvas.style.cursor = 'grabbing'; return; }
-  }
+  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
   down = { x: e.clientX, y: e.clientY };
   lastX = e.clientX; lastY = e.clientY;
 });
 function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
-window.addEventListener('pointercancel', endTouch);
+window.addEventListener('pointercancel', e => { down = null; endTouch(e); });
 window.addEventListener('pointermove', e => {
-  if (S.inPool) return;
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (grabbing) { stackDrag(aim(e)); return; }
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();
-    if (S.trailFull && d > 0) mtnView.dist = Math.max(0.9, Math.min(4.5, mtnView.dist * pinchDist / d));
-    else if ((S.seated >= 0 || S.boardView) && d > 0) setFov(camera.fov * pinchDist / d);
+    if (!S.atSketch && d > 0) setFov(camera.fov * pinchDist / d);
     pinchDist = d;
     return;
   }
-  if (down && (S.trailFull || (S.boardView && (S.activeGame === 'trail' || S.activeGame === 'stack'))) && !anim) {
-    mtnView.yaw -= (e.clientX - lastX) * 0.008;   // walk around the hill or tower
-    mtnView.tilt = Math.max(mtnView.minTilt, Math.min(1.45, mtnView.tilt + (e.clientY - lastY) * 0.006));   // and tilt up or down
-  }
-  if (down && S.seated >= 0 && !S.boardView && !S.trailFull && !anim) {
-    const k = 0.004 * (camera.fov / BASE_FOV);   // slower look when zoomed in
+  if (down && !S.atSketch && !anim) {   // drag to look around
+    const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
     yaw += (e.clientX - lastX) * k;
-    pitch += (e.clientY - lastY) * k;
-    yaw = Math.max(-1.4, Math.min(1.4, yaw));
-    pitch = Math.max(-0.9, Math.min(0.6, pitch));
+    pitch = Math.max(-1.2, Math.min(1.2, pitch + (e.clientY - lastY) * k));
   }
   lastX = e.clientX; lastY = e.clientY;
-  if (!down && e.target === canvas) {
-    const p = pickUnder(e);
-    const free = p && p.chair && p.chair.userData.seat !== S.seated && !seatTakenByOther(p.chair.userData.seat);
-    const chair = free ? p.chair : null;
-    setHover(chair);
-    const legal = p && p.cell !== undefined && (S.activeGame === 'othello' ? canPlayAt(p.cell) : boardGameCanTap(p.cell));
-    const grabbable = S.activeGame === 'stack' && stackHover(p && p.block !== undefined ? p.block : -1);
-    const slot = p && p.slot !== undefined;   // an open spot on top of the tower
-    canvas.style.cursor = (chair || legal || grabbable || slot || (p && (p.door || p.sketch || p.gameDoor || p.lightSwitch))) ? 'pointer' : 'grab';
-    if (S.activeGame === 'trail') showSpotInfo(p && p.spot !== undefined ? p.spot : -1);
+  if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
+    const p = S.atSketch || anim ? null : pickUnder(e);
+    canvas.style.cursor = p && (p.sketch || p.door || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
-  if (S.inPool) { down = null; endTouch(e); return; }
-  if (grabbing) { stackRelease(); grabbing = false; canvas.style.cursor = 'grab'; endTouch(e); return; }
-  if (down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6) {
-    const p = pickUnder(e);
-    if (S.trailFull) { if (p && p.spot !== undefined) showSpotInfo(p.spot); }   // big board: tap a stone to read about it
-    else if (p && p.sketch) enterSketch();
-    else if (p && p.lightSwitch) nextNeon();
-    else if (p && p.gameDoor) enterPool();
-    else if (S.activeGame === 'stack' && stackTap(p ? p.block : undefined, p ? p.slot : undefined, raycaster.ray)) { /* tested or placed a block */ }
-    else if (p && p.door) leaveRoom();
-    else if (p && p.cell !== undefined) { if (S.activeGame === 'othello') play(p.cell); else boardGameTap(p.cell); }
-    else if (p && p.spot !== undefined) showSpotInfo(p.spot);
-    else if (p && p.chair && p.chair.userData.seat !== S.seated) { setHover(null); sit(p.chair.userData.seat); }
-  }
+  const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
   endTouch(e);
+  if (!wasTap || !S.myName || S.atSketch || anim || S.galleryOpen) return;
+  const p = pickUnder(e);
+  if (!p) return;
+  if (p.sketch) enterSketch();
+  else if (p.lightSwitch) nextNeon();
+  else if (p.door) leaveRoom();
+  else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
 
 // ---------- Window resize ----------
@@ -1115,41 +800,33 @@ window.addEventListener('resize', () => {
 
 // ---------- Main loop ----------
 const clock = new THREE.Clock();
-const look = new THREE.Quaternion();
-const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
-const UP = new THREE.Vector3(0, 1, 0);
-
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (S.inPool) {
-    // the game room moves the camera itself (in updatePool below)
-  } else if (anim) {
+  if (anim) {
     anim.t += dt;
     const e = easeInOut(Math.min(anim.t / anim.dur, 1));
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
     camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
-  } else if (S.boardView || S.trailFull) {
-    if (S.trailFull || S.activeGame === 'trail' || S.activeGame === 'stack') {   // circle the hill or tower as you drag
-      camera.position.copy(mtnViewPos());
-      camera.quaternion.copy(lookQuat(camera.position, mtnView.target));
+  } else if (!S.atSketch) {
+    keyWalk(dt);
+    if (me.tx != null) {   // walking to where you clicked
+      const dx = me.tx - me.x, dz = me.tz - me.z, d = Math.hypot(dx, dz);
+      const step = Math.min(d, WALK * dt);
+      if (d > 0.001) { me.x += dx / d * step; me.z += dz / d * step; }
+      if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; }
     }
-  } else if (S.atSketch) {
-    // standing still in front of the board
-  } else if (S.seated >= 0) {
-    lookEuler.set(pitch, yaw, 0);
-    look.setFromEuler(lookEuler);
-    camera.quaternion.copy(baseQuat).multiply(look);
-  } else {
-    controls.update();
+    camera.position.set(me.x, EYE, me.z);
+    camera.rotation.set(pitch, yaw, 0);
   }
-  updateOthello(dt);
-  updateTrail(dt);
-  updateStack(dt);
-  updateBoardGames(dt);
+  if (marker.visible && me.tx == null) {   // the ring fades once you get there
+    markerFade -= dt * 2.5;
+    marker.material.opacity = Math.max(0, markerFade) * 0.8;
+    if (markerFade <= 0) marker.visible = false;
+  } else if (marker.visible) marker.material.opacity = 0.8;
+  moveAvatars(dt);
   updateSketch(dt);
-  updatePool(dt);
   updateClock();
   updateSky();
-  renderer.render(S.inPool ? poolScene : scene, camera);
+  renderer.render(scene, camera);
 });

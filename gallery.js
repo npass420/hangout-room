@@ -1,17 +1,19 @@
 // =====================================================================
-// gallery.js — the Doodle Gallery, filling the left wall
-// 27 frames: pinned doodles first, then the most liked, then the newest (anyone can pin, up to 27).
+// gallery.js — the Doodle Gallery, filling both side walls
+// 54 frames, 27 on each side wall: pinned doodles first, then the most liked, then the newest
+// (anyone can pin, up to 54). The order starts on the left wall and carries on along the right wall.
 // Click a frame to open the viewer: flip through every saved doodle in that same order, like it, pin it,
 // download it as a picture, or take it down (only the people who drew it can). sketch.js saves the doodles and loads this file.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, get, set, remove, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, S, hooks, scene, camera, canvas, ROOM, std } from './core.js';
+import { db, S, hooks, scene, camera, canvas, ROOM, goldMat } from './core.js';
 
 const DW = 1200, DH = 800;          // a doodle's full size
 const COLS = 9, ROWS = 3;
-const SLOTS = COLS * ROWS;          // frames on the wall (27)
-const MAX_PINS = SLOTS;             // pinned doodles can fill the whole wall, no more
+const PER_WALL = COLS * ROWS;       // frames on each side wall (27)
+const SLOTS = PER_WALL * 2;         // frames in the whole gallery (54)
+const MAX_PINS = SLOTS;             // pinned doodles can fill every frame, no more
 const keyOf = name => String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?';
 let items = [];                     // every saved doodle in wall order: { id, t, s, a, by, at, likes, pin }
 const art = {};                     // id -> { s, l } (the doodle's lines), once loaded
@@ -50,25 +52,27 @@ function paper(g, w, h, text) {   // an empty frame, or one still loading
   g.fillText(text, w / 2, h * 0.64);
 }
 
-// ---------- The wall: 9 across and 3 high, filling the left wall ----------
-const wall = new THREE.Group();
-wall.position.set(-ROOM / 2 + 0.02, 0, 0);
-wall.rotation.y = Math.PI / 2;   // facing into the room
-scene.add(wall);
+// ---------- The walls: 9 across and 3 high on each side wall ----------
+const walls = [new THREE.Group(), new THREE.Group()];
+walls[0].position.set(-ROOM / 2 + 0.02, 0, 0);   // the left wall (as you come in the door)
+walls[0].rotation.y = Math.PI / 2;               // facing into the room
+walls[1].position.set(ROOM / 2 - 0.02, 0, 0);    // the right wall
+walls[1].rotation.y = -Math.PI / 2;
+scene.add(walls[0], walls[1]);
 const STEP_X = 0.9, STEP_Y = 0.64;               // center to center, across and up
-const TOP_Y = 2.72;                              // the top row's middle; the bottom row sits just above the chair rail
+const TOP_Y = 3.05;                              // the top row's middle
 const PW = 0.72, PH = 0.48;      // picture size in meters (3 wide by 2 tall, like the board)
-const wood = std(0x3b2414, 0.55);
 const frames = [];
 for (let j = 0; j < SLOTS; j++) {
-  const x = (j % COLS - (COLS - 1) / 2) * STEP_X, y = TOP_Y - Math.floor(j / COLS) * STEP_Y;
+  const w = Math.floor(j / PER_WALL), k = j % PER_WALL, wall = walls[w];
+  const x = (k % COLS - (COLS - 1) / 2) * STEP_X, y = TOP_Y - Math.floor(k / COLS) * STEP_Y;
   const add = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.userData.gallery = true; m.userData.slot = j; wall.add(m); return m; };
   const cv = document.createElement('canvas'); cv.width = 600; cv.height = 400;
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
   add(new THREE.PlaneGeometry(PW, PH), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, color: 0xe0e0e0 }), x, y, 0.025);
   for (const s of [-1, 1]) {
-    add(new THREE.BoxGeometry(PW + 0.08, 0.04, 0.04), wood, x, y + s * (PH / 2 + 0.02), 0.02).castShadow = true;
-    add(new THREE.BoxGeometry(0.04, PH + 0.08, 0.04), wood, x + s * (PW / 2 + 0.02), y, 0.02).castShadow = true;
+    add(new THREE.BoxGeometry(PW + 0.08, 0.04, 0.04), goldMat, x, y + s * (PH / 2 + 0.02), 0.02).castShadow = true;
+    add(new THREE.BoxGeometry(0.04, PH + 0.08, 0.04), goldMat, x + s * (PW / 2 + 0.02), y, 0.02).castShadow = true;
   }
   frames.push({ g: cv.getContext('2d'), tex, sig: '' });
 }
@@ -129,7 +133,7 @@ function showItem() {
     idx = 0; shownId = '';
     paper(vg, DW, DH, 'No doodles yet');
     vTitle.textContent = 'No doodles yet';
-    vInfo.textContent = 'Make one on the board by the door: click the board, then 🖍️ Doodle.';
+    vInfo.textContent = 'Make one on the big board: click it, then take the pen.';
     prevBtn.disabled = nextBtn.disabled = likeBtn.disabled = pinBtn.disabled = dlBtn.disabled = true;
     delBtn.style.display = 'none';
     likeBtn.textContent = '❤️';
@@ -207,7 +211,7 @@ function closeViewer() {
   isOpen = false; S.galleryOpen = false;
   view.classList.remove('on');
 }
-// While the viewer is open it gets the keys (so Esc closes it instead of making you stand up)
+// While the viewer is open it gets the keys (so Esc and the arrow keys work the viewer, not your walking)
 window.addEventListener('keydown', e => {
   if (!isOpen) return;
   if (e.key === 'Escape') closeViewer();
@@ -226,7 +230,7 @@ const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
 let downAt = null;
 function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
 function canOpen() {
-  return !!S.myName && !isOpen && !S.inPool && !S.atSketch && !S.trailFull && !S.boardView;
+  return !!S.myName && !isOpen && !S.atSketch;
 }
 canvas.addEventListener('pointerdown', e => { downAt = { x: e.clientX, y: e.clientY, id: e.pointerId }; });
 window.addEventListener('pointerup', e => {
@@ -235,7 +239,8 @@ window.addEventListener('pointerup', e => {
   if (!d || d.id !== e.pointerId || e.target !== canvas || Math.hypot(e.clientX - d.x, e.clientY - d.y) >= 6 || !canOpen()) return;
   ndc.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const hit = ray.intersectObjects(scene.children, true).find(h => shown(h.object) && !(h.object.material && h.object.material.blending === THREE.AdditiveBlending));
+  const hit = ray.intersectObjects(scene.children, true).find(h => shown(h.object) && !h.object.userData.avatar
+    && !(h.object.material && h.object.material.blending === THREE.AdditiveBlending));   // skip the neon glow and other people
   if (hit && hit.object.userData.gallery) openViewer(hit.object.userData.slot || 0);   // only if nothing is in front of it
 });
 

@@ -1,8 +1,8 @@
 // =====================================================================
-// core.js — shared pieces every part of the Hangout Room uses
+// core.js — shared pieces every part of the Doodle Gallery uses
 // =====================================================================
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 
@@ -23,25 +23,21 @@ export const myId = 'u' + Math.random().toString(36).slice(2, 10) + Date.now().t
 export const S = {
   myName: '',
   myHue: -1,          // my rainbow color, picked once when I enter
-  presence: {},       // everyone in the room: id -> { name, seat, c }
-  seated: -1,         // which seat I'm in (-1 = standing)
-  boardView: false,
-  activeGame: 'othello',
+  presence: {},       // everyone in the room: id -> { name, c, x, z, b }
+  atSketch: false,    // standing at the doodle board
+  galleryOpen: false, // looking at a doodle in the gallery viewer
   timeOffset: 0       // how far my clock is from the database's clock
 };
 onValue(ref(db, '.info/serverTimeOffset'), s => { S.timeOffset = s.val() || 0; });
 export function serverNow() { return Date.now() + S.timeOffset; }
 
-// The room file fills these in so the games can ask it to refresh or post in chat
+// The room file fills these in so the board and gallery can ask it to refresh or post in chat
 export const hooks = { refreshAll() {}, addSys() {} };
 
 // ---------- Settings ----------
 export const ROOM = 9;         // room width and depth (meters)
-export const HEIGHT = 3.4;     // ceiling height
-export const SEATS = 8;        // chairs around the table
-export const CHAIR_R = 1.45;   // distance of chairs from the table center
-export const TABLE_Y = 0.78;   // height of the table top surface
-export function seatAngle(i) { return (i / SEATS) * Math.PI * 2; }
+export const HEIGHT = 4;       // ceiling height
+export const EYE = 1.55;       // how high your eyes are when standing
 
 // Repeatable random numbers so the room looks the same every time
 let seed = 7;
@@ -61,21 +57,11 @@ renderer.toneMappingExposure = 1.35;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 export const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1410);
+scene.background = new THREE.Color(0x0a0908);
 
 export const BASE_FOV = 60;
 export const camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.05, 100);
-camera.position.set(2.6, 2.6, 2.6);
-
-export const controls = new OrbitControls(camera, canvas);
-controls.target.set(0, 0.8, 0);
-controls.enableDamping = true;
-controls.enablePan = false;
-controls.minDistance = 2;
-controls.maxDistance = 3.6;
-controls.minPolarAngle = Math.PI * 0.33;
-controls.maxPolarAngle = Math.PI * 0.48;
-controls.update();
+camera.rotation.order = 'YXZ';   // turn left and right first, then tilt up and down
 
 // ---------- Helpers ----------
 export function paintTexture(w, h, draw, repeatX = 1, repeatY = 1) {
@@ -97,6 +83,9 @@ export function box(w, h, d, mat, x, y, z, parent) {
 export function std(color, roughness = 0.8, extra = {}) {
   return new THREE.MeshStandardMaterial({ color, roughness, ...extra });
 }
+// A soft reflection of a room, so polished and metal things (the marble floor, the gold) pick up a bit of shine
+export const envMap = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(renderer), 0.04).texture;
+export const goldMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8 });
 export function easeInOut(k) { return k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; }
 
 // ---------- Rainbow colors and name tags ----------
@@ -130,88 +119,4 @@ export function makeLabel(text, color) {
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true }));
   s.scale.set(0.6, 0.15, 1);
   return s;
-}
-
-// ---------- Red dot-matrix counters that rise out of the table ----------
-export const FONT = {
-  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
-  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
-  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
-  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
-  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
-  '5': ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
-  '6': ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
-  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
-  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
-  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100']
-};
-const CNT_ROWS = 9, DOT = 16;
-const CNT_SUNK = 0.014;   // how far below the surface it hides
-
-// A small flat panel set into the tabletop. cols = how many dot columns wide.
-export function makeCounter(cols, w, parent) {
-  const cv = document.createElement('canvas');
-  cv.width = cols * DOT; cv.height = CNT_ROWS * DOT;
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const outer = new THREE.Group();
-  const h = w * CNT_ROWS / cols;
-  const housing = new THREE.Mesh(new THREE.BoxGeometry(w + 0.016, 0.01, h + 0.016), std(0x3a0e0a, 0.7));
-  housing.position.y = -0.003;
-  outer.add(housing);
-  const faceMat = new THREE.MeshBasicMaterial({ map: tex, toneMapped: false, color: 0x000000 });
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), faceMat);
-  face.rotation.x = -Math.PI / 2;      // lying flat, digits upright from the player's seat
-  face.position.y = 0.0025;
-  outer.add(face);
-  outer.visible = false;
-  parent.add(outer);
-  return { outer, faceMat, ctx: cv.getContext('2d'), cv, tex, cols, shown: -1, anim: null, active: false, seat: -1 };
-}
-export function drawCounter(cnt, num) {
-  if (num === cnt.shown) return;
-  cnt.shown = num;
-  const digits = String(num);
-  const width = digits.length * 6 - 1;
-  const start = Math.floor((cnt.cols - width) / 2);
-  const lit = new Set();
-  [...digits].forEach((ch, i) => {
-    (FONT[ch] || FONT['0']).forEach((row, r) => [...row].forEach((bit, c) => {
-      if (bit === '1') lit.add((r + 1) * cnt.cols + (start + i * 6 + c));
-    }));
-  });
-  const g = cnt.ctx;
-  g.fillStyle = '#0c0b0a'; g.fillRect(0, 0, cnt.cv.width, cnt.cv.height);
-  for (let r = 0; r < CNT_ROWS; r++) for (let c = 0; c < cnt.cols; c++) {
-    const on = lit.has(r * cnt.cols + c);
-    g.fillStyle = on ? '#ff3b2f' : '#34332e';
-    g.beginPath(); g.arc(c * DOT + DOT / 2, r * DOT + DOT / 2, DOT * 0.42, 0, Math.PI * 2); g.fill();
-    if (on) { g.fillStyle = 'rgba(255,200,180,0.5)'; g.beginPath(); g.arc(c * DOT + DOT / 2 - 2, r * DOT + DOT / 2 - 2, DOT * 0.14, 0, Math.PI * 2); g.fill(); }
-  }
-  cnt.tex.needsUpdate = true;
-}
-// Rise a counter out of the table in front of a seat
-export function placeCounter(cnt, seat, dist) {
-  const a = seatAngle(seat);
-  cnt.outer.position.set(Math.sin(a) * dist, TABLE_Y - CNT_SUNK, Math.cos(a) * dist);
-  cnt.outer.rotation.y = a;            // top of the digits points toward the middle of the table
-  cnt.faceMat.color.setHex(0x000000);
-  cnt.outer.visible = true;
-  cnt.anim = { type: 'up', t: 0 };
-  cnt.active = true; cnt.seat = seat;
-}
-export function sinkCounter(cnt) {
-  cnt.anim = { type: 'down', t: 0 };
-  cnt.active = false; cnt.seat = -1;
-}
-export function animateCounter(cnt, dt) {
-  const a = cnt.anim;
-  if (!a) return;
-  a.t += dt;
-  const p = Math.min(a.t / 0.5, 1);
-  const k = a.type === 'up' ? easeInOut(p) : 1 - easeInOut(p);
-  cnt.outer.position.y = TABLE_Y - CNT_SUNK * (1 - k);   // rise up until flush with the table
-  cnt.faceMat.color.setScalar(k);                       // light up as it rises
-  if (a.type === 'down' && p >= 1) cnt.outer.visible = false;
-  if (p >= 1) cnt.anim = null;
 }
