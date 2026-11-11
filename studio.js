@@ -6,10 +6,8 @@ import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
-         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE,
-         stage, nextFrame, within, getReady } from './core.js';
+         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
-import { galleryLoaded } from './gallery.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
@@ -29,14 +27,10 @@ function stoneTex(src) {
   t.needsUpdate = true;
   return t;
 }
-// The work is done in small pieces with a breath between them, so the Cave keeps moving while the room gets ready.
-// One copy of the picture goes to the graphics card and every wall and the ceiling share it.
 const marbleImg = new Image();
-let marbleIn = false;
-marbleImg.src = 'marble.jpg';
-const marbleDone = (async () => {
-  await marbleImg.decode();                  // unpacked off to the side, not in the middle of a frame
-  await nextFrame();
+let marbleDone;
+const marbleLoaded = new Promise(r => { marbleDone = r; });
+marbleImg.onload = () => {
   // Phones get a smaller copy, so the picture fits in their memory
   let src = marbleImg;
   const maxSize = PHONE ? 1536 : 3072;
@@ -45,23 +39,16 @@ const marbleDone = (async () => {
     c.width = c.height = maxSize;
     c.getContext('2d').drawImage(marbleImg, 0, 0, maxSize, maxSize);
     src = c;
-    await nextFrame();
   }
   // Walls: 9 wide by 4 tall, so each one uses a strip of the picture, a different strip (and some flipped) per wall
-  const base = stoneTex(src);
   const strips = [[0, false], [0.19, true], [0.37, false], [0.556, true]];
   wallMats.forEach((m, i) => {
-    const t = base.clone();                  // the same picture underneath, just a different part of it
+    const t = stoneTex(src);
     const [y, flip] = strips[i];
     t.repeat.set(flip ? -1 : 1, HEIGHT / ROOM);
     t.offset.set(flip ? 1 : 0, y);
     m.map = t; m.color.setHex(0xffffff); m.needsUpdate = true;
   });
-  // Ceiling: the picture again, turned and darker
-  const ct = base.clone();
-  ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
-  ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
-  await nextFrame();
   // Floor: the whole picture, with thin gold seams every 1.5 meters (6 by 6 tiles)
   const SZ = src.width, fc = document.createElement('canvas');
   fc.width = fc.height = SZ;
@@ -76,9 +63,15 @@ const marbleDone = (async () => {
     g.fillRect(p - lw / 2, 0, lw, SZ); g.fillRect(0, p - lw / 2, SZ, lw);
   }
   floorMat.map = stoneTex(fc); floorMat.color.setHex(0xffffff); floorMat.needsUpdate = true;
-  marbleIn = true;
-  snapRoom();   // only does something if the picture came in after the room was already showing
-})().catch(e => console.warn('marble.jpg did not load; the room stays plain black', e));
+  // Ceiling: the picture again, turned and darker
+  const ct = stoneTex(src);
+  ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
+  ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
+  snapRoom();
+  marbleDone();
+};
+marbleImg.onerror = () => { console.warn('marble.jpg did not load; the room stays plain black'); marbleDone(); };
+marbleImg.src = 'marble.jpg';
 
 // ---------- The room: four walls, the floor and the ceiling ----------
 function plane(w, h, mat, x, y, z, rx, ry) {
@@ -98,22 +91,19 @@ plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
 // The marble's reflections: a snapshot of this very room, so the polish on the floor, walls and ceiling shows the
 // real ring, neon and window (and nothing that isn't here). It's retaken when the marble loads and when the neon changes color.
 const pmrem = new THREE.PMREMGenerator(renderer);
-let roomEnv = null, snapTimer = 0, ready = false, snapHadMarble = false;
-function takeSnap() {
-  const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
-  const was = hide.map(o => o.visible);
-  hide.forEach(o => { o.visible = false; });
-  const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
-  hide.forEach((o, i) => { o.visible = was[i]; });
-  snapHadMarble = marbleIn;
-  if (roomEnv) roomEnv.dispose();
-  roomEnv = env;
-  for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
-}
-function snapRoom() {   // a retake later on (the neon changed color); the first one is taken while getting ready
-  if (!ready) return;
+let roomEnv = null, snapTimer = 0;
+function snapRoom() {
   clearTimeout(snapTimer);
-  snapTimer = setTimeout(takeSnap, 100);
+  snapTimer = setTimeout(() => {
+    const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
+    const was = hide.map(o => o.visible);
+    hide.forEach(o => { o.visible = false; });
+    const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
+    hide.forEach((o, i) => { o.visible = was[i]; });
+    if (roomEnv) roomEnv.dispose();
+    roomEnv = env;
+    for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
+  }, 100);
 }
 // Gold baseboards along the bottom of every wall
 for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
@@ -244,24 +234,44 @@ function updateClock() {
 }
 
 // ---------- The door on the entry wall (click it twice to leave) ----------
+// You come in through it: the room fades in from black outside this door, it swings open, you walk in and it shuts behind you.
+// The door itself hangs on a hinge so it can swing. Outside the room there's a dark wall around it, so the room only shows through the doorway.
 function makeDoor(x, z, rotY, tag) {
   const g = new THREE.Group();
   const wood = std(0x2a1a10, 0.55, { envMap, envMapIntensity: 0.2 });
-  box(0.9, 2.05, 0.05, wood, 0, 1.025, 0, g);                 // door
-  for (const y of [0.55, 1.45]) box(0.66, 0.62, 0.02, std(0x1e130b, 0.6), 0, y, 0.03, g);   // raised panels
+  const panel = std(0x1e130b, 0.6);
+  const leaf = new THREE.Group();                             // the part that swings, turning on its hinge side
+  leaf.position.x = -0.45;
+  g.add(leaf);
+  box(0.9, 2.05, 0.05, wood, 0.45, 1.025, 0, leaf);           // door
+  for (const y of [0.55, 1.45]) for (const s of [1, -1]) box(0.66, 0.62, 0.02, panel, 0.45, y, s * 0.03, leaf);   // raised panels, both sides
+  for (const s of [1, -1]) {                                  // a knob on each side
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
+    knob.position.set(0.79, 1.0, s * 0.06);
+    leaf.add(knob);
+  }
   box(0.08, 2.15, 0.07, goldMat, -0.49, 1.075, 0, g);          // frame
   box(0.08, 2.15, 0.07, goldMat, 0.49, 1.075, 0, g);
   box(1.06, 0.08, 0.07, goldMat, 0, 2.15, 0, g);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
-  knob.position.set(0.34, 1.0, 0.06);
-  g.add(knob);
   g.position.set(x, 0, z);
   g.rotation.y = rotY;
   g.traverse(o => { if (o.isMesh) o.userData[tag] = true; });
   scene.add(g);
-  return g;
+  return leaf;
 }
-makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
+const DOOR_X = 1.6;
+const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
+{ // The outside of the entry wall, around the doorway (only seen on the way in)
+  const out = new THREE.MeshBasicMaterial({ color: 0x0a0806 });
+  const side = (w, h, x, y) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), out); m.position.set(x, y, R2 + 0.002); scene.add(m); };
+  const L = DOOR_X - 0.53 + R2, Rw = R2 - DOOR_X - 0.53;
+  side(L, HEIGHT, -R2 + L / 2, H2);
+  side(Rw, HEIGHT, R2 - Rw / 2, H2);
+  side(1.06, HEIGHT - 2.19, DOOR_X, 2.19 + (HEIGHT - 2.19) / 2);
+  const step = new THREE.Mesh(new THREE.PlaneGeometry(3, 2), out);   // the ground just outside
+  step.rotation.x = -Math.PI / 2; step.position.set(DOOR_X, 0, R2 + 1);
+  scene.add(step);
+}
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 1.0));   // soft, even light everywhere
@@ -359,9 +369,8 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 setNeon(0);
-let neonHeard;
-const neonLoaded = new Promise(r => { neonHeard = r; });
-onValue(ref(db, 'room/decor/neon'), s => { setNeon(s.val()); neonHeard(); });
+onValue(ref(db, 'room/decor/neon'), s => setNeon(s.val()));
+const neonLoaded = get(ref(db, 'room/decor/neon'));
 function nextNeon() {
   if (!S.myName) return;
   const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
@@ -591,7 +600,8 @@ leaveBtn.addEventListener('click', leaveRoom);
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
-const nameInput = document.getElementById('nameInput');   // the Cave asks for the name; this just reads it
+const nameInput = document.getElementById('nameInput');
+try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
 
 function enterRoom() {
   const name = nameInput.value.trim().slice(0, 20);
@@ -629,6 +639,8 @@ function enterRoom() {
     refreshAll();
   });
 
+  startSketch();    // LittleSketch, the big doodle board
+
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
   onChildAdded(query(ref(db, 'room/chat'), orderByChild('t'), startAt(joinTime)), s => {
@@ -639,12 +651,14 @@ function enterRoom() {
     s.forEach(ch => { remove(ch.ref); });
   });
 }
-document.getElementById('enter').addEventListener('click', enterRoom);   // the Cave clicks this as the portal opens
+document.getElementById('enter').addEventListener('click', enterRoom);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
 
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
 const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap the board to doodle · tap a picture to see it'
                         : 'Drag to look · click the floor to walk (or W A S D) · click the board to doodle · click a picture to see it';
+hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
 const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
 let yaw = 0, pitch = -0.05;                   // facing the doodle board
@@ -803,7 +817,7 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
-  if (down && !S.atSketch && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+  if (down && !intro && !S.atSketch && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
     yaw -= (e.clientX - lastX) * k;
     pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
@@ -818,7 +832,7 @@ window.addEventListener('pointerup', e => {
   const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
   endTouch(e);
-  if (!wasTap || !S.myName || S.atSketch || anim || S.galleryOpen) return;
+  if (!wasTap || intro || !S.myName || S.atSketch || anim || S.galleryOpen) return;
   const p = pickUnder(e);
   if (!p) return;
   if (p.sketch) enterSketch();
@@ -838,7 +852,8 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (anim) {
+  if (intro) playIntro(dt);   // walking in through the door
+  else if (anim) {
     anim.t += dt;
     const e = easeInOut(Math.min(anim.t / anim.dur, 1));
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
@@ -864,20 +879,36 @@ renderer.setAnimationLoop(() => {
   updateSketch(dt);
   updateClock();
   updateSky();
-  if (stage.live) renderer.render(scene, camera);   // nothing is drawn until the Cave opens the portal
+  renderer.render(scene, camera);
 });
 
-// ---------- Getting ready behind the Cave ----------
-// The marble, the neon color, the doodles on the board and the gallery all come in first (or give up after a few
-// seconds on a slow connection), then the reflections, shaders and textures are made ready, then the Cave is told.
-startSketch();    // LittleSketch, the big doodle board: it just listens, so it can start before you're in
-const sketchLoaded = () => get(ref(db, 'room/sketch/doodles')).then(() => new Promise(r => setTimeout(r, 120)));   // and a moment to draw them
-getReady({
-  wait: [() => within(marbleDone, 8000), () => within(neonLoaded, 2500), () => within(sketchLoaded(), 2500), () => within(galleryLoaded(), 3000)],
-  snap: takeSnap,
-  warm: [() => makeAvatar(' ', 0).g],
-  hintText: HINT_WALK
-}).then(() => {
-  ready = true;
-  if (!snapHadMarble) marbleDone.then(() => { if (marbleIn) snapRoom(); });   // a slow connection: retake once the marble shows up
-});
+// ---------- Coming in: the room gets ready behind the Cave (which is black by now), then you walk in through the door ----------
+// The pictures and the first data load, the reflections are taken and everything is drawn once, all while the screen
+// is black, so any stutter happens where nobody can see it. Then the Cave fades away and the walk in begins.
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : window.requestAnimationFrame(f)); window.requestAnimationFrame(f); });
+let intro = { t: -1 };                                // -1 until the Cave says go
+const OUTSIDE = new THREE.Vector3(DOOR_X, EYE, R2 + 0.9);
+function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k); }
+function playIntro(dt) {                              // the camera and the door, moment by moment
+  if (intro.t >= 0) intro.t += dt;
+  const t = Math.max(0, intro.t);
+  const open = easeIO((t - 0.5) / 0.7) - easeIO((t - 2.4) / 0.7);   // swings open, then shut behind you
+  doorLeaf.rotation.y = -1.75 * open;
+  const k = easeIO((t - 0.9) / 1.5);                  // the walk: through the doorway, then over to your spot
+  const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
+  const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
+  camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE, z);
+  camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
+  if (t > 3.2) { doorLeaf.rotation.y = 0; intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
+}
+window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
+camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
+(async () => {
+  await Promise.race([Promise.all([marbleLoaded, neonLoaded, get(ref(db, 'room/sketch/doodles')), get(ref(db, 'room/sketch/gallery'))]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  await wait(300);                                    // the reflection snapshot is taken just after the pictures land
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  await frames(3);
+  window.dispatchEvent(new Event('room-ready'));
+})();

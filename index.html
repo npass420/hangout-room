@@ -46,6 +46,13 @@
 					#hello button { margin: 2px 0 0; font-size: 12px; padding: 3px 10px; background: rgba(191,227,255,0.2); color: #e6f2ff; }
 					#nameBox.named #askName { display: none; }
 					#nameBox.named #hello { display: block; }
+					/* The little snowflake that turns on the black screen while a room loads (it fades in only if loading takes a moment) */
+					#loadFlake { position: fixed; left: 50%; top: 50%; z-index: 25; margin: -24px 0 0 -24px; width: 48px; height: 48px; line-height: 48px; text-align: center;
+					font-size: 38px; color: #dff3ff; text-shadow: 0 0 12px rgba(150,215,255,0.9); opacity: 0; pointer-events: none; transition: opacity 0.4s; }
+					#loadFlake.on { opacity: 0.85; transition-delay: 0.35s; animation: flakeTurn 3s linear infinite, flakePulse 1.6s ease-in-out infinite; }
+					#loadFlake.oops { opacity: 1; animation: none; width: 320px; margin-left: -160px; font-size: 16px; text-shadow: none; pointer-events: auto; cursor: pointer; }
+					@keyframes flakeTurn { to { rotate: 360deg; } }
+					@keyframes flakePulse { 50% { scale: 1.18; } }
 					#nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
 					#nameBox.nudge .panel { animation: nudge 0.4s; }
 					@keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
@@ -89,7 +96,7 @@
 			<div id="chatRow">
 				<input id="chatInput" maxlength="200" placeholder="Say something…">
 					<button id="send">Send</button>
-			</div>
+				</div>
 		</div>
 		<div id="phoneBar">
 			<button id="chatBtn">
@@ -104,8 +111,8 @@
 					<h2>Welcome! What's your name?</h2>
 					<div id="nameRow">
 						<input id="nameInput" maxlength="20" placeholder="Your name">
-						<button id="nameOk" title="That's me">✓</button>
-					</div>
+							<button id="nameOk" title="That's me">✓</button>
+						</div>
 				</div>
 				<div id="hello">
 					<h2 id="helloText"></h2>
@@ -115,6 +122,7 @@
 				<div class="tip" id="nameTip">then touch the orb ✦ or an open door</div>
 			</div>
 		</div>
+		<div id="loadFlake">❄</div>
 
 		<script type="importmap">
 			{ "imports": {

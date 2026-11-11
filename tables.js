@@ -7,8 +7,7 @@ import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
-         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE,
-         stage, nextFrame, within, getReady } from './core.js';
+         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
 import { sfx, setupMute } from './sounds.js';
 import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, showPanel, sit, stand, seatTaken, seatHolder,
          tap, canTap, pickables, squareAt } from './boardgames.js';
@@ -74,14 +73,12 @@ function woodTex(kind, img) {
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = MAX_ANISO;
   return t;
 }
-async function dressWood(img) {   // one texture at a time, with a breath between, so the Cave keeps moving
-  const f = woodTex('floor', img); await nextFrame();
-  const w = woodTex('wall', img); await nextFrame();
-  const slab = woodTex('slab', img);
+function dressWood(img) {
+  const f = woodTex('floor', img), w = woodTex('wall', img);
   f.repeat.set(4, 4);
   w.repeat.set(5, HEIGHT / ROOM * 5);
   const c = w.clone(); c.repeat.set(4, 4); c.needsUpdate = true;
-  floorMat.map = f; wallMat.map = w; ceilMat.map = c; tableMat.map = slab;
+  floorMat.map = f; wallMat.map = w; ceilMat.map = c; tableMat.map = woodTex('slab', img);
   if (img) {   // the photo is brighter than the drawn grain, so tone it down to a deep walnut
     floorMat.color.setHex(0xa89488); wallMat.color.setHex(0x8a7a70); ceilMat.color.setHex(0x4a4440); tableMat.color.setHex(0xb2a294);
   }
@@ -113,33 +110,30 @@ for (const [y, h, d] of [[0.07, 0.14, 0.03], [1.0, 0.06, 0.035], [HEIGHT - 0.08,
 // The polish: a snapshot of this very room, taken from about table height, used for every reflection in here.
 // It's retaken when the wood loads and when the ring light changes color.
 const pmrem = new THREE.PMREMGenerator(renderer);
-let roomEnv = null, snapTimer = 0, ready = false, snapHadWood = false, woodIn = false;
+let roomEnv = null, snapTimer = 0;
 const reflective = [floorMat, wallMat, ceilMat, trimMat];
-function takeSnap() {
-  const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people (they'd freeze in it)
-  const was = hide.map(o => o.visible);
-  hide.forEach(o => { o.visible = false; });
-  scene.position.y = -1.0;
-  const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
-  scene.position.y = 0;
-  hide.forEach((o, i) => { o.visible = was[i]; });
-  snapHadWood = woodIn;
-  if (roomEnv) roomEnv.dispose();
-  roomEnv = env;
-  for (const m of reflective) { m.envMap = env.texture; m.needsUpdate = true; }
-  setRoomEnv(env.texture);
-}
-function snapRoom() {   // a retake later on (the ring light changed color); the first one is taken while getting ready
-  if (!ready) return;
+function snapRoom() {
   clearTimeout(snapTimer);
-  snapTimer = setTimeout(takeSnap, 150);
+  snapTimer = setTimeout(() => {
+    const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people (they'd freeze in it)
+    const was = hide.map(o => o.visible);
+    hide.forEach(o => { o.visible = false; });
+    scene.position.y = -1.0;
+    const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
+    scene.position.y = 0;
+    hide.forEach((o, i) => { o.visible = was[i]; });
+    if (roomEnv) roomEnv.dispose();
+    roomEnv = env;
+    for (const m of reflective) { m.envMap = env.texture; m.needsUpdate = true; }
+    setRoomEnv(env.texture);
+  }, 150);
 }
+let woodDone;
+const woodLoaded = new Promise(r => { woodDone = r; });
 const woodImg = new Image();
+woodImg.onload = () => { dressWood(woodImg); woodDone(); };
+woodImg.onerror = () => { dressWood(null); woodDone(); };   // no picture: wood grain drawn here instead
 woodImg.src = 'Wood.jpg';   // the capital W matters on the website
-const woodDone = woodImg.decode()   // unpacked off to the side, not in the middle of a frame
-  .then(() => dressWood(woodImg))
-  .catch(() => dressWood(null))     // no picture: wood grain drawn here instead
-  .then(() => { woodIn = true; snapRoom(); });
 
 // ---------- Warm wall lamps: a small gold sconce with a soft pool of light up and down the wall ----------
 const poolCv = document.createElement('canvas'); poolCv.width = 128; poolCv.height = 256;
@@ -291,24 +285,44 @@ function updateClock() {
 }
 
 // ---------- The door on the entry wall (click it twice to leave) ----------
+// You come in through it: the room fades in from black outside this door, it swings open, you walk in and it shuts behind you.
+// The door itself hangs on a hinge so it can swing. Outside the room there's a dark wall around it, so the room only shows through the doorway.
 function makeDoor(x, z, rotY, tag) {
   const g = new THREE.Group();
   const wood = std(0x1c0f07, 0.4, { envMap, envMapIntensity: 0.2 });
-  box(0.9, 2.05, 0.05, wood, 0, 1.025, 0, g);                 // door
-  for (const y of [0.55, 1.45]) box(0.66, 0.62, 0.02, std(0x1e130b, 0.6), 0, y, 0.03, g);   // raised panels
+  const panel = std(0x1e130b, 0.6);
+  const leaf = new THREE.Group();                             // the part that swings, turning on its hinge side
+  leaf.position.x = -0.45;
+  g.add(leaf);
+  box(0.9, 2.05, 0.05, wood, 0.45, 1.025, 0, leaf);           // door
+  for (const y of [0.55, 1.45]) for (const s of [1, -1]) box(0.66, 0.62, 0.02, panel, 0.45, y, s * 0.03, leaf);   // raised panels, both sides
+  for (const s of [1, -1]) {                                  // a knob on each side
+    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
+    knob.position.set(0.79, 1.0, s * 0.06);
+    leaf.add(knob);
+  }
   box(0.08, 2.15, 0.07, goldMat, -0.49, 1.075, 0, g);          // frame
   box(0.08, 2.15, 0.07, goldMat, 0.49, 1.075, 0, g);
   box(1.06, 0.08, 0.07, goldMat, 0, 2.15, 0, g);
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
-  knob.position.set(0.34, 1.0, 0.06);
-  g.add(knob);
   g.position.set(x, 0, z);
   g.rotation.y = rotY;
   g.traverse(o => { if (o.isMesh) o.userData[tag] = true; });
   scene.add(g);
-  return g;
+  return leaf;
 }
-makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
+const DOOR_X = 1.6;
+const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
+{ // The outside of the entry wall, around the doorway (only seen on the way in)
+  const out = new THREE.MeshBasicMaterial({ color: 0x0a0806 });
+  const side = (w, h, x, y) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), out); m.position.set(x, y, R2 + 0.002); scene.add(m); };
+  const L = DOOR_X - 0.53 + R2, Rw = R2 - DOOR_X - 0.53;
+  side(L, HEIGHT, -R2 + L / 2, H2);
+  side(Rw, HEIGHT, R2 - Rw / 2, H2);
+  side(1.06, HEIGHT - 2.19, DOOR_X, 2.19 + (HEIGHT - 2.19) / 2);
+  const step = new THREE.Mesh(new THREE.PlaneGeometry(3, 2), out);   // the ground just outside
+  step.rotation.x = -Math.PI / 2; step.position.set(DOOR_X, 0, R2 + 1);
+  scene.add(step);
+}
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 2.3));   // soft, warm light everywhere
@@ -373,9 +387,8 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 setNeon(0);
-let neonHeard;
-const neonLoaded = new Promise(r => { neonHeard = r; });
-onValue(ref(db, 'tables/decor/neon'), s => { setNeon(s.val()); neonHeard(); });
+onValue(ref(db, 'tables/decor/neon'), s => setNeon(s.val()));
+const neonLoaded = get(ref(db, 'tables/decor/neon'));
 function nextNeon() {
   if (!S.myName) return;
   const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
@@ -661,7 +674,8 @@ leaveBtn.addEventListener('click', leaveRoom);
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
-const nameInput = document.getElementById('nameInput');   // the Cave asks for the name; this just reads it
+const nameInput = document.getElementById('nameInput');
+try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
 
 function enterRoom() {
   const name = nameInput.value.trim().slice(0, 20);
@@ -709,7 +723,8 @@ function enterRoom() {
     s.forEach(ch => { remove(ch.ref); });
   });
 }
-document.getElementById('enter').addEventListener('click', enterRoom);   // the Cave clicks this as the portal opens
+document.getElementById('enter').addEventListener('click', enterRoom);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
 
 
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
@@ -717,6 +732,7 @@ const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap a chair to sit and play'
                         : 'Drag to look · click the floor to walk (or W A S D) · click a chair to sit and play';
 const HINT_SEAT = PHONE ? 'Tap your pieces to move · Stand up when you\'re done' : 'Click your pieces to move · Esc or Stand up to leave the table';
+hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
 const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
 let yaw = 0, pitch = -0.12;                   // facing the tables
@@ -898,7 +914,7 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
-  if (down && !S.seat && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+  if (down && !intro && !S.seat && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
     yaw -= (e.clientX - lastX) * k;
     pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
@@ -914,7 +930,7 @@ window.addEventListener('pointerup', e => {
   const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
   endTouch(e);
-  if (!wasTap || !S.myName || anim) return;
+  if (!wasTap || intro || !S.myName || anim) return;
   const p = pickUnder(e);
   if (!p) return;
   if (p.square !== undefined) tap(S.seat.key, p.square);
@@ -935,7 +951,8 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (anim) {
+  if (intro) playIntro(dt);   // walking in through the door
+  else if (anim) {
     anim.t += dt;
     const e = easeInOut(Math.min(anim.t / anim.dur, 1));
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
@@ -966,20 +983,36 @@ renderer.setAnimationLoop(() => {
   updateGames(dt);
   updateClock();
   updateSky();
-  if (stage.live) renderer.render(scene, camera);   // nothing is drawn until the Cave opens the portal
+  renderer.render(scene, camera);
 });
 
-// ---------- Getting ready behind the Cave ----------
-// The wood, the ring light's color and the three games come in first (or give up after a few seconds on a slow
-// connection), then the reflections, shaders and textures are made ready, then the Cave is told.
-const gamesLoaded = () => Promise.all(['checkers', 'chess', 'othello'].map(k => get(ref(db, 'tables/' + k))))
-  .then(() => new Promise(r => setTimeout(r, 60)));   // and a moment for the pieces to be set out
-getReady({
-  wait: [() => within(woodDone, 8000), () => within(neonLoaded, 2500), () => within(gamesLoaded(), 3000)],
-  snap: takeSnap,
-  warm: [() => makeAvatar(' ', 0).g],
-  hintText: HINT_WALK
-}).then(() => {
-  ready = true;
-  if (!snapHadWood) woodDone.then(snapRoom);   // a slow connection: retake once the wood shows up
-});
+// ---------- Coming in: the room gets ready behind the Cave (which is black by now), then you walk in through the door ----------
+// The pictures and the first data load, the reflections are taken and everything is drawn once, all while the screen
+// is black, so any stutter happens where nobody can see it. Then the Cave fades away and the walk in begins.
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : window.requestAnimationFrame(f)); window.requestAnimationFrame(f); });
+let intro = { t: -1 };                                // -1 until the Cave says go
+const OUTSIDE = new THREE.Vector3(DOOR_X, EYE, R2 + 0.9);
+function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k); }
+function playIntro(dt) {                              // the camera and the door, moment by moment
+  if (intro.t >= 0) intro.t += dt;
+  const t = Math.max(0, intro.t);
+  const open = easeIO((t - 0.5) / 0.7) - easeIO((t - 2.4) / 0.7);   // swings open, then shut behind you
+  doorLeaf.rotation.y = -1.75 * open;
+  const k = easeIO((t - 0.9) / 1.5);                  // the walk: through the doorway, then over to your spot
+  const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
+  const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
+  camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE, z);
+  camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
+  if (t > 3.2) { doorLeaf.rotation.y = 0; intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
+}
+window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
+camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
+(async () => {
+  await Promise.race([Promise.all([woodLoaded, neonLoaded, ...['checkers', 'chess', 'othello'].map(k => get(ref(db, 'tables/' + k)))]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  await wait(300);                                    // the reflection snapshot is taken just after the pictures land
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  await frames(3);
+  window.dispatchEvent(new Event('room-ready'));
+})();

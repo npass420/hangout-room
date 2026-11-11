@@ -1,9 +1,9 @@
 // =====================================================================
 // cave.js — the Cave: the front door of the site. A night igloo drawn flat like a Flash cartoon, with the
-// swirling orb in the middle (orb.png) and two frozen ancient doors on the sides. Pick your name, touch the orb,
-// and a portal opens out of its white center into the Doodle Gallery. An open door (the Table Room) opens onto its room.
-// Each room's code loads only when you pick it, and gets itself fully ready behind the Cave before the portal opens.
-// More places later: give a door its file in PLACES below and it thaws open.
+// swirling orb in the middle (orb.png) and two frozen ancient doors on the sides. Pick your name, then touch the orb
+// (the Doodle Gallery) or an open door (the Table Room). The screen flashes white (or warm gold for a door), fades to
+// black, and only then does that room's code load; a little snowflake turns while it does. Then the room fades in and
+// you walk in through its door. More places later: give a door its file in PLACES below and it thaws open.
 // =====================================================================
 const PLACES = {
   orb:   { name: 'Doodle Gallery', file: './studio.js' },
@@ -16,6 +16,7 @@ const g = cv.getContext('2d');
 const nameBox = document.getElementById('nameBox');
 const nameInput = document.getElementById('nameInput');
 const nameTip = document.getElementById('nameTip');
+const loadFlake = document.getElementById('loadFlake');
 const PHONE = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || Math.min(window.innerWidth, window.innerHeight) < 600;
 const DEG = Math.PI / 180;
 const M = 40;   // extra edge drawn around the layers, so they can drift with the mouse without showing a gap
@@ -350,10 +351,9 @@ function whatIsAt(x, y) {
 // ---------- Touching things ----------
 let note = null;          // a little message near something you touched: { text, x, y, t }
 let shake = { side: null, t: 0 };
-let wantIn = null, waitFrom = 0, roomIsReady = false, entering = 0, goingTo = 'orb';
-window.addEventListener('room-ready', () => { roomIsReady = true; });   // the room has everything loaded and built
+let going = null, goneAt = 0;   // where you're headed, and when the flash started
 function tryEnter(place) {
-  if (wantIn || entering) return;   // already on the way somewhere (only one room can load)
+  if (going) return;
   const name = myName || nameInput.value.trim().slice(0, 20);
   if (!name) {
     nameBox.classList.remove('nudge'); void nameBox.offsetWidth; nameBox.classList.add('nudge');
@@ -361,15 +361,29 @@ function tryEnter(place) {
     return;
   }
   setName(name);
-  wantIn = place; waitFrom = performance.now();
-  import(PLACES[place].file).catch(e => {   // load just that room's code
-    console.warn('Room load', e);
-    wantIn = null;
-    note = { text: `${PLACES[place].name} couldn't load, try again in a moment`, side: place === 'orb' ? null : place, t: performance.now() };
-  });
+  going = place; goneAt = performance.now(); hover = null;
+  nameBox.classList.add('leaving');
+}
+// Once the screen is black: load the room, say you're here, and wait for it to be ready before showing it
+function loadRoom() {
+  loadFlake.classList.add('on');
+  window.addEventListener('room-ready', () => {
+    window.dispatchEvent(new Event('room-show'));   // the room starts its walk in through the door
+    loadFlake.classList.remove('on');
+    cv.classList.add('gone');                       // and the black fades away
+    setTimeout(() => { cv.style.display = 'none'; nameBox.style.display = 'none'; }, 1000);
+  }, { once: true });
+  import(PLACES[going].file)
+    .then(() => document.getElementById('enter').click())
+    .catch(e => {
+      console.warn('Room load', e);
+      loadFlake.textContent = `${PLACES[going].name} couldn't load · tap to try again`;
+      loadFlake.classList.add('oops');
+      loadFlake.addEventListener('click', () => location.reload());
+    });
 }
 cv.addEventListener('click', e => {
-  if (wantIn || entering) return;
+  if (going) return;
   const what = whatIsAt(e.clientX, e.clientY);
   if (what && PLACES[what].file) tryEnter(what);
   else if (what) {
@@ -394,14 +408,14 @@ function pickName() {
   if (!name) { nameBox.classList.remove('nudge'); void nameBox.offsetWidth; nameBox.classList.add('nudge'); nameInput.focus(); return; }
   setName(name);
 }
-nameInput.addEventListener('keydown', e => {
+nameInput.addEventListener('keydown', e => {   // runs before the rooms' own Enter, and stops it
   if (e.key !== 'Enter') return;
-  e.preventDefault();
+  e.preventDefault(); e.stopImmediatePropagation();
   pickName();
 });
 document.getElementById('nameOk').addEventListener('click', pickName);
 document.getElementById('nameChange').addEventListener('click', () => {
-  if (wantIn || entering) return;
+  if (going) return;
   myName = '';
   nameBox.classList.remove('named');
   nameTip.textContent = 'then touch the orb ✦ or an open door';
@@ -415,42 +429,32 @@ document.getElementById('nameChange').addEventListener('click', () => {
 window.addEventListener('resize', build);
 
 // ---------- Drawing every frame ----------
-let bob = 0, raf = 0, spin = 0, lastNow = 0;
+let bob = 0, raf = 0;
 const t0 = performance.now();
-const PORTAL = 1600;   // how long the portal takes to open all the way (ms)
 function frame(now) {
   raf = window.requestAnimationFrame(frame);
-  const t = (now - t0) / 1000, dt = Math.min(0.05, lastNow ? (now - lastNow) / 1000 : 0);
-  lastNow = now;
+  const t = (now - t0) / 1000;
   look.x = lerp(look.x, lookTo.x, 0.05); look.y = lerp(look.y, lookTo.y, 0.05);
   bob = Math.sin(t * 1.1) * H * 0.006;
-  if (!entering && mouse.x >= 0 && !PHONE) {
+  if (!going && mouse.x >= 0 && !PHONE) {
     hover = whatIsAt(mouse.x, mouse.y);
     cv.style.cursor = hover ? 'pointer' : 'default';
   }
-  // The room you picked has finished getting ready behind the Cave: go in, and open the portal onto it
-  if (wantIn && !entering && roomIsReady) {
-    entering = now; goingTo = wantIn; wantIn = null; hover = null;
-    nameBox.classList.add('leaving');
-    document.getElementById('enter').click();          // the room says you're here
-    window.dispatchEvent(new Event('room-show'));      // and starts drawing itself, under the Cave
-  }
-  // charge: 0 to 1 while the room gets ready (the orb or door winds up); k: 0 to 1 as the portal opens
-  const charge = wantIn ? Math.min(1, (now - waitFrom) / 900) : entering ? 1 : 0;
-  const k = entering ? Math.min(1, (now - entering) / PORTAL) : 0;
-  const into = wantIn || (entering ? goingTo : null);
-  spin += dt * (0.12 + (into === 'orb' ? charge * 0.9 + k * 3 : 0));   // the swirl speeds up as it winds up
 
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
-  // A gentle lean toward where you're going while the portal opens
-  const [pcx, pcy] = portalCenter(into);
-  if (entering) {
-    const e = k * k * (3 - 2 * k), push = 1 + e * (goingTo === 'orb' ? 0.35 : 0.9);
-    g.translate(pcx, pcy); g.scale(push, push); g.translate(-pcx, -pcy);
+  // Going somewhere: a flash of light from the orb's white center (or the doorway) fills the screen, then fades to black
+  const FLASH = 550, DARK = 450;
+  const since = going ? now - goneAt : 0;
+  if (going && since >= FLASH + DARK) {   // all black: stop drawing the Cave and load the room
+    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+    window.cancelAnimationFrame(raf);
+    loadRoom();
+    return;
   }
+  const k = going ? Math.min(1, since / FLASH) : 0;
   const pulse = 0.5 + 0.5 * Math.sin(t * 1.6);
-  const glowUp = (hover === 'orb' || into === 'orb' ? 1.35 : 1) + (into === 'orb' ? charge * 0.5 : 0);
+  const glowUp = (hover === 'orb' ? 1.35 : 1) + (going === 'orb' ? k * 1.5 : 0);
 
   // The wall and doors
   const [wx, wy] = offset(DEPTH.wall);
@@ -468,8 +472,7 @@ function frame(now) {
   }
   for (const side of ['left', 'right']) {   // frost shimmer on a door you point at, and a shiver when touched
     const d = doors[side], sh = shake.side === side ? Math.max(0, 1 - (now - shake.t) / 500) : 0;
-    const a = (hover === side ? 0.22 : 0.07) + 0.05 * Math.sin(t * 2 + (side === 'left' ? 0 : 2)) + sh * 0.3
-      + (into === side ? charge * (0.3 + 0.12 * Math.sin(t * 7)) : 0);   // winding up: the doorway brightens and throbs
+    const a = (hover === side ? 0.22 : 0.07) + 0.05 * Math.sin(t * 2 + (side === 'left' ? 0 : 2)) + sh * 0.3;
     g.save(); g.translate(wx + Math.sin(now * 0.08) * sh * 4, wy);
     g.fillStyle = d.open ? `rgba(255,190,110,${a * 1.3})` : `rgba(140,225,255,${a})`; g.fill(d.path);
     g.restore();
@@ -514,14 +517,12 @@ function frame(now) {
   if (orbCut) {
     const S = R * 2 * (OR / 0.375);   // the picture's ball is a touch bigger than the clip, so its edge stays hidden
     g.translate(X, Y);
-    g.save(); g.rotate(spin); g.drawImage(orbCut, -S / 2, -S / 2, S, S); g.restore();
+    g.save(); g.rotate(t * 0.12 + (going === 'orb' ? k * k * 1.5 : 0)); g.drawImage(orbCut, -S / 2, -S / 2, S, S); g.restore();
     g.globalCompositeOperation = 'screen'; g.globalAlpha = 0.28;   // a second, faster swirl turning the other way, for life in the middle
-    g.save(); g.rotate(-t * 0.31 - spin * 1.5); g.scale(0.82, 0.82); g.drawImage(orbCut, -S / 2, -S / 2, S, S); g.restore();
+    g.save(); g.rotate(-t * 0.31); g.scale(0.82, 0.82); g.drawImage(orbCut, -S / 2, -S / 2, S, S); g.restore();
     g.globalAlpha = 1; g.globalCompositeOperation = 'lighter';
-    const hot = into === 'orb' ? charge : 0;            // the white center swells and burns brighter as it winds up
-    const core = g.createRadialGradient(0, 0, 0, 0, 0, R * (0.45 + hot * 0.2));
-    core.addColorStop(0, `rgba(255,${225 + hot * 30},${190 + hot * 65},${Math.min(1, 0.35 + pulse * 0.25 + hot * 0.45)})`);
-    core.addColorStop(0.35, `rgba(255,235,220,${hot * 0.35})`); core.addColorStop(1, 'rgba(0,0,0,0)');
+    const core = g.createRadialGradient(0, 0, 0, 0, 0, R * 0.45);
+    core.addColorStop(0, `rgba(255,225,190,${0.35 + pulse * 0.25})`); core.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = core; g.fillRect(-R, -R, R * 2, R * 2);
     g.translate(-X, -Y);
   }
@@ -571,69 +572,22 @@ function frame(now) {
     }
   }
 
-  // While the room gets ready: a quiet word under where you're going, if it takes more than a moment
-  if (wantIn && now - waitFrom > 700) {
-    const a = Math.min(1, (now - waitFrom - 700) / 400) * (0.75 + 0.25 * Math.sin(t * 4));
-    const at = wantIn === 'orb' ? [orb.x, orb.y + orb.r * 1.25 + bob, 18] : [doors[wantIn].uv(0, 0)[0] + offset(DEPTH.wall)[0], doors[wantIn].uv(0, 0)[1] + 12, 16];
-    g.globalAlpha = a; g.font = `italic ${at[2]}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'top';
-    g.fillStyle = '#ffffff'; g.shadowColor = wantIn === 'orb' ? 'rgba(40,10,90,1)' : 'rgba(70,30,0,1)'; g.shadowBlur = 8;
-    g.fillText(`Opening the ${PLACES[wantIn].name}…`, at[0], at[1]);
-    g.shadowBlur = 0; g.globalAlpha = 1;
-  }
-
-  // The portal: a hole opens out of the white center (or the doorway) and grows until the room behind fills the screen
-  if (entering) {
+  // The flash, then the fade to black
+  if (going) {
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
-    drawPortal(pcx, pcy, k, goingTo === 'orb', t);
-    if (k >= 1) {   // all the way open: the Cave is gone
-      window.cancelAnimationFrame(raf);
-      cv.style.display = 'none';
-      nameBox.style.display = 'none';
-    }
+    let fx0, fy0, col;
+    if (going === 'orb') { const [ox, oy] = offset(DEPTH.orb); fx0 = orb.x + ox; fy0 = orb.y + oy + bob; col = '255,255,255'; }
+    else { const [dx, dy] = doors[going].uv(0, 0.42), [wx, wy] = offset(DEPTH.wall); fx0 = dx + wx; fy0 = dy + wy; col = '255,214,150'; }
+    const e = k * k * (3 - 2 * k), far = Math.hypot(W, H);
+    g.globalCompositeOperation = 'lighter';           // light pouring out of the center, growing to fill everything
+    const fl = g.createRadialGradient(fx0, fy0, 0, fx0, fy0, orb.r * 0.4 + far * 1.2 * e);
+    fl.addColorStop(0, `rgba(${col},1)`); fl.addColorStop(0.5, `rgba(${col},${e})`); fl.addColorStop(1, `rgba(${col},0)`);
+    g.fillStyle = fl; g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = `rgba(${col},${e * e})`; g.fillRect(0, 0, W, H);   // until it's all light
+    const d = Math.max(0, (since - FLASH) / DARK);
+    if (d > 0) { g.fillStyle = `rgba(0,0,0,${d * d * (3 - 2 * d)})`; g.fillRect(0, 0, W, H); }
   }
-}
-
-// Where the portal opens: the orb's white center, or the middle of the doorway (both as they sit on screen right now)
-function portalCenter(place) {
-  if (place === 'orb' || !place) { const [ox, oy] = offset(DEPTH.orb); return [orb.x + ox, orb.y + oy + bob]; }
-  const [dx, dy] = doors[place].uv(0, 0.42), [wx, wy] = offset(DEPTH.wall);
-  return [dx + wx, dy + wy];
-}
-function drawPortal(x, y, k, isOrb, t) {
-  const far = Math.max(Math.hypot(x, y), Math.hypot(W - x, y), Math.hypot(x, H - y), Math.hypot(W - x, H - y));
-  const start = isOrb ? 0.04 : 0.1;                       // a breath of white-hot light first, then it opens
-  const o = Math.max(0, (k - start) / (1 - start));
-  const r = (far * 1.25 + 40) * o * o * (0.35 + 0.65 * o); // slow at first, then rushing out past the edges
-  const warm = !isOrb;
-  // A flare at the center just as it starts, so the hole is born out of the light
-  if (k < 0.35) {
-    const a = Math.sin(Math.min(1, k / 0.35) * Math.PI);
-    const fl = g.createRadialGradient(x, y, 0, x, y, orb.r * 0.9);
-    fl.addColorStop(0, `rgba(255,${warm ? 236 : 248},${warm ? 200 : 255},${a})`); fl.addColorStop(1, 'rgba(255,255,255,0)');
-    g.globalCompositeOperation = 'lighter'; g.fillStyle = fl; g.fillRect(x - orb.r, y - orb.r, orb.r * 2, orb.r * 2);
-  }
-  if (r < 1) { g.globalCompositeOperation = 'source-over'; return; }
-  // Cut the hole: fully clear inside, with a soft edge
-  g.globalCompositeOperation = 'destination-out';
-  const hole = g.createRadialGradient(x, y, 0, x, y, r);
-  hole.addColorStop(0, 'rgba(0,0,0,1)'); hole.addColorStop(0.8, 'rgba(0,0,0,1)'); hole.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = hole; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
-  // The rim: a glowing band, with streaks of light swirling around it
-  g.globalCompositeOperation = 'lighter';
-  const fade = 1 - Math.max(0, (k - 0.85) / 0.15);         // the rim fades as it leaves the screen
-  const band = g.createRadialGradient(x, y, r * 0.7, x, y, r * 1.12);
-  const c1 = warm ? '255,190,110' : '190,150,255', c2 = warm ? '255,236,200' : '235,225,255';
-  band.addColorStop(0, `rgba(${c1},0)`); band.addColorStop(0.55, `rgba(${c2},${0.55 * fade})`); band.addColorStop(1, `rgba(${c1},0)`);
-  g.fillStyle = band; g.beginPath(); g.arc(x, y, r * 1.12, 0, Math.PI * 2); g.fill();
-  const lw = Math.max(2, r * 0.025);
-  for (const [rr, dir, dash, alpha] of [[0.9, 1, 0.22, 0.9], [0.84, -1.4, 0.13, 0.6], [0.97, 0.7, 0.4, 0.45]]) {
-    const len = 2 * Math.PI * r * rr;
-    g.setLineDash([len * dash * 0.6, len * dash * 0.4]); g.lineDashOffset = -dir * t * r * 1.6;
-    g.beginPath(); g.arc(x, y, r * rr, 0, Math.PI * 2);
-    g.strokeStyle = `rgba(${c2},${alpha * fade})`; g.lineWidth = lw * (rr > 0.95 ? 0.6 : 1); g.lineCap = 'round'; g.stroke();
-  }
-  g.setLineDash([]); g.lineDashOffset = 0;
-  g.globalCompositeOperation = 'source-over';
 }
 build();
 raf = window.requestAnimationFrame(frame);
