@@ -232,7 +232,7 @@ function makeDoor(x, z, rotY, tag) {
 makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
 
 // ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.85));   // soft, even light everywhere
+scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 1.0));   // soft, even light everywhere
 
 // ---------- Neon: a ring floating under the middle of the ceiling, and a tube all the way around the top corners of the room ----------
 const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
@@ -267,14 +267,21 @@ for (const [k, op, core] of GLOW) {
   m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
   ring.add(m);
 }
-// The ring is the room's light: it shines down and out onto the floor and walls (never up, so the ceiling stays dark)
-const ringLight = new THREE.SpotLight(0xfff0dc, 6, 0, 1.25, 0.6, 1);
-ringLight.position.set(0, RING_Y - 0.05, 0);
-ringLight.target.position.set(0, 0, 0);
-ringLight.castShadow = true;
-ringLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
-ringLight.shadow.bias = -0.002;
-scene.add(ringLight, ringLight.target);
+// The ring's reflection in the polished floor: a soft glowing ring right under it, in the same neon color
+{
+  const N = 256, c = document.createElement('canvas'); c.width = c.height = N;
+  const g = c.getContext('2d'), OUT = RING_R + 0.6, soft = 0.3;   // OUT: how far the picture reaches; soft: how blurry the ring is
+  const grd = g.createRadialGradient(N / 2, N / 2, 0, N / 2, N / 2, N / 2);
+  const at = r => Math.max(0, Math.min(1, r / OUT));
+  grd.addColorStop(0, '#000'); grd.addColorStop(at(RING_R - soft), '#000');
+  grd.addColorStop(at(RING_R - soft / 3), '#555'); grd.addColorStop(at(RING_R), '#fff');
+  grd.addColorStop(at(RING_R + soft / 3), '#555'); grd.addColorStop(at(RING_R + soft), '#000'); grd.addColorStop(1, '#000');
+  g.fillStyle = grd; g.fillRect(0, 0, N, N);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(OUT * 2, OUT * 2), neonMat(0.35, false, t));
+  glow.rotation.x = -Math.PI / 2; glow.position.y = 0.004;
+  scene.add(glow);
+}
 // The corner tube: runs around the room right where the walls meet the ceiling, with its glow washing
 // onto the ceiling and down the wall, like real cove lighting
 function fadeTex(brightAtTop) {   // white fading to black, for the glow wash (black adds nothing when glowing)
@@ -347,8 +354,18 @@ function nextNeon() {
 // ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
 const WALK = 2.2;     // walking speed, meters a second
 const avatars = {};   // id -> { g, name, c }
+const footShadow = (() => {   // a soft dark spot on the floor under each snowman
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(0,0,0,0.6)'); grd.addColorStop(0.6, 'rgba(0,0,0,0.3)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  return new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false });
+})();
 function makeAvatar(name, c) {
   const g = new THREE.Group();
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.85), footShadow);
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.003;
+  g.add(shadow);
   const mat = std(new THREE.Color(RAINBOW[c]), 0.75);
   for (const [r, y] of [[0.28, 0.28], [0.21, 0.74], [0.15, 1.1]]) {   // three stacked snowballs: big bottom, middle, small head
     const b = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat);
