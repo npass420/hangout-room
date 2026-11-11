@@ -9,7 +9,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { ref, get, set, remove, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, S, hooks, scene, camera, canvas, ROOM, goldMat } from './core.js';
+import { db, S, hooks, scene, camera, canvas, renderer, ROOM, goldMat } from './core.js';
 
 const DW = 1200, DH = 800;          // a doodle's full size
 const COLS = 9, ROWS = 5;
@@ -111,10 +111,35 @@ function paintFrame(j) {
   ownCanvas(f);
   if (!paint(f.g, f.w, f.h, art[it.id])) {
     paper(f.g, f.w, f.h, 'Loading…');
-    loadArt(it.id).then(a => { if (a) paintFrame(j); });
+    waiting++;
+    loadArt(it.id).then(a => { waiting--; if (a) queue.add(j); pump(); });
   }
   f.tex.needsUpdate = true;
+  renderer.initTexture(f.tex);   // send it to the graphics card now, inside this frame's little budget
 }
+// Frames are painted a few at a time, a few milliseconds each frame, so a wall full of doodles arriving at once
+// never freezes the room (or the portal on the way in).
+const queue = new Set();
+let pumping = false, waiting = 0, heard = false;
+const settled = [];
+function pump() {
+  if (pumping) return settle();
+  pumping = true;
+  window.requestAnimationFrame(function step() {
+    const end = performance.now() + 5;
+    for (const j of queue) {
+      queue.delete(j);
+      paintFrame(j);
+      if (performance.now() > end) break;
+    }
+    if (queue.size) window.requestAnimationFrame(step);
+    else { pumping = false; settle(); }
+  });
+}
+function settle() {   // tell the room once the first wall of doodles is all up
+  if (heard && !pumping && !queue.size && !waiting) settled.splice(0).forEach(r => r());
+}
+export function galleryLoaded() { return new Promise(r => { settled.push(r); settle(); }); }
 
 // ---------- Picture lamps: a small gold lamp over each column, with a soft pool of light down the wall ----------
 // The light is painted on (a glowing gradient), not a real lamp, so 18 of them cost about the same as none.
@@ -163,7 +188,7 @@ for (const wall of walls) {
     farWall.add(bar, bulb, arm, pool);
   }
 }
-function paintWall() { for (let j = 0; j < SLOTS; j++) paintFrame(j); }
+function paintWall() { for (let j = 0; j < SLOTS; j++) queue.add(j); pump(); }
 paintWall();
 
 // ---------- The viewer ----------
@@ -324,6 +349,7 @@ onValue(ref(db, 'room/sketch/gallery'), s => {
   const v = s.val() || {};
   items = Object.entries(v).filter(([, m]) => m && m.at).map(([id, m]) => ({ id, ...m })).sort(wallOrder);
   for (const id of Object.keys(art)) if (!v[id]) { delete art[id]; delete loading[id]; }   // taken down
+  heard = true;
   paintWall();
   if (isOpen) {
     const at = shownId ? items.findIndex(it => it.id === shownId) : -1;

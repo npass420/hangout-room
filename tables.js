@@ -7,7 +7,8 @@ import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
-         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
+         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE,
+         stage, nextFrame, within, getReady } from './core.js';
 import { sfx, setupMute } from './sounds.js';
 import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, showPanel, sit, stand, seatTaken, seatHolder,
          tap, canTap, pickables, squareAt } from './boardgames.js';
@@ -73,12 +74,14 @@ function woodTex(kind, img) {
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = MAX_ANISO;
   return t;
 }
-function dressWood(img) {
-  const f = woodTex('floor', img), w = woodTex('wall', img);
+async function dressWood(img) {   // one texture at a time, with a breath between, so the Cave keeps moving
+  const f = woodTex('floor', img); await nextFrame();
+  const w = woodTex('wall', img); await nextFrame();
+  const slab = woodTex('slab', img);
   f.repeat.set(4, 4);
   w.repeat.set(5, HEIGHT / ROOM * 5);
   const c = w.clone(); c.repeat.set(4, 4); c.needsUpdate = true;
-  floorMat.map = f; wallMat.map = w; ceilMat.map = c; tableMat.map = woodTex('slab', img);
+  floorMat.map = f; wallMat.map = w; ceilMat.map = c; tableMat.map = slab;
   if (img) {   // the photo is brighter than the drawn grain, so tone it down to a deep walnut
     floorMat.color.setHex(0xa89488); wallMat.color.setHex(0x8a7a70); ceilMat.color.setHex(0x4a4440); tableMat.color.setHex(0xb2a294);
   }
@@ -110,28 +113,33 @@ for (const [y, h, d] of [[0.07, 0.14, 0.03], [1.0, 0.06, 0.035], [HEIGHT - 0.08,
 // The polish: a snapshot of this very room, taken from about table height, used for every reflection in here.
 // It's retaken when the wood loads and when the ring light changes color.
 const pmrem = new THREE.PMREMGenerator(renderer);
-let roomEnv = null, snapTimer = 0;
+let roomEnv = null, snapTimer = 0, ready = false, snapHadWood = false, woodIn = false;
 const reflective = [floorMat, wallMat, ceilMat, trimMat];
-function snapRoom() {
-  clearTimeout(snapTimer);
-  snapTimer = setTimeout(() => {
-    const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people (they'd freeze in it)
-    const was = hide.map(o => o.visible);
-    hide.forEach(o => { o.visible = false; });
-    scene.position.y = -1.0;
-    const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
-    scene.position.y = 0;
-    hide.forEach((o, i) => { o.visible = was[i]; });
-    if (roomEnv) roomEnv.dispose();
-    roomEnv = env;
-    for (const m of reflective) { m.envMap = env.texture; m.needsUpdate = true; }
-    setRoomEnv(env.texture);
-  }, 150);
+function takeSnap() {
+  const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people (they'd freeze in it)
+  const was = hide.map(o => o.visible);
+  hide.forEach(o => { o.visible = false; });
+  scene.position.y = -1.0;
+  const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
+  scene.position.y = 0;
+  hide.forEach((o, i) => { o.visible = was[i]; });
+  snapHadWood = woodIn;
+  if (roomEnv) roomEnv.dispose();
+  roomEnv = env;
+  for (const m of reflective) { m.envMap = env.texture; m.needsUpdate = true; }
+  setRoomEnv(env.texture);
 }
-dressWood(null);
+function snapRoom() {   // a retake later on (the ring light changed color); the first one is taken while getting ready
+  if (!ready) return;
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(takeSnap, 150);
+}
 const woodImg = new Image();
-woodImg.onload = () => dressWood(woodImg);
 woodImg.src = 'Wood.jpg';   // the capital W matters on the website
+const woodDone = woodImg.decode()   // unpacked off to the side, not in the middle of a frame
+  .then(() => dressWood(woodImg))
+  .catch(() => dressWood(null))     // no picture: wood grain drawn here instead
+  .then(() => { woodIn = true; snapRoom(); });
 
 // ---------- Warm wall lamps: a small gold sconce with a soft pool of light up and down the wall ----------
 const poolCv = document.createElement('canvas'); poolCv.width = 128; poolCv.height = 256;
@@ -365,7 +373,9 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 setNeon(0);
-onValue(ref(db, 'tables/decor/neon'), s => setNeon(s.val()));
+let neonHeard;
+const neonLoaded = new Promise(r => { neonHeard = r; });
+onValue(ref(db, 'tables/decor/neon'), s => { setNeon(s.val()); neonHeard(); });
 function nextNeon() {
   if (!S.myName) return;
   const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
@@ -651,9 +661,7 @@ leaveBtn.addEventListener('click', leaveRoom);
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
-const nameInput = document.getElementById('nameInput');
-try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
-nameInput.focus();
+const nameInput = document.getElementById('nameInput');   // the Cave asks for the name; this just reads it
 
 function enterRoom() {
   const name = nameInput.value.trim().slice(0, 20);
@@ -701,8 +709,7 @@ function enterRoom() {
     s.forEach(ch => { remove(ch.ref); });
   });
 }
-document.getElementById('enter').addEventListener('click', enterRoom);
-nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
+document.getElementById('enter').addEventListener('click', enterRoom);   // the Cave clicks this as the portal opens
 
 
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
@@ -710,7 +717,6 @@ const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap a chair to sit and play'
                         : 'Drag to look · click the floor to walk (or W A S D) · click a chair to sit and play';
 const HINT_SEAT = PHONE ? 'Tap your pieces to move · Stand up when you\'re done' : 'Click your pieces to move · Esc or Stand up to leave the table';
-hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
 const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
 let yaw = 0, pitch = -0.12;                   // facing the tables
@@ -960,5 +966,20 @@ renderer.setAnimationLoop(() => {
   updateGames(dt);
   updateClock();
   updateSky();
-  renderer.render(scene, camera);
+  if (stage.live) renderer.render(scene, camera);   // nothing is drawn until the Cave opens the portal
+});
+
+// ---------- Getting ready behind the Cave ----------
+// The wood, the ring light's color and the three games come in first (or give up after a few seconds on a slow
+// connection), then the reflections, shaders and textures are made ready, then the Cave is told.
+const gamesLoaded = () => Promise.all(['checkers', 'chess', 'othello'].map(k => get(ref(db, 'tables/' + k))))
+  .then(() => new Promise(r => setTimeout(r, 60)));   // and a moment for the pieces to be set out
+getReady({
+  wait: [() => within(woodDone, 8000), () => within(neonLoaded, 2500), () => within(gamesLoaded(), 3000)],
+  snap: takeSnap,
+  warm: [() => makeAvatar(' ', 0).g],
+  hintText: HINT_WALK
+}).then(() => {
+  ready = true;
+  if (!snapHadWood) woodDone.then(snapRoom);   // a slow connection: retake once the wood shows up
 });

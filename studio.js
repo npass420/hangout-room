@@ -6,8 +6,10 @@ import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
-         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from './core.js';
+         box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE,
+         stage, nextFrame, within, getReady } from './core.js';
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
+import { galleryLoaded } from './gallery.js';
 import { sfx, setupMute } from './sounds.js';
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
@@ -27,8 +29,14 @@ function stoneTex(src) {
   t.needsUpdate = true;
   return t;
 }
+// The work is done in small pieces with a breath between them, so the Cave keeps moving while the room gets ready.
+// One copy of the picture goes to the graphics card and every wall and the ceiling share it.
 const marbleImg = new Image();
-marbleImg.onload = () => {
+let marbleIn = false;
+marbleImg.src = 'marble.jpg';
+const marbleDone = (async () => {
+  await marbleImg.decode();                  // unpacked off to the side, not in the middle of a frame
+  await nextFrame();
   // Phones get a smaller copy, so the picture fits in their memory
   let src = marbleImg;
   const maxSize = PHONE ? 1536 : 3072;
@@ -37,16 +45,23 @@ marbleImg.onload = () => {
     c.width = c.height = maxSize;
     c.getContext('2d').drawImage(marbleImg, 0, 0, maxSize, maxSize);
     src = c;
+    await nextFrame();
   }
   // Walls: 9 wide by 4 tall, so each one uses a strip of the picture, a different strip (and some flipped) per wall
+  const base = stoneTex(src);
   const strips = [[0, false], [0.19, true], [0.37, false], [0.556, true]];
   wallMats.forEach((m, i) => {
-    const t = stoneTex(src);
+    const t = base.clone();                  // the same picture underneath, just a different part of it
     const [y, flip] = strips[i];
     t.repeat.set(flip ? -1 : 1, HEIGHT / ROOM);
     t.offset.set(flip ? 1 : 0, y);
     m.map = t; m.color.setHex(0xffffff); m.needsUpdate = true;
   });
+  // Ceiling: the picture again, turned and darker
+  const ct = base.clone();
+  ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
+  ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
+  await nextFrame();
   // Floor: the whole picture, with thin gold seams every 1.5 meters (6 by 6 tiles)
   const SZ = src.width, fc = document.createElement('canvas');
   fc.width = fc.height = SZ;
@@ -61,14 +76,9 @@ marbleImg.onload = () => {
     g.fillRect(p - lw / 2, 0, lw, SZ); g.fillRect(0, p - lw / 2, SZ, lw);
   }
   floorMat.map = stoneTex(fc); floorMat.color.setHex(0xffffff); floorMat.needsUpdate = true;
-  // Ceiling: the picture again, turned and darker
-  const ct = stoneTex(src);
-  ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
-  ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
-  snapRoom();
-};
-marbleImg.onerror = () => console.warn('marble.jpg did not load; the room stays plain black');
-marbleImg.src = 'marble.jpg';
+  marbleIn = true;
+  snapRoom();   // only does something if the picture came in after the room was already showing
+})().catch(e => console.warn('marble.jpg did not load; the room stays plain black', e));
 
 // ---------- The room: four walls, the floor and the ceiling ----------
 function plane(w, h, mat, x, y, z, rx, ry) {
@@ -88,19 +98,22 @@ plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
 // The marble's reflections: a snapshot of this very room, so the polish on the floor, walls and ceiling shows the
 // real ring, neon and window (and nothing that isn't here). It's retaken when the marble loads and when the neon changes color.
 const pmrem = new THREE.PMREMGenerator(renderer);
-let roomEnv = null, snapTimer = 0;
-function snapRoom() {
+let roomEnv = null, snapTimer = 0, ready = false, snapHadMarble = false;
+function takeSnap() {
+  const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
+  const was = hide.map(o => o.visible);
+  hide.forEach(o => { o.visible = false; });
+  const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
+  hide.forEach((o, i) => { o.visible = was[i]; });
+  snapHadMarble = marbleIn;
+  if (roomEnv) roomEnv.dispose();
+  roomEnv = env;
+  for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
+}
+function snapRoom() {   // a retake later on (the neon changed color); the first one is taken while getting ready
+  if (!ready) return;
   clearTimeout(snapTimer);
-  snapTimer = setTimeout(() => {
-    const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
-    const was = hide.map(o => o.visible);
-    hide.forEach(o => { o.visible = false; });
-    const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
-    hide.forEach((o, i) => { o.visible = was[i]; });
-    if (roomEnv) roomEnv.dispose();
-    roomEnv = env;
-    for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
-  }, 100);
+  snapTimer = setTimeout(takeSnap, 100);
 }
 // Gold baseboards along the bottom of every wall
 for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
@@ -346,7 +359,9 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 setNeon(0);
-onValue(ref(db, 'room/decor/neon'), s => setNeon(s.val()));
+let neonHeard;
+const neonLoaded = new Promise(r => { neonHeard = r; });
+onValue(ref(db, 'room/decor/neon'), s => { setNeon(s.val()); neonHeard(); });
 function nextNeon() {
   if (!S.myName) return;
   const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
@@ -576,9 +591,7 @@ leaveBtn.addEventListener('click', leaveRoom);
 
 // ---------- Entering the room ----------
 const nameBox = document.getElementById('nameBox');
-const nameInput = document.getElementById('nameInput');
-try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
-nameInput.focus();
+const nameInput = document.getElementById('nameInput');   // the Cave asks for the name; this just reads it
 
 function enterRoom() {
   const name = nameInput.value.trim().slice(0, 20);
@@ -616,8 +629,6 @@ function enterRoom() {
     refreshAll();
   });
 
-  startSketch();    // LittleSketch, the big doodle board
-
   // Chat: show messages from about now on, and tidy away anything older than an hour
   const joinTime = Date.now() - 60000;
   onChildAdded(query(ref(db, 'room/chat'), orderByChild('t'), startAt(joinTime)), s => {
@@ -628,14 +639,12 @@ function enterRoom() {
     s.forEach(ch => { remove(ch.ref); });
   });
 }
-document.getElementById('enter').addEventListener('click', enterRoom);
-nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
+document.getElementById('enter').addEventListener('click', enterRoom);   // the Cave clicks this as the portal opens
 
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
 const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap the board to doodle · tap a picture to see it'
                         : 'Drag to look · click the floor to walk (or W A S D) · click the board to doodle · click a picture to see it';
-hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
 const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
 let yaw = 0, pitch = -0.05;                   // facing the doodle board
@@ -855,5 +864,20 @@ renderer.setAnimationLoop(() => {
   updateSketch(dt);
   updateClock();
   updateSky();
-  renderer.render(scene, camera);
+  if (stage.live) renderer.render(scene, camera);   // nothing is drawn until the Cave opens the portal
+});
+
+// ---------- Getting ready behind the Cave ----------
+// The marble, the neon color, the doodles on the board and the gallery all come in first (or give up after a few
+// seconds on a slow connection), then the reflections, shaders and textures are made ready, then the Cave is told.
+startSketch();    // LittleSketch, the big doodle board: it just listens, so it can start before you're in
+const sketchLoaded = () => get(ref(db, 'room/sketch/doodles')).then(() => new Promise(r => setTimeout(r, 120)));   // and a moment to draw them
+getReady({
+  wait: [() => within(marbleDone, 8000), () => within(neonLoaded, 2500), () => within(sketchLoaded(), 2500), () => within(galleryLoaded(), 3000)],
+  snap: takeSnap,
+  warm: [() => makeAvatar(' ', 0).g],
+  hintText: HINT_WALK
+}).then(() => {
+  ready = true;
+  if (!snapHadMarble) marbleDone.then(() => { if (marbleIn) snapRoom(); });   // a slow connection: retake once the marble shows up
 });

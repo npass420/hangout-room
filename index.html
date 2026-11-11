@@ -39,6 +39,13 @@
 					#nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; }
 					#nameBox input { background: #e9f3ff; text-align: center; font-size: 16px; }
 					#nameBox #enter { display: none; }
+					#nameRow { display: flex; gap: 6px; justify-content: center; }
+					#nameRow button { margin: 0; font-size: 16px; padding: 6px 14px; background: #bfe3ff; color: #0e1a3a; border-radius: 10px; }
+					#hello { display: none; }
+					#hello h2 { margin: 0 0 4px; }
+					#hello button { margin: 2px 0 0; font-size: 12px; padding: 3px 10px; background: rgba(191,227,255,0.2); color: #e6f2ff; }
+					#nameBox.named #askName { display: none; }
+					#nameBox.named #hello { display: block; }
 					#nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
 					#nameBox.nudge .panel { animation: nudge 0.4s; }
 					@keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
@@ -93,11 +100,20 @@
 		<canvas id="cave"></canvas>
 		<div id="nameBox">
 			<div class="panel">
-				<h2>Welcome! What's your name?</h2>
-				<input id="nameInput" maxlength="20" placeholder="Your name">
-					<button id="enter">Enter</button>
-					<div class="tip">then touch the orb ✦ or an open door</div>
+				<div id="askName">
+					<h2>Welcome! What's your name?</h2>
+					<div id="nameRow">
+						<input id="nameInput" maxlength="20" placeholder="Your name">
+						<button id="nameOk" title="That's me">✓</button>
+					</div>
 				</div>
+				<div id="hello">
+					<h2 id="helloText"></h2>
+					<button id="nameChange">change name</button>
+				</div>
+				<button id="enter">Enter</button>
+				<div class="tip" id="nameTip">then touch the orb ✦ or an open door</div>
+			</div>
 		</div>
 
 		<script type="importmap">
