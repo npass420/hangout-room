@@ -29,10 +29,19 @@
   input { font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 10px; background: #f3e6cf; color: #2a1c10; }
   #chatInput { flex: 1; min-width: 0; }
   #chatRow button { margin: 0; }
-  #nameBox { position: fixed; inset: 0; background: rgba(10,6,3,0.6); display: flex; align-items: center; justify-content: center; }
-  #nameBox .panel { position: static; text-align: center; padding: 20px 24px; }
-  #nameBox h2 { margin: 0 0 12px; font-weight: normal; }
-  #nameBox button { margin: 0 0 0 6px; }
+  /* The Cave (cave.js): the front door, drawn over everything until you go through the orb */
+  #cave { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 20; touch-action: none; transition: opacity 0.9s; }
+  #cave.gone { opacity: 0; pointer-events: none; }
+  #nameBox { position: fixed; left: 0; right: 0; bottom: 5%; z-index: 30; display: flex; justify-content: center; pointer-events: none; transition: opacity 0.5s; }
+  #nameBox.leaving { opacity: 0; }
+  #nameBox .panel { position: static; pointer-events: auto; text-align: center; padding: 14px 20px; background: rgba(14,22,52,0.62); color: #e6f2ff;
+                    box-shadow: 0 4px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(150,215,255,0.45); backdrop-filter: blur(4px); }
+  #nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; }
+  #nameBox input { background: #e9f3ff; text-align: center; font-size: 16px; }
+  #nameBox #enter { display: none; }
+  #nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
+  #nameBox.nudge .panel { animation: nudge 0.4s; }
+  @keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
   #phoneBar { display: none; }
 
   /* ---------- Phones and narrow screens ---------- */
@@ -72,10 +81,12 @@
 <div id="phoneBar">
   <button id="chatBtn">💬 Chat<span id="newDot"></span></button><button id="whoBtn">👥 0</button>
 </div>
+<canvas id="cave"></canvas>
 <div id="nameBox">
   <div class="panel">
-    <h2>Welcome to the Doodle Gallery! What's your name?</h2>
+    <h2>Welcome! What's your name?</h2>
     <input id="nameInput" maxlength="20" placeholder="Your name"><button id="enter">Enter</button>
+    <div class="tip">then touch the orb ✦</div>
   </div>
 </div>
 
@@ -85,6 +96,8 @@
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 } }
 </script>
+<!-- The Cave (cave.js) is the front door; it runs first so it shows right away -->
+<script type="module" src="cave.js"></script>
 <!-- The gallery's code lives in studio.js, which loads core.js, sketch.js (the doodle board), gallery.js (the picture walls) and sounds.js -->
 <script type="module" src="studio.js"></script>
 </body>
