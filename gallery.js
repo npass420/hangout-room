@@ -1,8 +1,9 @@
 // =====================================================================
-// gallery.js — the Doodle Gallery, filling both side walls
-// 90 gold frames, 45 on each side wall (9 across, 5 high), with a small gold picture lamp over each column:
-// pinned doodles first, then the most liked, then the newest (anyone can pin, up to 90).
-// The order starts on the left wall and carries on along the right wall. Empty frames are dark, waiting for art.
+// gallery.js — the Doodle Gallery
+// The top four hang in big frames on the far wall, two on each side of the doodle board (#1 top left, #2 top right,
+// #3 bottom left, #4 bottom right). The rest carry on in 90 gold frames on the side walls, 45 each (9 across, 5 high),
+// starting on the left wall. Every column has a small gold picture lamp. The order is pinned doodles first, then the
+// most liked, then the newest (anyone can pin, up to 94). Empty frames are dark, waiting for art.
 // Click a frame to open the viewer: flip through every saved doodle in that same order, like it, pin it,
 // download it as a picture, or take it down (only the people who drew it can). sketch.js saves the doodles and loads this file.
 // =====================================================================
@@ -12,8 +13,9 @@ import { db, S, hooks, scene, camera, canvas, ROOM, goldMat } from './core.js';
 
 const DW = 1200, DH = 800;          // a doodle's full size
 const COLS = 9, ROWS = 5;
+const TOP = 4;                      // the big featured frames on the far wall
 const PER_WALL = COLS * ROWS;       // frames on each side wall (45)
-const SLOTS = PER_WALL * 2;         // frames in the whole gallery (90)
+const SLOTS = TOP + PER_WALL * 2;   // frames in the whole gallery (94)
 const MAX_PINS = SLOTS;             // pinned doodles can fill every frame, no more
 const keyOf = name => String(name || '?').replace(/[.#$\[\]\/]/g, '_').slice(0, 20) || '?';
 let items = [];                     // every saved doodle in wall order: { id, t, s, a, by, at, likes, pin }
@@ -70,21 +72,31 @@ const emptyCv = document.createElement('canvas'); emptyCv.width = 600; emptyCv.h
 paper(emptyCv.getContext('2d'), 600, 400, 'Your doodle here');
 const emptyTex = new THREE.CanvasTexture(emptyCv); emptyTex.colorSpace = THREE.SRGBColorSpace; emptyTex.anisotropy = 4;
 const frames = [];
-for (let j = 0; j < SLOTS; j++) {
-  const w = Math.floor(j / PER_WALL), k = j % PER_WALL, wall = walls[w];
-  const x = (k % COLS - (COLS - 1) / 2) * STEP_X, y = TOP_Y - Math.floor(k / COLS) * STEP_Y;
-  const add = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.userData.gallery = true; m.userData.slot = j; wall.add(m); return m; };
+function hang(parent, j, x, y, pw, ph, border, res) {   // one gold frame with its picture
+  const add = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.userData.gallery = true; m.userData.slot = j; parent.add(m); return m; };
   const mat = new THREE.MeshBasicMaterial({ map: emptyTex, toneMapped: false, color: 0xe0e0e0 });
-  add(new THREE.PlaneGeometry(PW, PH), mat, x, y, 0.025);
+  add(new THREE.PlaneGeometry(pw, ph), mat, x, y, border / 2 + 0.005);
   for (const s of [-1, 1]) {
-    add(new THREE.BoxGeometry(PW + 0.08, 0.04, 0.04), goldMat, x, y + s * (PH / 2 + 0.02), 0.02).castShadow = true;
-    add(new THREE.BoxGeometry(0.04, PH + 0.08, 0.04), goldMat, x + s * (PW / 2 + 0.02), y, 0.02).castShadow = true;
+    add(new THREE.BoxGeometry(pw + border * 2, border, border), goldMat, x, y + s * (ph / 2 + border / 2), border / 2).castShadow = true;
+    add(new THREE.BoxGeometry(border, ph + border * 2, border), goldMat, x + s * (pw / 2 + border / 2), y, border / 2).castShadow = true;
   }
-  frames.push({ mat, g: null, tex: null, sig: '' });
+  frames[j] = { mat, g: null, tex: null, sig: '', w: res, h: res * 2 / 3 };
+}
+// The top four, on the far wall beside the board
+const farWall = new THREE.Group();
+farWall.position.set(0, 0, -ROOM / 2 + 0.02);   // facing into the room, toward the door
+scene.add(farWall);
+const FW = 1.5, FH = 1.0;                         // a featured picture: about four times a wall frame
+const FX = 3.3, FY = [2.52, 1.28];                // left and right of the board, two high
+for (let j = 0; j < TOP; j++) hang(farWall, j, (j % 2 ? 1 : -1) * FX, FY[Math.floor(j / 2)], FW, FH, 0.06, 900);
+// The side walls, from #5 on
+for (let k = 0; k < PER_WALL * 2; k++) {
+  const wall = walls[Math.floor(k / PER_WALL)], n = k % PER_WALL;
+  hang(wall, TOP + k, (n % COLS - (COLS - 1) / 2) * STEP_X, TOP_Y - Math.floor(n / COLS) * STEP_Y, PW, PH, 0.04, 600);
 }
 function ownCanvas(f) {   // a frame's own picture, made the first time a doodle hangs in it
   if (!f.tex) {
-    const cv = document.createElement('canvas'); cv.width = 600; cv.height = 400;
+    const cv = document.createElement('canvas'); cv.width = f.w; cv.height = f.h;
     f.g = cv.getContext('2d');
     f.tex = new THREE.CanvasTexture(cv); f.tex.colorSpace = THREE.SRGBColorSpace; f.tex.anisotropy = 4;
   }
@@ -97,8 +109,8 @@ function paintFrame(j) {
   f.sig = sig;
   if (!it) { f.mat.map = emptyTex; return; }
   ownCanvas(f);
-  if (!paint(f.g, 600, 400, art[it.id])) {
-    paper(f.g, 600, 400, 'Loading…');
+  if (!paint(f.g, f.w, f.h, art[it.id])) {
+    paper(f.g, f.w, f.h, 'Loading…');
     loadArt(it.id).then(a => { if (a) paintFrame(j); });
   }
   f.tex.needsUpdate = true;
@@ -133,6 +145,22 @@ for (const wall of walls) {
     const pool = new THREE.Mesh(new THREE.PlaneGeometry(STEP_X * 1.05, POOL_H), poolMat);      // the light on the wall
     pool.position.set(x, LAMP_Y - POOL_H / 2, 0.006);
     wall.add(bar, bulb, arm, pool);
+  }
+}
+// One wider lamp over each pair of featured frames, lighting both
+{
+  const top = FY[0] + FH / 2 + 0.06 + 0.16, h = top - 0.45;
+  for (const side of [-1, 1]) {
+    const x = side * FX;
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.8, 16), goldMat);
+    bar.rotation.z = Math.PI / 2; bar.position.set(x, top, 0.15);
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.007, 0.024), bulbMat);
+    bulb.position.set(x, top - 0.026, 0.15);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.15, 8), goldMat);
+    arm.rotation.x = Math.PI / 2; arm.position.set(x, top, 0.075);
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(FW * 1.25, h), poolMat);
+    pool.position.set(x, top - h / 2, 0.006);
+    farWall.add(bar, bulb, arm, pool);
   }
 }
 function paintWall() { for (let j = 0; j < SLOTS; j++) paintFrame(j); }

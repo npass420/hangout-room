@@ -233,15 +233,16 @@ makeDoor(1.6, R2 - 0.03, Math.PI, 'door');
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 0.85));   // soft, even light everywhere
-// The room's main light, a soft warm white from the middle of the ceiling (gentle, so nothing glares white)
+// The room's main light, a soft warm white hanging in the middle of the room (well below the ceiling, so it
+// doesn't make a bright patch up there)
 const roomLight = new THREE.PointLight(0xfff0dc, 5, 0, 1);
-roomLight.position.set(0, HEIGHT - 0.3, 0);
+roomLight.position.set(0, 2.2, 0);
 roomLight.castShadow = true;
 roomLight.shadow.mapSize.set(PHONE ? 512 : 1024, PHONE ? 512 : 1024);
 roomLight.shadow.bias = -0.002;
 scene.add(roomLight);
 
-// ---------- Neon: a ring hanging from the middle of the ceiling, and a tube all the way around the top corners of the room ----------
+// ---------- Neon: a ring floating under the middle of the ceiling, and a tube all the way around the top corners of the room ----------
 const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
                      ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
 const neonMats = [];   // { mat, core } for every neon layer in the room
@@ -254,15 +255,20 @@ function neonMat(opacity, core, map) {
   neonMats.push({ mat, core });
   return mat;
 }
-// The ring: hangs down from the ceiling on four thin gold cables
+// The ring: floats on its own (no cables), with a lid over the tube like a real ring light, so it shines down and out
 const RING_R = 1.3, RING_Y = HEIGHT - 0.7;
 const ring = new THREE.Group();
 scene.add(ring);
-for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
-  const len = HEIGHT - RING_Y;
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.005, 0.005, len, 6), goldMat);
-  rod.position.set(Math.cos(a) * RING_R, RING_Y + len / 2, Math.sin(a) * RING_R);
-  ring.add(rod);
+const LID_W = 0.075;                                   // how far the lid reaches past the tube on each side
+const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
+const lid = new THREE.Mesh(new THREE.RingGeometry(RING_R - LID_W, RING_R + LID_W, 180), lidMat);   // the flat top
+lid.rotation.x = -Math.PI / 2; lid.position.y = RING_Y + 0.05;
+ring.add(lid);
+const rimMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8, side: THREE.DoubleSide });   // gold, seen from both sides
+for (const r of [RING_R - LID_W, RING_R + LID_W]) {   // a gold rim down the inside and outside edges
+  const rim = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.07, 180, 1, true), rimMat);
+  rim.position.y = RING_Y + 0.015;
+  ring.add(rim);
 }
 for (const [k, op, core] of GLOW) {
   const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.011 * k, 12, 180), neonMat(op, core));
@@ -303,10 +309,6 @@ for (const turn of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {   // the far wall,
   wallWash.position.set(0, HEIGHT - 0.3, -R2 + 0.004);
   side.add(wallWash);
 }
-// A little of the neon color spills into the room
-const tintLight = new THREE.PointLight(0xffe8c4, 4, 0, 1.2);
-tintLight.position.set(0, RING_Y, 0);   // at the ring, so its color washes up onto the ceiling too
-scene.add(tintLight);
 let neonIndex = -1;
 function setNeon(i) {
   i = Number.isInteger(i) && i >= 0 && i < NEON_COLORS.length ? i : 0;
@@ -315,7 +317,6 @@ function setNeon(i) {
   const col = new THREE.Color(NEON_COLORS[i][1]);
   const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.3);    // the core is a little white-hot, but clearly the color
   for (const n of neonMats) n.mat.color.copy(n.core ? hot : col);
-  tintLight.color.copy(col);
   switchGlow.color.copy(col);
 }
 
