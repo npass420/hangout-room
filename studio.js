@@ -15,9 +15,10 @@ import { sfx, setupMute } from './sounds.js';
 // the floor gets thin gold seams drawn on so it reads as big polished tiles, and the ceiling is a darker copy.
 // Until the picture has loaded, everything is plain black stone.
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
-const wallMats = [0, 1, 2, 3].map(() => std(0x0b0a0c, 0.55, { envMap, envMapIntensity: 0.06 }));
-const floorMat = std(0x0b0a0c, 0.25, { envMap, envMapIntensity: 0.15 });
-const ceilMat = std(0x0b0a0c, 0.8);
+// All polished: their reflections come from a snapshot of this room (below), so they shine with the real neon
+const wallMats = [0, 1, 2, 3].map(() => std(0x0b0a0c, 0.32, { envMapIntensity: 0.45 }));
+const floorMat = std(0x0b0a0c, 0.25, { envMapIntensity: 0.7 });
+const ceilMat = std(0x0b0a0c, 0.38, { envMapIntensity: 0.35 });
 function stoneTex(src) {
   const t = new THREE.Texture(src);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -64,6 +65,7 @@ marbleImg.onload = () => {
   const ct = stoneTex(src);
   ct.rotation = Math.PI / 2; ct.center.set(0.5, 0.5);
   ceilMat.map = ct; ceilMat.color.setHex(0x6a6a6a); ceilMat.needsUpdate = true;
+  snapRoom();
 };
 marbleImg.onerror = () => console.warn('marble.jpg did not load; the room stays plain black');
 marbleImg.src = 'marble.jpg';
@@ -83,6 +85,23 @@ plane(ROOM, HEIGHT, wallMats[3], R2, H2, 0, 0, -Math.PI / 2);    // the right wa
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
+// The marble's reflections: a snapshot of this very room, so the polish on the floor, walls and ceiling shows the
+// real ring, neon and window (and nothing that isn't here). It's retaken when the marble loads and when the neon changes color.
+const pmrem = new THREE.PMREMGenerator(renderer);
+let roomEnv = null, snapTimer = 0;
+function snapRoom() {
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(() => {
+    const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
+    const was = hide.map(o => o.visible);
+    hide.forEach(o => { o.visible = false; });
+    const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
+    hide.forEach((o, i) => { o.visible = was[i]; });
+    if (roomEnv) roomEnv.dispose();
+    roomEnv = env;
+    for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
+  }, 100);
+}
 // Gold baseboards along the bottom of every wall
 for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
   box(w, 0.09, d, goldMat, x, 0.045, z, scene).castShadow = false;
@@ -267,21 +286,6 @@ for (const [k, op, core] of GLOW) {
   m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
   ring.add(m);
 }
-// The ring's reflection in the polished floor: a soft glowing ring right under it, in the same neon color
-{
-  const N = 256, c = document.createElement('canvas'); c.width = c.height = N;
-  const g = c.getContext('2d'), OUT = RING_R + 0.6, soft = 0.3;   // OUT: how far the picture reaches; soft: how blurry the ring is
-  const grd = g.createRadialGradient(N / 2, N / 2, 0, N / 2, N / 2, N / 2);
-  const at = r => Math.max(0, Math.min(1, r / OUT));
-  grd.addColorStop(0, '#000'); grd.addColorStop(at(RING_R - soft), '#000');
-  grd.addColorStop(at(RING_R - soft / 3), '#555'); grd.addColorStop(at(RING_R), '#fff');
-  grd.addColorStop(at(RING_R + soft / 3), '#555'); grd.addColorStop(at(RING_R + soft), '#000'); grd.addColorStop(1, '#000');
-  g.fillStyle = grd; g.fillRect(0, 0, N, N);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(OUT * 2, OUT * 2), neonMat(0.35, false, t));
-  glow.rotation.x = -Math.PI / 2; glow.position.y = 0.004;
-  scene.add(glow);
-}
 // The corner tube: runs around the room right where the walls meet the ceiling, with its glow washing
 // onto the ceiling and down the wall, like real cove lighting
 function fadeTex(brightAtTop) {   // white fading to black, for the glow wash (black adds nothing when glowing)
@@ -325,6 +329,7 @@ function setNeon(i) {
   const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.3);    // the core is a little white-hot, but clearly the color
   for (const n of neonMats) n.mat.color.copy(n.core ? hot : col);
   switchGlow.color.copy(col);
+  snapRoom();   // the marble's reflections change color too
 }
 
 // The light switch on the wall beside the entry door: click it to change the neon color for everyone
