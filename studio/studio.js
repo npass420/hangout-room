@@ -1,6 +1,7 @@
 // =====================================================================
 // studio.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
 // walking around, the people in the room, chat, and the main loop. The swirling portal by the door takes you back to the Cave.
+// You walk in through grand black and gold doors (sdoor.jpg, a Kindroid picture) that swing open in front of you.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -10,6 +11,7 @@ import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, ca
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
 import { sfx, setupMute } from '../sounds.js';
 import { makePortal, travelHome } from '../portal.js';
+import { makeEntrance, doorSpan } from '../entrance.js';
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
 // The picture is big enough to use once per surface, so nothing repeats: each wall shows a different part of it,
@@ -82,6 +84,10 @@ function plane(w, h, mat, x, y, z, rx, ry) {
   return m;
 }
 const H2 = HEIGHT / 2, R2 = ROOM / 2;
+// The way in: grand black and gold gallery doors, cut out of their picture (where they sit in it, as parts of its size)
+const DOOR_X = 1.6;
+const ENTRANCE = { file: new URL('door.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
+  door: { x0: 0.256, x1: 0.740, top: 0.137, bottom: 0.923 }, frameMat: goldMat };
 plane(ROOM, HEIGHT, wallMats[0], 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
 plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
 plane(ROOM, HEIGHT, wallMats[2], -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
@@ -106,9 +112,13 @@ function snapRoom() {
     for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
   }, 100);
 }
-// Gold baseboards along the bottom of every wall
-for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
-  box(w, 0.09, d, goldMat, x, 0.045, z, scene).castShadow = false;
+// Gold baseboards along the bottom of every wall (stopping at the doorway)
+{
+  const a = DOOR_X - doorSpan(ENTRANCE), b = DOOR_X + doorSpan(ENTRANCE);
+  for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [(a - R2) / 2, R2 - 0.01, a + R2, 0.02], [(b + R2) / 2, R2 - 0.01, R2 - b, 0.02],
+                              [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
+    box(w, 0.09, d, goldMat, x, 0.045, z, scene).castShadow = false;
+  }
 }
 
 // ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
@@ -234,45 +244,10 @@ function updateClock() {
   clockTex.needsUpdate = true;
 }
 
-// ---------- The door on the entry wall (click it twice to leave) ----------
-// You come in through it: the room fades in from black outside this door, it swings open, you walk in and it shuts behind you.
-// The door itself hangs on a hinge so it can swing. Outside the room there's a dark wall around it, so the room only shows through the doorway.
-function makeDoor(x, z, rotY, tag) {
-  const g = new THREE.Group();
-  const wood = std(0x2a1a10, 0.55, { envMap, envMapIntensity: 0.2 });
-  const panel = std(0x1e130b, 0.6);
-  const leaf = new THREE.Group();                             // the part that swings, turning on its hinge side
-  leaf.position.x = -0.45;
-  g.add(leaf);
-  box(0.9, 2.05, 0.05, wood, 0.45, 1.025, 0, leaf);           // door
-  for (const y of [0.55, 1.45]) for (const s of [1, -1]) box(0.66, 0.62, 0.02, panel, 0.45, y, s * 0.03, leaf);   // raised panels, both sides
-  for (const s of [1, -1]) {                                  // a knob on each side
-    const knob = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), goldMat);
-    knob.position.set(0.79, 1.0, s * 0.06);
-    leaf.add(knob);
-  }
-  box(0.08, 2.15, 0.07, goldMat, -0.49, 1.075, 0, g);          // frame
-  box(0.08, 2.15, 0.07, goldMat, 0.49, 1.075, 0, g);
-  box(1.06, 0.08, 0.07, goldMat, 0, 2.15, 0, g);
-  g.position.set(x, 0, z);
-  g.rotation.y = rotY;
-  g.traverse(o => { if (o.isMesh) o.userData[tag] = true; });
-  scene.add(g);
-  return leaf;
-}
-const DOOR_X = 1.6;
-const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
-{ // The outside of the entry wall, around the doorway (only seen on the way in)
-  const out = new THREE.MeshBasicMaterial({ color: 0x0a0806 });
-  const side = (w, h, x, y) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), out); m.position.set(x, y, R2 + 0.002); scene.add(m); };
-  const L = DOOR_X - 0.53 + R2, Rw = R2 - DOOR_X - 0.53;
-  side(L, HEIGHT, -R2 + L / 2, H2);
-  side(Rw, HEIGHT, R2 - Rw / 2, H2);
-  side(1.06, HEIGHT - 2.19, DOOR_X, 2.19 + (HEIGHT - 2.19) / 2);
-  const step = new THREE.Mesh(new THREE.PlaneGeometry(3, 2), out);   // the ground just outside
-  step.rotation.x = -Math.PI / 2; step.position.set(DOOR_X, 0, R2 + 1);
-  scene.add(step);
-}
+// ---------- The way in: the front of the building outside, and its doors (click them twice to leave) ----------
+// You come in through them: the room fades in with you a few steps outside, the doors swing open, you walk in and they
+// shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
+const entrance = makeEntrance(ENTRANCE);
 
 // The portal home: a little swirling orb on a gold stand, just inside the door to the right (one click takes you back to the Cave)
 const portal = makePortal(3.1, R2 - 0.8);
@@ -367,7 +342,7 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
   toggle.position.z = 0.015;
   switchGroup.add(plate, toggle);
-  switchGroup.position.set(2.5, 1.25, R2 - 0.015);
+  switchGroup.position.set(2.62, 1.25, R2 - 0.015);
   switchGroup.rotation.y = Math.PI;
   switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
   scene.add(switchGroup);
@@ -897,25 +872,24 @@ renderer.setAnimationLoop(() => {
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : window.requestAnimationFrame(f)); window.requestAnimationFrame(f); });
 let intro = { t: -1 };                                // -1 until the Cave says go
-const OUTSIDE = new THREE.Vector3(DOOR_X, EYE, R2 + 0.9);
+const OUTSIDE = new THREE.Vector3(DOOR_X, EYE, R2 + 2.6);   // a few steps back, looking at the front of the building
 function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k); }
-function playIntro(dt) {                              // the camera and the door, moment by moment
+function playIntro(dt) {                              // the camera and the doors, moment by moment
   if (intro.t >= 0) intro.t += dt;
   const t = Math.max(0, intro.t);
-  const open = easeIO((t - 0.5) / 0.7) - easeIO((t - 2.4) / 0.7);   // swings open, then shut behind you
-  doorLeaf.rotation.y = -1.75 * open;
-  if (intro.t >= 0.4 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as it opens
-  const k = easeIO((t - 0.9) / 1.5);                  // the walk: through the doorway, then over to your spot
+  entrance.setOpen(easeIO((t - 0.8) / 0.9) - easeIO((t - 3.4) / 0.8));   // the doors swing open, then shut behind you
+  if (intro.t >= 0.7 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as they open
+  const k = easeIO((t - 1.2) / 2.3);                  // the walk: through the doorway, then over to your spot
   const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
   const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
   camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE, z);
   camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
-  if (t > 3.2) { doorLeaf.rotation.y = 0; intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
+  if (t > 4.3) { entrance.setOpen(0); intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
 }
 window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
 camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
 (async () => {
-  await Promise.race([Promise.all([marbleLoaded, neonLoaded, get(ref(db, 'room/sketch/doodles')), get(ref(db, 'room/sketch/gallery'))]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  await Promise.race([Promise.all([marbleLoaded, neonLoaded, entrance.loaded, get(ref(db, 'room/sketch/doodles')), get(ref(db, 'room/sketch/gallery'))]), wait(8000)]);   // a slow connection doesn't keep you out forever
   await wait(300);                                    // the reflection snapshot is taken just after the pictures land
   renderer.compile(scene, camera);
   renderer.render(scene, camera);
