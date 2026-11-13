@@ -785,7 +785,7 @@ renderer.setAnimationLoop(() => {
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt, t);
   pressFeet();
-  renderer.render(scene, camera);
+  if (!skee.render()) renderer.render(scene, camera);   // while you play skee-ball, it draws its own split screen
 });
 
 // ---------- Coming in: the room gets ready behind the Cave (which is black by now), then you walk in through the door ----------
@@ -815,5 +815,5 @@ camera.position.copy(OUTSIDE); camera.rotation.set(0.04, 0, 0);
   renderer.compile(scene, camera);
   renderer.render(scene, camera);
   await frames(3);
-  window.dispatchEvent(new Event('room-ready'));
+  window.dispatchEvent(new Event('room-show') && new Event('room-ready'));
 })();
