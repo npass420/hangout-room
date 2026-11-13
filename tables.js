@@ -1,6 +1,7 @@
 // =====================================================================
-// tables.js — the Table Room: dark polished wood, three tables (Checkers, Chess, Othello), a neon ring light,
-// a window and a big red dot-matrix clock. Sit in a chair to play that side; everyone else can walk up and watch.
+// tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, three tables
+// (Checkers, Chess, Othello) each under its own small warm ring light, a window and a big red dot-matrix clock.
+// Sit in a chair to play that side; everyone else can walk up and watch.
 // The games live in boardgames.js. Chat is shared with the other rooms.
 // =====================================================================
 import * as THREE from 'three';
@@ -15,14 +16,16 @@ import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, s
 document.querySelector('#ui h1').textContent = 'Table Room';
 document.title = 'Table Room';
 
-// ---------- Dark wood (Wood.jpg from Kindroid if it's in the folder, otherwise wood grain drawn here) ----------
-// The floor is long planks, the walls are upright boards, the ceiling is a darker copy. Everything polished
-// takes its reflections from a snapshot of this room (below), so the shine shows the real ring light and window.
+// ---------- Wood, wallpaper and the floor (Kindroid pictures) ----------
+// Floor.jpg is the plank floor, Wall.jpg the upright boards of the wainscot along the bottom of the walls,
+// Wood.jpg the table tops. Above the wainscot, and on the ceiling, is burgundy wallpaper (drawn here for now).
+// Everything polished takes its reflections from a snapshot of this room (below).
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 const TEX = PHONE ? 1024 : 2048;
-const floorMat = std(0xffffff, 0.24, { envMapIntensity: 0.8 });
-const wallMat = std(0xffffff, 0.42, { envMapIntensity: 0.3 });
-const ceilMat = std(0x8a8a8a, 0.6, { envMapIntensity: 0.15 });
+const floorMat = std(0x2a1e18, 0.3, { envMapIntensity: 0.7 });
+const wallMat = std(0x2a1e18, 0.4, { envMapIntensity: 0.35 });           // the wainscot
+const paperMat = std(0xffffff, 0.85, { envMapIntensity: 0.1 });           // burgundy wallpaper
+const ceilMat = std(0xffffff, 0.85, { envMapIntensity: 0.08 });           // the ceiling: the same wallpaper
 const tableMat = addShiny(std(0xffffff, 0.16, { envMapIntensity: 1 }));    // the table tops and the board frames
 const trimMat = std(0x2a170c, 0.35, { envMapIntensity: 0.4 });            // rails, baseboards and chairs
 const velvet = std(0x5a1018, 0.85);                                        // the chair cushions
@@ -73,17 +76,79 @@ function woodTex(kind, img) {
   t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = MAX_ANISO;
   return t;
 }
-function dressWood(img) {
-  const f = woodTex('floor', img), w = woodTex('wall', img);
-  f.repeat.set(4, 4);
-  w.repeat.set(5, HEIGHT / ROOM * 5);
-  const c = w.clone(); c.repeat.set(4, 4); c.needsUpdate = true;
-  floorMat.map = f; wallMat.map = w; ceilMat.map = c; tableMat.map = woodTex('slab', img);
-  if (img) {   // the photo is brighter than the drawn grain, so tone it down to a deep walnut
-    floorMat.color.setHex(0xa89488); wallMat.color.setHex(0x8a7a70); ceilMat.color.setHex(0x4a4440); tableMat.color.setHex(0xb2a294);
-  }
-  for (const m of [floorMat, wallMat, ceilMat, tableMat]) m.needsUpdate = true;
+function dressWood(img) {   // the table tops
+  tableMat.map = woodTex('slab', img);
+  if (img) tableMat.color.setHex(0xb2a294);   // the photo is brighter than the drawn grain, so tone it down to a deep walnut
+  tableMat.needsUpdate = true;
   snapRoom();
+}
+// The floor and the wainscot: the picture with the Kindroid mark trimmed off, pulled from its warm red brown toward a
+// deep dark brown, and repeated mirrored (every other copy flipped), so the edges of the picture always meet up.
+function photoTex(img, repeatX, repeatY) {
+  const S = Math.min(TEX, img.width), c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0, img.width * 0.94, img.height * 0.94, 0, 0, S, S);
+  g.globalCompositeOperation = 'saturation';       // less red...
+  g.fillStyle = 'rgba(128,128,128,0.35)'; g.fillRect(0, 0, S, S);
+  g.globalCompositeOperation = 'multiply';         // ...and darker
+  g.fillStyle = '#9a8a80'; g.fillRect(0, 0, S, S);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping; t.anisotropy = MAX_ANISO;
+  t.repeat.set(repeatX, repeatY);
+  return t;
+}
+function loadPhoto(file, mat, repeatX, repeatY) {   // a promise that's done once the picture is on, or has failed
+  return new Promise(done => {
+    const img = new Image();
+    img.onload = () => { mat.map = photoTex(img, repeatX, repeatY); mat.color.setHex(0xffffff); mat.needsUpdate = true; snapRoom(); done(); };
+    img.onerror = () => { console.warn(file + ' did not load; it stays plain dark wood'); done(); };
+    img.src = file;
+  });
+}
+// Burgundy wallpaper with a soft tone on tone damask pattern (a stand in, until there's a Kindroid wallpaper)
+function wallpaperTex() {
+  const S = 512, c = document.createElement('canvas'); c.width = c.height = S;
+  const g = c.getContext('2d'), r = (s => () => (s = (s * 16807) % 2147483647) / 2147483647)(77);
+  g.fillStyle = '#4a0e18'; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < 9000; i++) {                 // a faint fabric grain
+    g.fillStyle = `rgba(${r() < 0.5 ? '0,0,0' : '120,40,55'},${r() * 0.08})`;
+    g.fillRect(r() * S, r() * S, 1 + r() * 2, 1);
+  }
+  const motif = (cx, cy, sc) => {                  // one damask flower: a tall leafy shape, mirrored left and right
+    g.save(); g.translate(cx, cy); g.scale(sc, sc);
+    for (const m of [1, -1]) {
+      g.save(); g.scale(m, 1);
+      g.beginPath();
+      g.moveTo(0, -110);
+      g.bezierCurveTo(30, -80, 60, -60, 40, -20);
+      g.bezierCurveTo(80, -30, 90, 20, 50, 30);
+      g.bezierCurveTo(70, 60, 40, 90, 0, 110);
+      g.lineTo(0, 70);
+      g.bezierCurveTo(20, 55, 30, 35, 12, 20);
+      g.bezierCurveTo(30, 0, 20, -30, 0, -45);
+      g.closePath();
+      g.fill();
+      g.beginPath(); g.ellipse(58, -62, 10, 20, 0.6, 0, Math.PI * 2); g.fill();      // little side leaves
+      g.beginPath(); g.ellipse(62, 72, 9, 16, -0.6, 0, Math.PI * 2); g.fill();
+      g.restore();
+    }
+    g.beginPath(); g.arc(0, 0, 9, 0, Math.PI * 2); g.fill();
+    g.restore();
+  };
+  g.fillStyle = 'rgba(120,32,48,0.28)';            // the pattern: a little lighter than the paper, so it only shows in the light
+  for (const [x, y] of [[0, 0], [S, 0], [0, S], [S, S], [S / 2, S / 2]]) motif(x, y, 1.6);
+  g.fillStyle = 'rgba(120,32,48,0.16)';
+  for (const [x, y] of [[S / 2, 0], [S / 2, S], [0, S / 2], [S, S / 2]]) motif(x, y, 0.7);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = MAX_ANISO;
+  return t;
+}
+{
+  const paper = wallpaperTex();
+  paper.repeat.set(ROOM / 0.9, (HEIGHT - 1) / 0.9);   // the pattern repeats every 90 cm
+  paperMat.map = paper;
+  const top = paper.clone(); top.repeat.set(ROOM / 0.9, ROOM / 0.9); top.needsUpdate = true;
+  ceilMat.map = top;
 }
 
 // ---------- The room: four walls, the floor and the ceiling ----------
@@ -94,10 +159,11 @@ function plane(w, h, mat, x, y, z, rx, ry) {
   return m;
 }
 const H2 = HEIGHT / 2, R2 = ROOM / 2;
-plane(ROOM, HEIGHT, wallMat, 0, H2, -R2, 0, 0);              // the far wall
-plane(ROOM, HEIGHT, wallMat, 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
-plane(ROOM, HEIGHT, wallMat, -R2, H2, 0, 0, Math.PI / 2);    // the left wall
-plane(ROOM, HEIGHT, wallMat, R2, H2, 0, 0, -Math.PI / 2);    // the right wall
+const WAIN = 1.0;                                            // the wainscot comes up to the chair rail
+for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door, window, clock), left, right
+  plane(ROOM, WAIN, wallMat, x, WAIN / 2, z, 0, ry);                          // wood below
+  plane(ROOM, HEIGHT - WAIN, paperMat, x, WAIN + (HEIGHT - WAIN) / 2, z, 0, ry);   // wallpaper above
+}
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
@@ -108,10 +174,10 @@ for (const [y, h, d] of [[0.07, 0.14, 0.03], [1.0, 0.06, 0.035], [HEIGHT - 0.08,
   }
 }
 // The polish: a snapshot of this very room, taken from about table height, used for every reflection in here.
-// It's retaken when the wood loads and when the ring light changes color.
+// It's retaken as each picture loads.
 const pmrem = new THREE.PMREMGenerator(renderer);
 let roomEnv = null, snapTimer = 0;
-const reflective = [floorMat, wallMat, ceilMat, trimMat];
+const reflective = [floorMat, wallMat, paperMat, ceilMat, trimMat];
 function snapRoom() {
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => {
@@ -133,7 +199,9 @@ const woodLoaded = new Promise(r => { woodDone = r; });
 const woodImg = new Image();
 woodImg.onload = () => { dressWood(woodImg); woodDone(); };
 woodImg.onerror = () => { dressWood(null); woodDone(); };   // no picture: wood grain drawn here instead
-woodImg.src = 'Wood.jpg';   // the capital W matters on the website
+woodImg.src = 'Wood.jpg';   // the capital letters matter on the website
+const floorLoaded = loadPhoto('Floor.jpg', floorMat, ROOM / 1.8, ROOM / 1.8);   // one copy of the picture covers 1.8 meters
+const wallLoaded = loadPhoto('Wall.jpg', wallMat, ROOM / 1.0, 1);              // and the wainscot is a meter tall
 
 // ---------- Warm wall lamps: a small gold sconce with a soft pool of light up and down the wall ----------
 const poolCv = document.createElement('canvas'); poolCv.width = 128; poolCv.height = 256;
@@ -147,7 +215,7 @@ const poolCv = document.createElement('canvas'); poolCv.width = 128; poolCv.heig
   g.restore();
 }
 const poolTex = new THREE.CanvasTexture(poolCv); poolTex.colorSpace = THREE.SRGBColorSpace;
-const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
 const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
 for (const [x, z, ry] of [[-2.2, -R2, 0], [2.2, -R2, 0], [-R2, -1.8, Math.PI / 2], [-R2, 1.8, Math.PI / 2], [R2, -1.8, -Math.PI / 2], [R2, 1.8, -Math.PI / 2]]) {
   const s = new THREE.Group();
@@ -325,78 +393,7 @@ const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
 }
 
 // ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 2.3));   // soft, warm light everywhere
-
-// ---------- Neon: a ring floating over the middle table ----------
-const NEON_COLORS = [['Warm white', 0xffe8c4], ['Yellow', 0xffd23a], ['Orange', 0xff9a2e], ['Pink', 0xff5fa8],
-                     ['Purple', 0xb05cff], ['Blue', 0x3d8bff], ['Green', 0x3dff8a], ['Red', 0xff3b3b]];
-const neonMats = [];   // { mat, core } for every neon layer in the room
-// A neon tube is a thin bright core with layers of colored glow around it. The layers are kept faint so they add up
-// to the color itself instead of washing out to white.
-const GLOW = [[1, 1.0, true], [2.2, 0.42, false], [4.5, 0.16, false], [9, 0.06, false]];   // [size, opacity, is the core]
-function neonMat(opacity, core, map) {
-  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, map: map || null, transparent: true, opacity, depthWrite: false,
-    blending: THREE.AdditiveBlending, toneMapped: false });
-  neonMats.push({ mat, core });
-  return mat;
-}
-// The ring: floats on its own (no cables), with a lid over the tube like a real ring light, so it shines down and out
-const RING_R = 1.3, RING_Y = HEIGHT - 0.8;
-const ring = new THREE.Group();
-ring.position.z = -0.4;   // right over the chess table
-scene.add(ring);
-const LID_W = 0.075;                                   // how far the lid reaches past the tube on each side
-const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
-const lid = new THREE.Mesh(new THREE.RingGeometry(RING_R - LID_W, RING_R + LID_W, 180), lidMat);   // the flat top
-lid.rotation.x = -Math.PI / 2; lid.position.y = RING_Y + 0.05;
-ring.add(lid);
-const rimMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8, side: THREE.DoubleSide });   // gold, seen from both sides
-for (const r of [RING_R - LID_W, RING_R + LID_W]) {   // a gold rim down the inside and outside edges
-  const rim = new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.07, 180, 1, true), rimMat);
-  rim.position.y = RING_Y + 0.015;
-  ring.add(rim);
-}
-for (const [k, op, core] of GLOW) {
-  const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.011 * k, 12, 180), neonMat(op, core));
-  m.rotation.x = Math.PI / 2; m.position.y = RING_Y;
-  ring.add(m);
-}
-let neonIndex = -1;
-function setNeon(i) {
-  i = Number.isInteger(i) && i >= 0 && i < NEON_COLORS.length ? i : 0;
-  if (i === neonIndex) return;
-  neonIndex = i;
-  const col = new THREE.Color(NEON_COLORS[i][1]);
-  const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.3);    // the core is a little white-hot, but clearly the color
-  for (const n of neonMats) n.mat.color.copy(n.core ? hot : col);
-  switchGlow.color.copy(col);
-  snapRoom();   // the reflections change color too
-}
-
-// The light switch on the wall beside the entry door: click it to change the neon color for everyone
-const switchGroup = new THREE.Group();
-const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: false });
-(function lightSwitch() {
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.15, 0.015), goldMat);
-  const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
-  toggle.position.z = 0.015;
-  switchGroup.add(plate, toggle);
-  switchGroup.position.set(2.5, 1.25, R2 - 0.015);
-  switchGroup.rotation.y = Math.PI;
-  switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
-  scene.add(switchGroup);
-})();
-setNeon(0);
-onValue(ref(db, 'tables/decor/neon'), s => setNeon(s.val()));
-const neonLoaded = get(ref(db, 'tables/decor/neon'));
-function nextNeon() {
-  if (!S.myName) return;
-  const i = (Math.max(0, neonIndex) + 1) % NEON_COLORS.length;
-  set(ref(db, 'tables/decor/neon'), i).catch(e => console.warn('Light switch', e));
-  setNeon(i);
-  showBanner(`💡 ${NEON_COLORS[i][0]}`, 1.5);
-  sfx.ping();
-}
+scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm light everywhere (the tables get their own)
 
 // ---------- The three tables, each with a chair on either side ----------
 const TABLES = { checkers: [-3, -0.4], chess: [0, -0.4], othello: [3, -0.4] };
@@ -447,6 +444,40 @@ for (const [key, [tx, tz]] of Object.entries(TABLES)) {
   }
 }
 startGames(TABLES, tableMat, tableGold);
+
+// ---------- A small warm ring light floating low over each table ----------
+// A glowing tube under a dark lid with a gold rim, and a real light shining down from it, so each board sits in its
+// own warm pool of light and the room falls off into shadow around it.
+const RING_R = 0.44, RING_Y = 2.05;
+const glowMats = [[1, 1.0, 0xfff0c8], [2.2, 0.42, 0xffc860], [4.5, 0.16, 0xffc860], [9, 0.06, 0xffc860]]   // [size, opacity, color]
+  .map(([k, op, col]) => [k, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false,
+    blending: THREE.AdditiveBlending, toneMapped: false })]);
+const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
+const rimMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8, side: THREE.DoubleSide });   // gold, seen from both sides
+for (const [tx, tz] of Object.values(TABLES)) {
+  const ring = new THREE.Group();
+  ring.position.set(tx, RING_Y, tz);
+  scene.add(ring);
+  const LID_W = 0.05;
+  const lid = new THREE.Mesh(new THREE.RingGeometry(RING_R - LID_W, RING_R + LID_W, 96), lidMat);   // the flat top
+  lid.rotation.x = -Math.PI / 2; lid.position.y = 0.035;
+  ring.add(lid);
+  for (const rr of [RING_R - LID_W, RING_R + LID_W]) {   // a gold rim down the inside and outside edges
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(rr, rr, 0.05, 96, 1, true), rimMat);
+    rim.position.y = 0.012;
+    ring.add(rim);
+  }
+  for (const [k, mat] of glowMats) {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.008 * k, 12, 96), mat);
+    m.rotation.x = Math.PI / 2;
+    ring.add(m);
+  }
+  const lamp = new THREE.SpotLight(0xffc977, 9, 4, 0.75, 0.7, 1.2);   // the light it throws down onto the table
+  lamp.position.set(tx, RING_Y - 0.02, tz);
+  lamp.target.position.set(tx, TABLE_Y, tz);
+  if (!PHONE) { lamp.castShadow = true; lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0005; }
+  scene.add(lamp, lamp.target);
+}
 
 // ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
 const WALK = 2.2;     // walking speed, meters a second
@@ -889,7 +920,6 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   const u = hit.object.userData;
   if (u.chair) return { chair: u.chair };
   if (u.door) return { door: true };
-  if (u.lightSwitch) return { lightSwitch: true };
   if (u.floor) return { floor: hit.point };
   return null;
 }
@@ -935,7 +965,6 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.square !== undefined) tap(S.seat.key, p.square);
   else if (p.chair) sitDown(p.chair.key, p.chair.side);
-  else if (p.lightSwitch) nextNeon();
   else if (p.door) leaveRoom();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
@@ -1009,7 +1038,7 @@ function playIntro(dt) {                              // the camera and the door
 window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
 camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
 (async () => {
-  await Promise.race([Promise.all([woodLoaded, neonLoaded, ...['checkers', 'chess', 'othello'].map(k => get(ref(db, 'tables/' + k)))]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  await Promise.race([Promise.all([woodLoaded, floorLoaded, wallLoaded, ...['checkers', 'chess', 'othello'].map(k => get(ref(db, 'tables/' + k)))]), wait(8000)]);   // a slow connection doesn't keep you out forever
   await wait(300);                                    // the reflection snapshot is taken just after the pictures land
   renderer.compile(scene, camera);
   renderer.render(scene, camera);

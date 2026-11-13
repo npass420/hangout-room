@@ -260,7 +260,8 @@ const knightHead = (() => {   // a horse's head, cut out and given some thicknes
 
 const ckGeo = new THREE.CylinderGeometry(0.038, 0.04, 0.014, 40);
 const ckRidge = new THREE.TorusGeometry(0.03, 0.0025, 8, 40);
-const discGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.008, 40);
+const DISC_R = CELL * 0.42, DISC_H = 0.006;          // a disc fits inside its square, with a little gap to the next one
+const discGeo = new THREE.CylinderGeometry(DISC_R, DISC_R, DISC_H, 40);
 
 // Everything glossy here takes the room's reflection (tables.js hands it over with setRoomEnv)
 const shiny = [];
@@ -348,11 +349,11 @@ function makeGame(key, x, z, frameMat, goldMat) {
     G.discs = [];
     for (let i = 0; i < 64; i++) {
       const g = new THREE.Group();
-      const b = new THREE.Mesh(discGeo, G.pieceMats[1]); b.position.y = 0.004;
-      const w = new THREE.Mesh(discGeo, G.pieceMats[2]); w.position.y = -0.004;
+      const b = new THREE.Mesh(discGeo, G.pieceMats[1]); b.position.y = DISC_H / 2;
+      const w = new THREE.Mesh(discGeo, G.pieceMats[2]); w.position.y = -DISC_H / 2;
       b.castShadow = w.castShadow = true;
       g.add(b, w);
-      g.position.copy(cellPos(i, TOP + 0.0085));
+      g.position.copy(cellPos(i, TOP + DISC_H + 0.0005));
       g.visible = false;
       g.traverse(o => { if (o.isMesh) { o.userData.game = key; o.userData.sq = i; } });
       G.group.add(g);
@@ -723,7 +724,7 @@ export function updateGames(dt) {
       for (const d of G.discs) {
         if (d.drop !== undefined) {   // a newly placed disc drops in
           d.drop = Math.min(1, d.drop + dt / 0.25);
-          d.g.position.y = TOP + 0.0085 + (1 - easeInOut(d.drop)) * 0.06;
+          d.g.position.y = TOP + DISC_H + 0.0005 + (1 - easeInOut(d.drop)) * 0.06;
           if (d.drop >= 1) delete d.drop;
         }
         if (d.t >= 1) continue;
@@ -732,7 +733,7 @@ export function updateGames(dt) {
         const e = easeInOut(d.t);
         d.rot = d.from + (d.to - d.from) * e;
         d.g.rotation.x = d.rot;
-        d.g.position.y = TOP + 0.0085 + Math.sin(d.t * Math.PI) * 0.03;
+        d.g.position.y = TOP + DISC_H + 0.0005 + Math.sin(d.t * Math.PI) * 0.03;
       }
     }
   }
