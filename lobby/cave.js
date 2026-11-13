@@ -4,7 +4,9 @@
 // (the Doodle Gallery) or an open door (the Table Room). The screen flashes white (or warm gold for a door), fades to
 // black, and only then does that room's code load; a little snowflake turns while it does. Then the room fades in and
 // you walk in through its door. More places later: give a door its file in PLACES below and it thaws open.
+// Coming back through a room's portal, the Cave fades in from black.
 // =====================================================================
+import { sfx } from '../sounds.js';
 const PLACES = {
   orb:   { name: 'Doodle Gallery', file: '../studio/studio.js' },
   left:  { name: 'Table Room', file: '../table/tables.js' },
@@ -19,6 +21,17 @@ const nameTip = document.getElementById('nameTip');
 const loadFlake = document.getElementById('loadFlake');
 const PHONE = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || Math.min(window.innerWidth, window.innerHeight) < 600;
 const DEG = Math.PI / 180;
+// Back from a room through its portal: start black and fade in
+try {
+  if (sessionStorage.getItem('caveFadeIn') === '1') {
+    sessionStorage.removeItem('caveFadeIn');
+    const veil = document.createElement('div');
+    veil.style.cssText = 'position:fixed;inset:0;z-index:100;background:#000;pointer-events:none;transition:opacity 1.2s ease-out';
+    document.body.appendChild(veil);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => { veil.style.opacity = '0'; }));
+    setTimeout(() => veil.remove(), 1500);
+  }
+} catch (e) {}
 const M = 40;   // extra edge drawn around the layers, so they can drift with the mouse without showing a gap
 
 function seeded(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -363,6 +376,7 @@ function tryEnter(place) {
   setName(name);
   going = place; goneAt = performance.now(); hover = null;
   nameBox.classList.add('leaving');
+  sfx.whoosh();   // through the portal
 }
 // Once the screen is black: load the room, say you're here, and wait for it to be ready before showing it
 function loadRoom() {

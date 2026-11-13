@@ -1,6 +1,6 @@
 // =====================================================================
 // studio.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
-// walking around, the people in the room, chat, and the main loop
+// walking around, the people in the room, chat, and the main loop. The swirling portal by the door takes you back to the Cave.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -9,6 +9,7 @@ import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, ca
          box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
 import { sfx, setupMute } from '../sounds.js';
+import { makePortal, travelHome } from '../portal.js';
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
 // The picture is big enough to use once per surface, so nothing repeats: each wall shows a different part of it,
@@ -272,6 +273,9 @@ const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
   step.rotation.x = -Math.PI / 2; step.position.set(DOOR_X, 0, R2 + 1);
   scene.add(step);
 }
+
+// The portal home: a little swirling orb on a gold stand, just inside the door to the right (one click takes you back to the Cave)
+const portal = makePortal(3.1, R2 - 0.8);
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 1.0));   // soft, even light everywhere
@@ -580,7 +584,7 @@ whoBtn.addEventListener('click', () => {
 });
 setupMute(document.getElementById('mute'));
 
-// ---------- Leaving the room: the 🚪 button or the door, clicked twice ----------
+// ---------- Leaving the room: the portal (one click), or the 🚪 button or the door (clicked twice) ----------
 const leaveBtn = document.getElementById('leaveRoom');
 let leaveArmed = 0;
 function leaveRoom() {
@@ -592,9 +596,11 @@ function leaveRoom() {
     setTimeout(() => { if (Date.now() - leaveArmed >= 3000) leaveBtn.textContent = '🚪 Leave'; }, 3100);
     return;
   }
-  // Leaving drops the pen if you have it; the page reloads to the name screen
-  sketchLeave();
-  remove(ref(db, 'room/presence/' + myId)).finally(() => location.reload());
+  goHome();
+}
+function goHome() {   // through the portal and back to the Cave; leaving drops the pen if you have it
+  if (!S.myName) return;
+  travelHome(() => { sketchLeave(); return remove(ref(db, 'room/presence/' + myId)); });
 }
 leaveBtn.addEventListener('click', leaveRoom);
 
@@ -792,6 +798,7 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (u.sketch) return { sketch: true };
   if (u.door) return { door: true };
   if (u.lightSwitch) return { lightSwitch: true };
+  if (u.portal) return { portal: true };
   if (u.gallery) return { gallery: true };   // the gallery opens its own viewer
   if (u.floor) return { floor: hit.point };
   return null;
@@ -825,7 +832,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
-    canvas.style.cursor = p && (p.sketch || p.door || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
+    canvas.style.cursor = p && (p.sketch || p.door || p.lightSwitch || p.portal || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
@@ -837,6 +844,7 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.sketch) enterSketch();
   else if (p.lightSwitch) nextNeon();
+  else if (p.portal) goHome();
   else if (p.door) leaveRoom();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
@@ -876,6 +884,7 @@ renderer.setAnimationLoop(() => {
     if (markerFade <= 0) marker.visible = false;
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt);
+  portal.update(dt);
   updateSketch(dt);
   updateClock();
   updateSky();
@@ -895,6 +904,7 @@ function playIntro(dt) {                              // the camera and the door
   const t = Math.max(0, intro.t);
   const open = easeIO((t - 0.5) / 0.7) - easeIO((t - 2.4) / 0.7);   // swings open, then shut behind you
   doorLeaf.rotation.y = -1.75 * open;
+  if (intro.t >= 0.4 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as it opens
   const k = easeIO((t - 0.9) / 1.5);                  // the walk: through the doorway, then over to your spot
   const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
   const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside

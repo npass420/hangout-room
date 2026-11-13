@@ -2,7 +2,7 @@
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, three tables
 // (Checkers, Chess, Othello) each under its own small warm ring light, a window and a big red dot-matrix clock.
 // Sit in a chair to play that side; everyone else can walk up and watch.
-// The games live in boardgames.js. Chat is shared with the other rooms.
+// The games live in boardgames.js. Chat is shared with the other rooms. The swirling portal by the door takes you back to the Cave.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -10,6 +10,7 @@ import { ref, set, get, update, remove, push, onValue, onDisconnect,
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
          box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sfx, setupMute } from '../sounds.js';
+import { makePortal, travelHome } from '../portal.js';
 import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, showPanel, sit, stand, seatTaken, seatHolder,
          tap, canTap, pickables, squareAt } from './boardgames.js';
 
@@ -366,6 +367,9 @@ const doorLeaf = makeDoor(DOOR_X, R2 - 0.03, Math.PI, 'door');
   scene.add(step);
 }
 
+// The portal home: a little swirling orb on a gold stand, just inside the door to the right (one click takes you back to the Cave)
+const portal = makePortal(3.1, R2 - 0.8);
+
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm light everywhere (the tables get their own)
 
@@ -687,7 +691,7 @@ whoBtn.addEventListener('click', () => {
 });
 setupMute(document.getElementById('mute'));
 
-// ---------- Leaving the room: the 🚪 button or the door, clicked twice ----------
+// ---------- Leaving the room: the portal (one click), or the 🚪 button or the door (clicked twice) ----------
 const leaveBtn = document.getElementById('leaveRoom');
 let leaveArmed = 0;
 function leaveRoom() {
@@ -699,9 +703,11 @@ function leaveRoom() {
     setTimeout(() => { if (Date.now() - leaveArmed >= 3000) leaveBtn.textContent = '🚪 Leave'; }, 3100);
     return;
   }
-  // Leaving gives up your seat; the page reloads to the Cave
-  if (S.seat) stand(S.seat.key, S.seat.side);
-  remove(ref(db, 'tables/presence/' + myId)).finally(() => location.reload());
+  goHome();
+}
+function goHome() {   // through the portal and back to the Cave; leaving gives up your seat
+  if (!S.myName) return;
+  travelHome(() => { if (S.seat) stand(S.seat.key, S.seat.side); return remove(ref(db, 'tables/presence/' + myId)); });
 }
 leaveBtn.addEventListener('click', leaveRoom);
 
@@ -923,6 +929,7 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.chair) return { chair: u.chair };
+  if (u.portal) return { portal: true };
   if (u.door) return { door: true };
   if (u.floor) return { floor: hit.point };
   return null;
@@ -974,6 +981,7 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.square !== undefined) tap(S.seat.key, p.square);
   else if (p.chair) sitDown(p.chair.key, p.chair.side);
+  else if (p.portal) goHome();
   else if (p.door) leaveRoom();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
@@ -1021,6 +1029,7 @@ renderer.setAnimationLoop(() => {
     if (k !== panelKey) { panelKey = k; showPanel(k); }
   }
   moveAvatars(dt);
+  portal.update(dt);
   updateGames(dt);
   updateClock();
   updateSky();
@@ -1040,6 +1049,7 @@ function playIntro(dt) {                              // the camera and the door
   const t = Math.max(0, intro.t);
   const open = easeIO((t - 0.5) / 0.7) - easeIO((t - 2.4) / 0.7);   // swings open, then shut behind you
   doorLeaf.rotation.y = -1.75 * open;
+  if (intro.t >= 0.4 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as it opens
   const k = easeIO((t - 0.9) / 1.5);                  // the walk: through the doorway, then over to your spot
   const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
   const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
