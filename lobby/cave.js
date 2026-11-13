@@ -1,10 +1,10 @@
 // =====================================================================
 // cave.js — the Cave: the front door of the site. The inside of a great snow block igloo (cave.jpg, a Kindroid image),
 // with a glowing snow globe on a mound in the middle and an old carved stone archway on each side.
-// Pick your name, then touch the snow globe (the Doodle Gallery) or the open doorway on the right (the Table Room).
+// Pick your name, then touch the snow globe (the Doodle Gallery) or the doorway on the right (the Table Room).
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
-// The closed door on the left is the Game Room, coming soon: give it its file in PLACES below and it opens for clicks.
+// The doorway on the left is the Game Room, coming soon: give it its file in PLACES below and it opens for clicks.
 // The swirl in the middle of the globe turns slowly, and snow drifts down inside the glass.
 // Coming back through a room's portal, the Cave fades in from black.
 // =====================================================================
@@ -19,7 +19,7 @@ const PLACES = {
 const ASPECT = 0.935;   // the picture's height, as a part of its width
 const GLOBE = { x: 0.499, y: 0.510, r: 0.137, base: 0.590 };   // the glass ball, and where the snow mound starts covering it
 const ARCHES = {   // each stone arch (for clicks, the glow and the name), and the doorway inside it
-  left:  { x0: 0.054, x1: 0.281, top: 0.297, bottom: 0.640, door: { x0: 0.108, x1: 0.201, top: 0.358, bottom: 0.636 } },
+  left:  { x0: 0.032, x1: 0.303, top: 0.297, bottom: 0.640, door: { x0: 0.125, x1: 0.210, top: 0.389, bottom: 0.632 } },
   right: { x0: 0.732, x1: 0.979, top: 0.328, bottom: 0.640, door: { x0: 0.817, x1: 0.894, top: 0.411, bottom: 0.632 } }
 };
 
@@ -52,10 +52,20 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // with softly fading edges, so it can turn on its own while everything around it stays still.
 const SWIRL = 0.6;   // how much of the globe turns, from its middle out
 const caveImg = new Image();
-let caveReady = false, soft = null, swirl = null;
+let caveReady = false, soft = null, swirl = null, feathered = null, wings = null, wingsFor = '';
 caveImg.onload = () => {
   soft = document.createElement('canvas'); soft.width = soft.height = 48;
   soft.getContext('2d').drawImage(caveImg, 0, 0, 48, 48);
+  // For very wide screens: a copy of the picture whose left and right edges fade away, so it melts into the sides
+  feathered = document.createElement('canvas'); feathered.width = caveImg.width; feathered.height = caveImg.height;
+  const fg = feathered.getContext('2d'), fw = caveImg.width * 0.06;
+  fg.drawImage(caveImg, 0, 0);
+  fg.globalCompositeOperation = 'destination-out';
+  for (const [x0, x1] of [[0, fw], [caveImg.width, caveImg.width - fw]]) {
+    const grd = fg.createLinearGradient(x0, 0, x1, 0);
+    grd.addColorStop(0, 'rgba(0,0,0,1)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+    fg.fillStyle = grd; fg.fillRect(Math.min(x0, x1), 0, fw, caveImg.height);
+  }
   const S = caveImg.width, r = GLOBE.r * SWIRL * S, n = Math.round(r * 2);
   swirl = document.createElement('canvas'); swirl.width = swirl.height = n;
   const sg = swirl.getContext('2d');
@@ -70,7 +80,8 @@ caveImg.onerror = () => console.warn('cave.jpg did not load');
 caveImg.src = new URL('cave.jpg', import.meta.url).href;   // the picture sits next to this file
 
 // ---------- Where the picture sits on screen, worked out again whenever the window changes size ----------
-// It fills the screen, but a tall phone screen shows its whole width instead, so both doorways stay in view.
+// It fills the screen, but a tall phone screen shows its whole width instead, so both doorways stay in view, and a very
+// wide screen doesn't zoom in past the point where the arches get cut off: the sides get a soft blurred mirror of the edges.
 let W = 0, H = 0, DPR = 1, D = 0, ox = 0, oy = 0;   // the picture's width on screen and where its corner sits
 let sparkles = [], snow = [], flakes = [], haze = null;
 const M = 1.05;   // a little bigger than the screen, so it can drift with the mouse without showing an edge
@@ -78,7 +89,7 @@ function build() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
-  if (W / H >= 1 / ASPECT * 0.9) { D = Math.max(W, H / ASPECT) * M; ox = W / 2 - 0.5 * D; oy = H / 2 - 0.49 * D; }
+  if (W / H >= 1 / ASPECT * 0.9) { D = Math.min(Math.max(W, H / ASPECT), H / ASPECT * 1.7) * M; ox = W / 2 - 0.5 * D; oy = H / 2 - 0.49 * D; }
   else { D = W / 0.97; ox = W / 2 - 0.507 * D; oy = H * 0.42 - GLOBE.y * D; }
   const rnd = seeded(7);
   // Glints on the snow floor
@@ -114,6 +125,24 @@ window.addEventListener('deviceorientation', e => {
   if (e.gamma == null) return;
   lookTo = { x: clamp(e.gamma / 25, -1, 1), y: clamp((e.beta - 45) / 25, -1, 1) };
 });
+function makeWings() {   // the sides of a very wide screen: the picture's edges mirrored outward, blurred and a little darker
+  wings = document.createElement('canvas'); wings.width = Math.round(W / 2); wings.height = Math.round(H / 2);
+  const wg = wings.getContext('2d'), k = 0.5;
+  wg.scale(k, k);
+  const B = Math.max(W, H) * 1.1;
+  wg.drawImage(soft, (W - B) / 2, (H - B) / 2, B, B);
+  wg.filter = 'blur(14px)';
+  const h = D * ASPECT;
+  for (const side of [-1, 1]) {   // flipped copies, butting up against each side of the picture
+    wg.save();
+    wg.translate(side < 0 ? ox : ox + 2 * D, 0);
+    wg.scale(-1, 1);
+    wg.drawImage(caveImg, 0, oy, D, h);
+    wg.restore();
+  }
+  wg.filter = 'none';
+  wg.fillStyle = 'rgba(8,12,36,0.3)'; wg.fillRect(0, 0, W, H);
+}
 function sx(u) { return ox + offset(DRIFT)[0] + u * D; }   // a spot in the picture, on screen
 function sy(v) { return oy + offset(DRIFT)[1] + v * D; }
 function archPath(a) {   // an arch: straight sides and a round top
@@ -254,12 +283,17 @@ function frame(now) {
   // The picture (and on a tall screen, its soft blurred copy filling the space above and below)
   g.fillStyle = '#0e1430'; g.fillRect(0, 0, W, H);
   if (caveReady) {
+    const wide = D < W;
     if (D * ASPECT < H) {
       const B = Math.max(W, H) * 1.1;
       g.drawImage(soft, (W - B) / 2, (H - B) / 2, B, B);
       g.fillStyle = 'rgba(8,12,36,0.35)'; g.fillRect(0, 0, W, H);
     }
-    g.drawImage(caveImg, sx(0), sy(0), D, D * ASPECT);
+    if (wide) {
+      if (wingsFor !== W + 'x' + H) { makeWings(); wingsFor = W + 'x' + H; }
+      g.drawImage(wings, 0, 0, W, H);
+    }
+    g.drawImage(wide ? feathered : caveImg, sx(0), sy(0), D, D * ASPECT);
     // A door you touched gives a little shiver
     for (const side of ['left', 'right']) {
       if (shake.side !== side) continue;
@@ -273,10 +307,10 @@ function frame(now) {
     }
   }
 
-  // The doors: warm light breathing in an open doorway, and a soft glow over the arch you point at
+  // The doors: warm light breathing in each doorway, and a soft glow over the arch you point at
   for (const side of ['left', 'right']) {
     const a = ARCHES[side], open = !!PLACES[side].file, lit = hover === side;
-    if (open) {
+    {
       const d = a.door, cx = sx((d.x0 + d.x1) / 2), cy = sy((d.top + d.bottom) / 2), rr = (d.bottom - d.top) * D * 0.7;
       g.save(); g.clip(archPath(d));
       g.globalCompositeOperation = 'lighter';

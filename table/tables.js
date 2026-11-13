@@ -2,7 +2,7 @@
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, three tables
 // (Checkers, Chess, Othello) each under its own small warm ring light, a window and a big red dot-matrix clock.
 // Sit in a chair to play that side; everyone else can walk up and watch.
-// The games live in boardgames.js. Chat is shared with the other rooms. The swirling portal by the door takes you back to the Cave.
+// The games live in boardgames.js. Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
 // =====================================================================
 import * as THREE from 'three';
@@ -11,7 +11,7 @@ import { ref, set, get, update, remove, push, onValue, onDisconnect,
 import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
          box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sfx, setupMute } from '../sounds.js';
-import { makePortal, travelHome } from '../portal.js';
+import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, showPanel, sit, stand, seatTaken, seatHolder,
          tap, canTap, pickables, squareAt } from './boardgames.js';
@@ -166,7 +166,7 @@ const WAIN = 1.0;                                            // the wainscot com
 // The way in: an old tavern door, cut out of its picture (where it sits in the picture, as parts of its size)
 const DOOR_X = 1.6;
 const ENTRANCE = { file: new URL('tdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
-  door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 }, frameMat: trimMat };
+  door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 }, casing: { side: 0.1, top: 0.095 }, edge: 0x24160c };
 for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door, window, clock), left, right
   plane(ROOM, WAIN, wallMat, x, WAIN / 2, z, 0, ry);                          // wood below
   plane(ROOM, HEIGHT - WAIN, paperMat, x, WAIN + (HEIGHT - WAIN) / 2, z, 0, ry);   // wallpaper above
@@ -174,8 +174,8 @@ for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], 
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
-// Baseboards, a chair rail and a crown along every wall (the baseboard and rail stop at the doorway)
-const DOOR_GAP = doorSpan(ENTRANCE);
+// Baseboards, a chair rail and a crown along every wall (the baseboard and rail tuck in under the door's surround)
+const DOOR_GAP = doorSpan(ENTRANCE) * 0.8;
 for (const [y, h, d] of [[0.07, 0.14, 0.03], [1.0, 0.06, 0.035], [HEIGHT - 0.08, 0.16, 0.06]]) {
   for (const [x, z, w, dd] of [[0, -R2 + d / 2, ROOM, d], [0, R2 - d / 2, ROOM, d], [-R2 + d / 2, 0, d, ROOM], [R2 - d / 2, 0, d, ROOM]]) {
     if (z > 0 && y < 3) {   // the entry wall: one piece each side of the doorway
@@ -315,7 +315,7 @@ function makeWallClock(x, z, rotY) {
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(1.6, ROOM / 2 - 0.03, Math.PI);   // above the door
+makeWallClock(-1.6, ROOM / 2 - 0.03, Math.PI);   // above the window
 
 function updateClock() {
   const d = new Date();
@@ -345,8 +345,6 @@ function updateClock() {
 // shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
 
-// The portal home: a little swirling orb on a gold stand, just inside the door to the right (one click takes you back to the Cave)
-const portal = makePortal(3.1, R2 - 0.8);
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm light everywhere (the tables get their own)
@@ -669,7 +667,7 @@ whoBtn.addEventListener('click', () => {
 });
 setupMute(document.getElementById('mute'));
 
-// ---------- Leaving the room: the portal (one click), or the 🚪 button or the door (clicked twice) ----------
+// ---------- Leaving the room: the 🚪 button or the door (clicked twice), then the portal whoosh back to the Cave ----------
 const leaveBtn = document.getElementById('leaveRoom');
 let leaveArmed = 0;
 function leaveRoom() {
@@ -683,7 +681,7 @@ function leaveRoom() {
   }
   goHome();
 }
-function goHome() {   // through the portal and back to the Cave; leaving gives up your seat
+function goHome() {   // the whoosh back to the Cave; leaving gives up your seat
   if (!S.myName) return;
   travelHome(() => { if (S.seat) stand(S.seat.key, S.seat.side); return remove(ref(db, 'tables/presence/' + myId)); });
 }
@@ -907,7 +905,6 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.chair) return { chair: u.chair };
-  if (u.portal) return { portal: true };
   if (u.door) return { door: true };
   if (u.floor) return { floor: hit.point };
   return null;
@@ -959,7 +956,6 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.square !== undefined) tap(S.seat.key, p.square);
   else if (p.chair) sitDown(p.chair.key, p.chair.side);
-  else if (p.portal) goHome();
   else if (p.door) leaveRoom();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
@@ -1007,7 +1003,6 @@ renderer.setAnimationLoop(() => {
     if (k !== panelKey) { panelKey = k; showPanel(k); }
   }
   moveAvatars(dt);
-  portal.update(dt);
   updateGames(dt);
   updateClock();
   updateSky();

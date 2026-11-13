@@ -1,6 +1,6 @@
 // =====================================================================
 // studio.js — the Doodle Gallery room: black and gold marble, the big doodle board, the picture walls,
-// walking around, the people in the room, chat, and the main loop. The swirling portal by the door takes you back to the Cave.
+// walking around, the people in the room, chat, and the main loop. Leaving by the door whooshes you back to the Cave.
 // You walk in through grand black and gold doors (sdoor.jpg, a Kindroid picture) that swing open in front of you.
 // =====================================================================
 import * as THREE from 'three';
@@ -10,7 +10,7 @@ import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, ca
          box, std, easeInOut, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sketchViewPose, sketchEnter, sketchLeave, startSketch, updateSketch, SKETCH_NAME, BOARD_SPOT } from './sketch.js';
 import { sfx, setupMute } from '../sounds.js';
-import { makePortal, travelHome } from '../portal.js';
+import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
@@ -87,7 +87,7 @@ const H2 = HEIGHT / 2, R2 = ROOM / 2;
 // The way in: grand black and gold gallery doors, cut out of their picture (where they sit in it, as parts of its size)
 const DOOR_X = 1.6;
 const ENTRANCE = { file: new URL('sdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
-  door: { x0: 0.256, x1: 0.740, top: 0.137, bottom: 0.923 }, frameMat: goldMat };
+  door: { x0: 0.256, x1: 0.740, top: 0.137, bottom: 0.923 }, casing: { side: 0.2, top: 0.127 }, edge: 0x0c0b0b };
 plane(ROOM, HEIGHT, wallMats[0], 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
 plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
 plane(ROOM, HEIGHT, wallMats[2], -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
@@ -112,9 +112,9 @@ function snapRoom() {
     for (const m of [floorMat, ceilMat, ...wallMats]) { m.envMap = env.texture; m.needsUpdate = true; }
   }, 100);
 }
-// Gold baseboards along the bottom of every wall (stopping at the doorway)
+// Gold baseboards along the bottom of every wall (tucking in under the door's surround)
 {
-  const a = DOOR_X - doorSpan(ENTRANCE), b = DOOR_X + doorSpan(ENTRANCE);
+  const a = DOOR_X - doorSpan(ENTRANCE) * 0.8, b = DOOR_X + doorSpan(ENTRANCE) * 0.8;
   for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [(a - R2) / 2, R2 - 0.01, a + R2, 0.02], [(b + R2) / 2, R2 - 0.01, R2 - b, 0.02],
                               [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
     box(w, 0.09, d, goldMat, x, 0.045, z, scene).castShadow = false;
@@ -219,7 +219,7 @@ function makeWallClock(x, z, rotY) {
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(1.6, ROOM / 2 - 0.03, Math.PI);   // above the door
+makeWallClock(-1.6, ROOM / 2 - 0.03, Math.PI);   // above the window
 
 function updateClock() {
   const d = new Date();
@@ -249,8 +249,6 @@ function updateClock() {
 // shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
 
-// The portal home: a little swirling orb on a gold stand, just inside the door to the right (one click takes you back to the Cave)
-const portal = makePortal(3.1, R2 - 0.8);
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2b8, 0x2a2018, 1.0));   // soft, even light everywhere
@@ -342,7 +340,7 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
   toggle.position.z = 0.015;
   switchGroup.add(plate, toggle);
-  switchGroup.position.set(2.62, 1.25, R2 - 0.015);
+  switchGroup.position.set(DOOR_X + doorSpan(ENTRANCE) + 0.25, 1.25, R2 - 0.015);   // just past the door's surround
   switchGroup.rotation.y = Math.PI;
   switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
   scene.add(switchGroup);
@@ -559,7 +557,7 @@ whoBtn.addEventListener('click', () => {
 });
 setupMute(document.getElementById('mute'));
 
-// ---------- Leaving the room: the portal (one click), or the 🚪 button or the door (clicked twice) ----------
+// ---------- Leaving the room: the 🚪 button or the door (clicked twice), then the portal whoosh back to the Cave ----------
 const leaveBtn = document.getElementById('leaveRoom');
 let leaveArmed = 0;
 function leaveRoom() {
@@ -573,7 +571,7 @@ function leaveRoom() {
   }
   goHome();
 }
-function goHome() {   // through the portal and back to the Cave; leaving drops the pen if you have it
+function goHome() {   // the whoosh back to the Cave; leaving drops the pen if you have it
   if (!S.myName) return;
   travelHome(() => { sketchLeave(); return remove(ref(db, 'room/presence/' + myId)); });
 }
@@ -773,7 +771,6 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (u.sketch) return { sketch: true };
   if (u.door) return { door: true };
   if (u.lightSwitch) return { lightSwitch: true };
-  if (u.portal) return { portal: true };
   if (u.gallery) return { gallery: true };   // the gallery opens its own viewer
   if (u.floor) return { floor: hit.point };
   return null;
@@ -807,7 +804,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
-    canvas.style.cursor = p && (p.sketch || p.door || p.lightSwitch || p.portal || p.gallery || p.floor) ? 'pointer' : 'grab';
+    canvas.style.cursor = p && (p.sketch || p.door || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
@@ -819,7 +816,6 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.sketch) enterSketch();
   else if (p.lightSwitch) nextNeon();
-  else if (p.portal) goHome();
   else if (p.door) leaveRoom();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
@@ -859,7 +855,6 @@ renderer.setAnimationLoop(() => {
     if (markerFade <= 0) marker.visible = false;
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt);
-  portal.update(dt);
   updateSketch(dt);
   updateClock();
   updateSky();
