@@ -2,14 +2,14 @@
 // skeeball.js — two skee-ball machines side by side against the back wall of the Game Room, on the right.
 // Holographic Tetris cabinets (holo.jpg), a deep space runway of drifting stars, thick walls along it with the wooden
 // balls (wood.jpg) in a channel along the top of each, under Tetris covers that slide sideways open when a game starts,
-// a metal lipped hump that launches the ball onto the board, a vortex turning behind the rings, and the scoreboard above.
-// The board: polished metal rings in the middle (10 to 50), a 100 cup in each top corner, and down both sides 2 to 8 tiny
-// rings (75 low, 100 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
-// Click a machine to play: the screen splits, the hump and the board big across the top and your end along the bottom.
-// The power is a meter you set whenever you like (scroll wheel, the up and down keys, or drag on it) and it stays put.
+// a metal lipped hump that launches the ball onto the board, and a vortex turning behind the rings.
+// The board: polished metal rings in the middle (10 to 50), a small 150 cup in each top corner, and down both sides 2 to 8
+// bigger pockets (60 low, 75 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
+// Click a machine to play: the screen splits, the hump and the board big across the top with depth, and your end along
+// the bottom. The power is a 15 step meter you set whenever you like (scroll wheel, the up and down keys, or drag on it).
 // A roll is two clicks: lock your aim (the arrow follows your mouse; swing it wide to whip it off the walls), then stop the
 // spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
-// Points pop up big and fly into the scoreboard. Everyone in the room sees every roll
+// Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
 // =====================================================================
 import * as THREE from 'three';
@@ -28,17 +28,17 @@ const HUMP_TOP = Y0 + SLOPE * L + HU * (SLOPE + (KICK - SLOPE) / 2);
 const B0 = L + HU + 0.24, BL = 1.2, B1 = B0 + BL, TILT = 0.55;    // the target board: where it starts, how long, how steep
 const YB = HUMP_TOP - 0.06, TROUGH = HUMP_TOP - 0.34;    // its bottom edge, and the gutter in front of it
 const LIP = 0.045;                                       // how tall the ring lips stand
-// The board: rings in the middle (10 on the outside to 50 in the little one at the top), a 100 cup in each top corner,
-// and down both sides 2 to 8 tiny rings that sink away and pop up somewhere new after every ball (75 low, 100 high).
+// The board: rings in the middle (10 on the outside to 50 in the little one at the top), a small 150 cup in each top
+// corner, and down both sides 2 to 8 pockets that sink away and pop up somewhere new after every ball (60 low, 75 high).
 // Each ring is [across, down the machine, radius]; each hole [across, down, radius, points].
-const CC = 0.6, TINY = 0.062, TINY_HOLE = 0.036;          // the middle of the rings, and the size of a tiny ring and its hole
-const CUP = 0.078, CUP_HOLE = 0.042, CUP_U = 0.73, CUP_V = 1.04;   // the two corner cups
+const CC = 0.6, TINY = 0.085, TINY_HOLE = 0.048;          // the middle of the rings, and the size of a moving pocket and its hole
+const CUP = 0.06, CUP_HOLE = 0.033, CUP_U = 0.74, CUP_V = 1.05;   // the two little corner cups
 const CENTER = [[0, CC, 0.36, 10], [0, CC + 0.06, 0.27, 20], [0, CC + 0.12, 0.18, 30], [0, CC + 0.165, 0.12, 40], [0, CC + 0.2, 0.05, 50],
-                [-CUP_U, CUP_V, CUP, 100], [CUP_U, CUP_V, CUP, 100]];
+                [-CUP_U, CUP_V, CUP, 150], [CUP_U, CUP_V, CUP, 150]];
 const CENTER_HOLES = [[0, CC - 0.285, 0.055, 10], [0, CC - 0.135, 0.055, 20], [0, CC - 0.0075, 0.05, 30], [0, CC + 0.0975, 0.045, 40], [0, CC + 0.2, 0.036, 50],
-                      [-CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 100], [CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 100]];
-const SPOTS = [[0.58, 0.18, 75], [0.82, 0.36, 75], [0.6, 0.6, 100], [0.84, 0.74, 100]];   // the tiny rings' spots on each side
-function layoutFor(g, n) {                               // the tiny rings for ball n of game g (the same on every screen)
+                      [-CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 150], [CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 150]];
+const SPOTS = [[0.58, 0.17, 60], [0.79, 0.37, 60], [0.6, 0.6, 75], [0.79, 0.77, 75]];   // the moving pockets' spots on each side
+function layoutFor(g, n) {                               // the moving pockets for ball n of game g (the same on every screen)
   let s = (Math.floor(g / 1000) ^ Math.imul(n + 1, 2654435761)) >>> 0;
   const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
   const count = 2 + Math.floor(rnd() * 7), slots = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -139,9 +139,9 @@ const OUT = HALF + WALL;                  // from the middle of the lane to the 
 const WALL_H = 0.3;                       // how high they stand over the lane
 const VF = -0.12, VB = B1 + 0.06;         // the very front and back of a machine
 const FRONT_Z = -11 + VB + 0.02;          // the end you stand at (the back wall is at -11)
-const BACK_H = 0.55;                      // how tall the backboard (the scoreboard) stands over the top of the board
+const BACK_H = 0.2;                       // how high the walls round the board stand over it (no scoreboard: nothing above)
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
-const COL = { 10: '#ff3fa8', 20: '#b36bff', 30: '#29e6ff', 40: '#ffd36a', 50: '#ffffff', 75: '#ff8a3d', 100: '#9dff4a' };
+const COL = { 10: '#ff3fa8', 20: '#b36bff', 30: '#29e6ff', 40: '#ffd36a', 50: '#ffffff', 60: '#ff8a3d', 75: '#9dff4a', 150: '#ff4d6d' };
 const TILT_ROT = -Math.PI / 2 + Math.atan(TILT), STRETCH = Math.sqrt(1 + TILT * TILT);   // lying flat on the board
 
 function loadTex(file, setup) {   // a promise that's done once the picture is on, or has failed
@@ -224,7 +224,7 @@ for (const [p, c] of Object.entries(COL)) {
     const g = x.createRadialGradient(128, 128, 0, 128, 128, 128);   // a deep dark well with its number glowing in it
     g.addColorStop(0, '#000000'); g.addColorStop(0.75, '#07010f'); g.addColorStop(0.92, '#2a0d4a'); g.addColorStop(1, 'rgba(42,13,74,0)');
     x.fillStyle = g; x.fillRect(0, 0, 256, 256);
-    x.font = `bold ${p === '100' ? 92 : 110}px "Trebuchet MS", sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.font = `bold ${p.length > 2 ? 88 : 110}px "Trebuchet MS", sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
     x.shadowColor = c; x.shadowBlur = 26; x.fillStyle = c; x.fillText(p, 128, 136);
     x.shadowBlur = 6; x.fillStyle = '#ffffff'; x.globalAlpha = 0.7; x.fillText(p, 128, 136);
   }) });
@@ -312,8 +312,6 @@ function tinyPod(g) {   // a tiny ring and its hole, as one piece that can sink 
 const SLOT_V = k => 0.12 + k * 0.1;                  // where the balls sit along each channel
 const CH_U = HALF + WALL / 2;                        // the middle of a channel, across
 const slotY = v => H(v) + WALL_H - CH_D + R;         // a ball sitting in a channel
-const SIGN_H = BACK_H - 0.06;                        // the scoreboard fills the backboard over the board
-const SIGN_PX = Math.round(1024 * SIGN_H / W);
 function buildMachine(i) {
   const g = new THREE.Group();
   g.position.set(MACHINES[i], 0, FRONT_Z);
@@ -369,11 +367,6 @@ function buildMachine(i) {
   // light over the board, so the rims and the balls shine
   const boardLight = new THREE.PointLight(0xd8c8ff, 6, 4.5, 1.5); boardLight.position.set(0, YB + 1.4, -(B0 + 0.6)); g.add(boardLight);
   const laneLight = new THREE.PointLight(0xbfa8ff, 3, 3, 1.5); laneLight.position.set(0, Y0 + 0.9, -0.5); g.add(laneLight);
-  // the scoreboard: the whole backboard over the board
-  const sc = document.createElement('canvas'); sc.width = 1024; sc.height = SIGN_PX;
-  const sTex = new THREE.CanvasTexture(sc); sTex.colorSpace = THREE.SRGBColorSpace; sTex.anisotropy = MAX_ANISO;
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(W, SIGN_H), new THREE.MeshBasicMaterial({ map: sTex, toneMapped: false }));
-  sign.position.set(0, H(B1) + 0.04 + SIGN_H / 2, -(B1 - 0.004)); g.add(sign);
   g.traverse(o => { if (o.isMesh) o.userData.skee = i; });   // clicking any part of it means "play this one"
   // the balls
   const balls = [];
@@ -381,8 +374,8 @@ function buildMachine(i) {
     const b = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 16), woodMat);
     b.visible = false; b.userData.skee = i; g.add(b); balls.push(b);
   }
-  return { i, g, pods, covers, sc, sTex, balls, signY: H(B1) + 0.04 + SIGN_H / 2,
-           data: null, tray: 0, live: [], seen: null, signKey: '', score: 0, shown: 0, cov: 0, lay: null, layN: -1, pop: null, pops: [] };
+  return { i, g, pods, covers, balls,
+           data: null, tray: 0, live: [], seen: null, score: 0, shown: 0, cov: 0, lay: null, layN: -1, pop: null, pops: [] };
 }
 
 // ---------- The best scores, up on the back wall over the machines ----------
@@ -425,65 +418,89 @@ onValue(query(ref(db, 'game/skee/best'), orderByChild('score'), limitToLast(8)),
   paintBest();
 }, () => {});
 
-// ---------- A machine's sign ----------
 function stale(d) { return !d || d.done || serverNow() - (d.t || 0) > 120000; }   // nobody's playing it (or they vanished)
-function paintSign(m, blink) {
-  const d = m.data, free = stale(d), over = d && d.done && serverNow() - d.t < 8000, shown = Math.round(m.shown);
-  const key = [free, over, d && d.name, shown, d && d.left, blink, best[0] && best[0].score].join('|');
-  if (key === m.signKey) return;
-  m.signKey = key;
-  const x = m.sc.getContext('2d'), w = 1024, h = SIGN_PX;
-  frame(x, w, h, '#b36bff');
-  // the left side: the name of the game, who's playing and the balls left; the right side: the score, big
-  const big = Math.min(h * 0.5, 150), small = Math.min(h * 0.14, 46);
-  neonText(x, 'SKEE·BALL', 250, h * 0.3, Math.min(h * 0.22, 76), '#ff3fa8');
-  if (over) {
-    neonText(x, blink ? 'GAME OVER' : '', 250, h * 0.6, small * 1.15, '#ffd36a');
-    neonText(x, d.name, 250, h * 0.8, small, '#cdb8ff');
-    neonText(x, String(d.score), 735, h * 0.55, big, '#29e6ff', 'center', '"Courier New", monospace');
-  } else if (free) {
-    neonText(x, blink ? 'PLAY ME' : '', 735, h * 0.45, Math.min(h * 0.3, 96), '#29e6ff');
-    const bits = [d && d.name ? `last: ${d.name} ${d.score}` : '', best[0] ? `best: ${best[0].score}` : ''].filter(Boolean).join('   ·   ');
-    if (bits) neonText(x, bits, 512, h * 0.82, small * 0.8, '#ffd36a');
-  } else {
-    neonText(x, d.name, 250, h * 0.58, small, '#cdb8ff');
-    neonText(x, `balls ${d.left}`, 250, h * 0.8, small, '#ffd36a');
-    neonText(x, String(shown).padStart(4, '0'), 735, h * 0.55, big, '#29e6ff', 'center', '"Courier New", monospace');
-  }
-  m.sTex.needsUpdate = true;
+
+// ---------- Your score while you play: big neon numbers in the top corner of the screen ----------
+const hud = document.createElement('div');
+hud.style.cssText = 'position:fixed;left:18px;top:14px;z-index:25;display:none;pointer-events:none;font-family:"Trebuchet MS",sans-serif;' +
+  'color:#efe6ff;text-shadow:0 0 12px #b36bff';
+const hudScore = document.createElement('div');
+hudScore.style.cssText = 'font:bold 64px "Courier New",monospace;line-height:1;color:#dffbff;text-shadow:0 0 10px #29e6ff,0 0 26px #29e6ff';
+const hudBalls = document.createElement('div');
+hudBalls.style.cssText = 'font-weight:bold;font-size:18px;margin-top:4px;color:#ffd36a;text-shadow:0 0 10px #ffd36a';
+hud.append(hudScore, hudBalls);
+document.body.appendChild(hud);
+let hudKey = '';
+function paintHud(m) {
+  const d = m.data, key = Math.round(m.shown) + '|' + (d ? d.left : '') + '|' + !!(d && d.done);
+  if (key === hudKey) return;
+  hudKey = key;
+  hudScore.textContent = String(Math.round(m.shown)).padStart(4, '0');
+  hudBalls.textContent = !d ? '' : d.done ? 'GAME OVER' : `${d.left} ball${d.left === 1 ? '' : 's'} left`;
 }
 
-// ---------- Big numbers: popping up out of the hole when a ball drops, then flying up into the scoreboard ----------
+// ---------- Big numbers: bursting up out of the hole when a ball drops ----------
+// While you play, a huge number bursts up on your screen, hangs a moment, then flies up into your score in the corner.
+// Anyone watching from the room sees it float up off the board and fade.
+const popCss = document.createElement('style');
+popCss.textContent = '.skeePop{position:fixed;z-index:26;pointer-events:none;font:bold 120px "Trebuchet MS",sans-serif;line-height:1;' +
+  'transform:translate(-50%,-50%);white-space:nowrap;will-change:transform,opacity}';
+document.head.appendChild(popCss);
+const sv = new THREE.Vector3();
 function popNumber(m, pts, u, v) {
-  const col = COL[pts] || '#ffffff';
-  const tex = canvasTex(256, 128, x => {
+  const col = COL[pts] || '#ffffff', from = new THREE.Vector3(u, H(v) + 0.05, -v);
+  if (my === m && view && view.t >= 1) {   // yours: on the screen, big
+    sv.copy(from).applyMatrix4(m.g.matrixWorld).project(goalCam);
+    const top = window.innerHeight * (1 - STRIP);
+    const el = document.createElement('div');
+    el.className = 'skeePop'; el.textContent = '+' + pts;
+    el.style.color = '#ffffff';
+    el.style.textShadow = `0 0 12px ${col}, 0 0 30px ${col}, 0 0 60px ${col}`;
+    document.body.appendChild(el);
+    m.pops.push({ el, x: (sv.x + 1) / 2 * window.innerWidth, y: (1 - sv.y) / 2 * top, t: 0, pts, big: pts >= 75 });
+    return;
+  }
+  const tex = canvasTex(256, 128, x => {   // anyone else's: floating up off the board
     x.font = 'bold 96px "Trebuchet MS", sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
     x.shadowColor = col; x.shadowBlur = 24; x.fillStyle = col; x.fillText('+' + pts, 128, 66);
     x.shadowBlur = 4; x.fillStyle = '#ffffff'; x.globalAlpha = 0.85; x.fillText('+' + pts, 128, 66);
   });
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, toneMapped: false }));
   sp.renderOrder = 10;
-  const from = new THREE.Vector3(u, H(v) + 0.05, -v), to = new THREE.Vector3(0.18, m.signY, -(B1 - 0.05));
   m.g.add(sp);
-  m.pops.push({ sp, from, to, t: 0, pts });
+  m.pops.push({ sp, from, t: 0, pts });
 }
 function stepPops(m, dt) {
+  const hr = hudScore.getBoundingClientRect();
   for (const p of m.pops) {
     p.t += dt;
     const k = p.t;
-    if (k < 0.6) {   // up out of the hole, growing big
-      const e = 1 - Math.pow(1 - k / 0.6, 3);
-      p.sp.position.copy(p.from).add(new THREE.Vector3(0, e * 0.35, 0));
-      p.sp.scale.set(0.2 + e * 0.5, (0.2 + e * 0.5) / 2, 1);
-    } else {         // then off up into the score
-      const e = Math.min(1, (k - 0.6) / 0.5), s = 0.7 - e * 0.45;
-      p.sp.position.lerpVectors(p.from.clone().add(new THREE.Vector3(0, 0.35, 0)), p.to, e * e);
+    if (p.el) {
+      let x = p.x, y, s, o = 1;
+      if (k < 0.45) { const e = 1 - Math.pow(1 - k / 0.45, 3); y = p.y - e * 70; s = 0.3 + e * (p.big ? 1.5 : 1.15); }   // bursting up
+      else if (k < 0.85) { y = p.y - 70; s = (p.big ? 1.8 : 1.45) - 0.08 * Math.sin((k - 0.45) / 0.4 * Math.PI); }   // hanging there
+      else {                                                                                                        // flying into the score
+        const e = Math.min(1, (k - 0.85) / 0.45), ee = e * e;
+        x = p.x + (hr.left + hr.width / 2 - p.x) * ee; y = p.y - 70 + (hr.top + hr.height / 2 - p.y + 70) * ee;
+        s = (p.big ? 1.8 : 1.45) * (1 - e) + 0.35 * e; o = 1 - Math.max(0, e - 0.75) / 0.25;
+        if (e >= 1) p.done = true;
+      }
+      p.el.style.left = x + 'px'; p.el.style.top = y + 'px'; p.el.style.opacity = o;
+      p.el.style.transform = `translate(-50%,-50%) scale(${s})`;
+    } else {
+      const e = Math.min(1, k / 1.2);
+      p.sp.position.copy(p.from).add(new THREE.Vector3(0, 0.1 + e * 0.5, 0));
+      const s = 0.25 + Math.min(1, k / 0.3) * 0.35;
       p.sp.scale.set(s, s / 2, 1);
-      p.sp.material.opacity = 1 - Math.max(0, e - 0.7) / 0.3;
+      p.sp.material.opacity = 1 - Math.max(0, e - 0.6) / 0.4;
       if (e >= 1) p.done = true;
     }
   }
-  m.pops = m.pops.filter(p => { if (p.t > 1.15) { m.g.remove(p.sp); p.sp.material.map.dispose(); p.sp.material.dispose(); return false; } return true; });
+  m.pops = m.pops.filter(p => {
+    if (!p.done) return true;
+    if (p.el) p.el.remove(); else { m.g.remove(p.sp); p.sp.material.map.dispose(); p.sp.material.dispose(); }
+    return false;
+  });
 }
 
 // ---------- The tiny rings: sinking away, and popping up in their new pattern ----------
@@ -636,9 +653,11 @@ const gauge = document.createElement('canvas');
 gauge.width = 440; gauge.height = 250;
 gauge.style.cssText = 'position:fixed;left:14px;bottom:14px;width:330px;height:188px;z-index:25;display:none;touch-action:none;cursor:pointer';
 document.body.appendChild(gauge);
-const SPIN_TIME = 3.2, SEGS = 20, AIM_MAX = 0.5;   // the spin bar's trip across and back (seconds), the meter's segments, the widest aim (radians)
+const SPIN_TIME = 3.2, SEGS = 15, AIM_MAX = 0.5;   // the spin bar's trip across and back (seconds), the meter's segments, the widest aim (radians)
+const P_LOW = 0.2, P_HIGH = 0.75;                  // the meter's softest roll (just makes it onto the board) and its hardest
 const TACH_X = 220, TACH_Y = 236, TACH_R0 = 110, TACH_R1 = 168;   // the meter's middle and its inside and outside edges (on the gauge)
-let power = 8;                                     // the power you've set, in segments (1 to 20); it stays put between rolls
+let power = 7;                                     // the power you've set, in segments (1 to 15); it stays put between rolls
+const powerP = () => P_LOW + (power - 1) / (SEGS - 1) * (P_HIGH - P_LOW);
 function drawGauge(h) {
   const x = gauge.getContext('2d'), W2 = gauge.width;
   x.clearRect(0, 0, W2, gauge.height);
@@ -659,7 +678,7 @@ function drawGauge(h) {
     x.beginPath(); x.moveTo(sx, by - 8); x.lineTo(sx + 9, by - 18); x.lineTo(sx - 9, by - 18); x.fill();
     x.fillRect(sx - 3, by - 4, 6, bh + 8); x.restore();
   } else { x.font = 'bold 18px "Trebuchet MS", sans-serif'; x.fillStyle = '#cdb8ff'; x.fillText('SPIN', bx + bw / 2, by + bh / 2); }
-  // the power meter: twenty segments round a half circle, green through gold to red, and a needle
+  // the power meter: fifteen segments round a half circle, green through gold to red, and a needle
   x.fillStyle = 'rgba(10,4,24,0.8)'; x.beginPath(); x.arc(TACH_X, TACH_Y, TACH_R1 + 12, Math.PI, 0); x.fill();
   for (let k = 0; k < SEGS; k++) {
     const a0 = Math.PI + k / SEGS * Math.PI + 0.012, a1 = Math.PI + (k + 1) / SEGS * Math.PI - 0.012;
@@ -790,7 +809,7 @@ function up(e) {
 function roll(m, h) {
   const d = m.data, n = BALLS - d.left;
   // everyone uses exactly the numbers that are sent, so their ball rolls the same as yours
-  const r = { n, g: d.g, by: myId, u: 0, p: +(power / SEGS).toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
+  const r = { n, g: d.g, by: myId, u: 0, p: +powerP().toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
   const l = launch(m, r);
   if (!l) return;
   l.mine = true;
@@ -811,7 +830,7 @@ function mineDone(m, pts) {   // one of your balls finished: add up the score, a
   const over = m.myLeft <= 0 && m.rolling <= 0;
   if (over) fields.done = true;
   update(ref(db, 'game/skee/m' + m.i), fields).catch(() => {});
-  if (pts >= 75) opts.banner && opts.banner(pts === 100 ? '💯 100!' : '🔥 75!', 2);
+  if (pts >= 75) opts.banner && opts.banner(pts === 150 ? '💥 150!' : '🔥 75!', 2);
   if (over) {
     onDisconnect(ref(db, 'game/skee/m' + m.i)).cancel();
     if (m.score > 0) push(ref(db, 'game/skee/best'), { name: S.myName, score: m.score, t: Date.now() }).catch(() => {});
@@ -838,13 +857,12 @@ function claim(m) {   // start a game on this machine (if nobody else is playing
 // ---------- The split screen while you play: the whole board big across the top, and a strip along the bottom of
 // your end (your ball, the aim arrow and the balls in both walls). The lane in between is left out. ----------
 const NEAR_EYE = new THREE.Vector3(0, 1.55, 1.05), NEAR_LOOK = new THREE.Vector3(0, 0.82, -0.2);
-const GOAL_EYE = new THREE.Vector3(0, YB + 2.39, -(B0 - 1.17)), GOAL_LOOK = new THREE.Vector3(0, YB + 0.4, -(B0 + 0.5));   // high, looking down on the board
-// What the top view has to show, edge to edge: the end of the lane and the launch hump at the bottom, the whole board,
-// and the scoreboard at the top. The view is fitted tight round these on any screen, so none of it is wasted.
+const GOAL_EYE = new THREE.Vector3(0, YB + 0.75, -(L + HU - 1.8)), GOAL_LOOK = new THREE.Vector3(0, YB + 0.25, -(B0 + 0.5));   // low and back, looking up the board with depth
+// What the top view has to show, edge to edge: the launch hump at the bottom, the whole board, and the top of the walls
+// round it. The view is fitted tight round these on any screen, so the board fills it.
 const GOAL_BOX = [];
-for (const sd of [-1, 1]) GOAL_BOX.push(new THREE.Vector3(sd * HALF, H(L + 0.06), -(L + 0.06)), new THREE.Vector3(sd * (HALF + 0.04), HUMP_TOP, -(L + HU)),
-  new THREE.Vector3(sd * (HALF + 0.04), YB, -B0), new THREE.Vector3(sd * (HALF + 0.04), H(B1), -B1),
-  new THREE.Vector3(sd * W / 2, H(B1) + 0.04 + SIGN_H, -(B1 - 0.004)));
+for (const sd of [-1, 1]) GOAL_BOX.push(new THREE.Vector3(sd * 0.3, H(L + 0.2), -(L + 0.2)), new THREE.Vector3(sd * (HALF + 0.04), YB, -B0),
+  new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
 let goalPts = [];
 const nearCam = new THREE.PerspectiveCamera(30, 1, 0.05, 40), goalCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
 const STRIP = 0.3;   // how much of the screen's height the bottom strip takes
@@ -894,6 +912,7 @@ function renderSplit() {   // draws the two views; false when you're not playing
   renderer.setViewport(0, 0, w, h);
   ui.style.bottom = (hb - 22) + 'px';   // the bar of words sits on the line between the two views, out of the way
   for (const el of pageBits()) el.style.visibility = 'hidden';   // and the room's name and walking tips aren't needed while you play
+  hud.style.display = 'block';
   return true;
 }
 function enter(m) {
@@ -915,6 +934,8 @@ function leave() {
   my = null; view = null;
   drawGauge(null); ui.style.bottom = '18px';
   for (const el of pageBits()) el.style.visibility = '';
+  hud.style.display = 'none';
+  for (const mm of machines) for (const p of mm.pops) if (p.el) p.done = true;   // (big numbers still on the screen go)
   camera.fov = BASE_FOV; camera.updateProjectionMatrix();
   showUi();
   const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
@@ -962,7 +983,6 @@ let blinkT = 0;
 function updateAll(dt) {
   blinkT += dt;
   spaceU.uTime.value = blinkT; vortexU.uTime.value = blinkT;
-  const blink = Math.floor(blinkT * 1.6) % 2 === 0;
   let roll = 0;
   for (const m of machines) {
     roll = Math.max(roll, updateLive(m, dt));
@@ -976,13 +996,12 @@ function updateAll(dt) {
     const target = Math.max(0, (m.data && !m.data.done ? m.data.score || 0 : m.data ? m.data.score || 0 : 0) - flying);
     if (target >= m.shown || target === 0) m.shown += (target - m.shown) * Math.min(1, dt * 8);   // (it never counts backwards)
     if (Math.abs(target - m.shown) < 0.5) m.shown = target;
-    paintSign(m, blink);
   }
   if (my) {
     readyBall(my);
     const h = my.hand;
     if (h && h.stage === 'spin') { h.t += dt; h.spin = Math.sin(h.t / SPIN_TIME * Math.PI * 2); }   // the spin bar sliding
-    showAim(h); drawGauge(h);
+    showAim(h); drawGauge(h); paintHud(my);
   }
   sfx.skeeRoll(roll);
   if (view) {   // glide up to the machine, then stay put
