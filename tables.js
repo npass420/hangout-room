@@ -203,32 +203,6 @@ woodImg.src = 'Wood.jpg';   // the capital letters matter on the website
 const floorLoaded = loadPhoto('Floor.jpg', floorMat, ROOM / 1.8, ROOM / 1.8);   // one copy of the picture covers 1.8 meters
 const wallLoaded = loadPhoto('Wall.jpg', wallMat, ROOM / 1.0, 1);              // and the wainscot is a meter tall
 
-// ---------- Warm wall lamps: a small gold sconce with a soft pool of light up and down the wall ----------
-const poolCv = document.createElement('canvas'); poolCv.width = 128; poolCv.height = 256;
-{
-  const g = poolCv.getContext('2d');
-  g.fillStyle = '#000'; g.fillRect(0, 0, 128, 256);
-  g.save(); g.scale(0.5, 1);
-  const grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
-  grd.addColorStop(0, 'rgb(255,190,120)'); grd.addColorStop(0.4, 'rgb(110,70,35)'); grd.addColorStop(1, 'rgb(0,0,0)');
-  g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
-  g.restore();
-}
-const poolTex = new THREE.CanvasTexture(poolCv); poolTex.colorSpace = THREE.SRGBColorSpace;
-const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffd9a0, toneMapped: false });
-for (const [x, z, ry] of [[-2.2, -R2, 0], [2.2, -R2, 0], [-R2, -1.8, Math.PI / 2], [-R2, 1.8, Math.PI / 2], [R2, -1.8, -Math.PI / 2], [R2, 1.8, -Math.PI / 2]]) {
-  const s = new THREE.Group();
-  s.position.set(x, 0, z); s.rotation.y = ry;
-  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.22, 0.02), goldMat); plate.position.set(0, 2.05, 0.01);
-  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.14, 10), goldMat); arm.rotation.x = Math.PI / 2; arm.position.set(0, 2.05, 0.08);
-  const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.075, 0.12, 24, 1, true), goldMat); shade.position.set(0, 2.08, 0.15);
-  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), bulbMat); bulb.position.set(0, 2.06, 0.15);
-  const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 2.2), poolMat); pool.position.set(0, 2.05, 0.005);
-  s.add(plate, arm, shade, bulb, pool);
-  scene.add(s);
-}
-
 // ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
 const skyCanvas = document.createElement('canvas');
 skyCanvas.width = 256; skyCanvas.height = 192;
@@ -323,11 +297,11 @@ function makeWallClock(x, z, rotY) {
   const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: clockTex, toneMapped: false }));
   face.position.z = 0.026;
   g.add(face);
-  g.position.set(x, 2.45, z);
+  g.position.set(x, 2.62, z);
   g.rotation.y = rotY;
   scene.add(g);
 }
-makeWallClock(0, ROOM / 2 - 0.03, Math.PI);   // between the window and the door
+makeWallClock(1.6, ROOM / 2 - 0.03, Math.PI);   // above the door
 
 function updateClock() {
   const d = new Date();
@@ -445,10 +419,25 @@ for (const [key, [tx, tz]] of Object.entries(TABLES)) {
 }
 startGames(TABLES, tableMat, tableGold);
 
-// ---------- A small warm ring light floating low over each table ----------
-// A glowing tube under a dark lid with a gold rim, and a real light shining down from it, so each board sits in its
-// own warm pool of light and the room falls off into shadow around it.
-const RING_R = 0.44, RING_Y = 2.05;
+// ---------- A small warm ring light hanging over each table ----------
+// A glowing tube under a dark lid with a gold rim, hung from the ceiling by a gold chain that splits into three and clips
+// onto the rim. A real light shines down from it, so each board sits in its own warm pool of light.
+const RING_R = 0.44, RING_Y = 2.7;
+const linkGeo = new THREE.TorusGeometry(0.011, 0.0026, 6, 14);   // one chain link (stretched into an oval below)
+const UP = new THREE.Vector3(0, 1, 0);
+function chain(from, to) {   // a gold chain between two points: links end to end, every other one turned a quarter
+  const dir = to.clone().sub(from), len = dir.length(), PITCH = 0.017, n = Math.max(2, Math.round(len / PITCH));
+  dir.normalize();
+  const links = new THREE.InstancedMesh(linkGeo, goldMat, n);
+  const along = new THREE.Quaternion().setFromUnitVectors(UP, dir), quarter = new THREE.Quaternion().setFromAxisAngle(UP, Math.PI / 2);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3(1, 1.55, 1);
+  for (let i = 0; i < n; i++) {
+    p.copy(from).addScaledVector(dir, (i + 0.5) * len / n);
+    q.copy(along); if (i % 2) q.multiply(quarter);
+    links.setMatrixAt(i, m.compose(p, q, sc));
+  }
+  return links;
+}
 const glowMats = [[1, 1.0, 0xfff0c8], [2.2, 0.42, 0xffc860], [4.5, 0.16, 0xffc860], [9, 0.06, 0xffc860]]   // [size, opacity, color]
   .map(([k, op, col]) => [k, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false,
     blending: THREE.AdditiveBlending, toneMapped: false })]);
@@ -472,7 +461,21 @@ for (const [tx, tz] of Object.values(TABLES)) {
     m.rotation.x = Math.PI / 2;
     ring.add(m);
   }
-  const lamp = new THREE.SpotLight(0xffc977, 9, 4, 0.75, 0.7, 1.2);   // the light it throws down onto the table
+  // The chain: from a small gold cap on the ceiling down to a ring where it splits, then three short chains to the rim
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.03, 32), goldMat);
+  cap.position.set(tx, HEIGHT - 0.015, tz);
+  const SPLIT = RING_Y + 0.42;
+  const hub = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.004, 8, 20), goldMat);
+  hub.rotation.x = Math.PI / 2; hub.position.set(tx, SPLIT, tz);
+  scene.add(cap, hub, chain(new THREE.Vector3(tx, HEIGHT - 0.03, tz), new THREE.Vector3(tx, SPLIT, tz)));
+  for (let k = 0; k < 3; k++) {
+    const a = Math.PI / 2 + k * Math.PI * 2 / 3, rx = tx + Math.cos(a) * RING_R, rz = tz + Math.sin(a) * RING_R;
+    scene.add(chain(new THREE.Vector3(tx, SPLIT, tz), new THREE.Vector3(rx, RING_Y + 0.05, rz)));
+    const clip = new THREE.Mesh(new THREE.SphereGeometry(0.009, 12, 8), goldMat);   // where it fastens to the rim
+    clip.position.set(rx, RING_Y + 0.045, rz);
+    scene.add(clip);
+  }
+  const lamp = new THREE.SpotLight(0xffc977, 15, 6, 0.55, 0.7, 1.2);   // the light it throws down onto the table
   lamp.position.set(tx, RING_Y - 0.02, tz);
   lamp.target.position.set(tx, TABLE_Y, tz);
   if (!PHONE) { lamp.castShadow = true; lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0005; }
@@ -762,7 +765,7 @@ nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom();
 const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap a chair to sit and play'
                         : 'Drag to look · click the floor to walk (or W A S D) · click a chair to sit and play';
-const HINT_SEAT = PHONE ? 'Tap your pieces to move · Stand up when you\'re done' : 'Click your pieces to move · Esc or Stand up to leave the table';
+const HINT_SEAT = PHONE ? 'Drag to look around · tap your pieces to move · Stand up when you\'re done' : 'Drag to look around · click your pieces to move · Esc or Stand up to leave the table';
 hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
 const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: null };   // you start just inside the door
@@ -830,6 +833,7 @@ function sitDown(key, side) {
     me.tx = me.tz = null; marker.visible = false;
     setFov(BASE_FOV);
     const v = seatView(key, side);
+    seatLook.yaw = seatLook.pitch = 0; seatLook.base = v.quat;
     moveCamera(v.pos, v.quat, null);
     hint.textContent = HINT_SEAT;
     showPanel(key);
@@ -849,17 +853,17 @@ function standUp() {
   sendSpot(true);
 }
 hooks.standUp = standUp;
-function checkMySeat() {   // if your seat was taken from you (say you lost connection for a while), stand up
-  if (S.seat && !anim && seatHolder(S.seat.key, S.seat.side) && seatHolder(S.seat.key, S.seat.side) !== myId) standUp();
+function checkMySeat() {
+  if (!S.seat || anim || sitting) return;
+  const holder = seatHolder(S.seat.key, S.seat.side);
+  if (holder && holder !== myId) standUp();               // your seat was taken from you (say you lost connection for a while)
+  else if (!holder) sit(S.seat.key, S.seat.side);          // the chair came free under you (someone stopped playing alone): it's yours
 }
-// The panel shows the table you're sitting at, or the one you're standing next to
+// Looking around from the chair: dragging turns your head, but not all the way around
+const seatLook = { yaw: 0, pitch: 0, base: null };
+const qYaw = new THREE.Quaternion(), qPitch = new THREE.Quaternion(), X_AXIS = new THREE.Vector3(1, 0, 0);
+// The panel shows the table you're sitting at
 let panelKey = null, nearCheck = 0;
-function nearestTable() {
-  if (S.seat) return S.seat.key;
-  let best = null, bestD = 2.3;
-  for (const [key, [x, z]] of Object.entries(TABLES)) { const d = Math.hypot(me.x - x, me.z - z); if (d < bestD) { best = key; bestD = d; } }
-  return best;
-}
 
 // ---------- Keys ----------
 const keys = new Set();
@@ -944,10 +948,15 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
-  if (down && !intro && !S.seat && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+  if (down && !intro && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
-    yaw -= (e.clientX - lastX) * k;
-    pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
+    if (S.seat) {
+      seatLook.yaw = Math.max(-1.3, Math.min(1.3, seatLook.yaw - (e.clientX - lastX) * k));
+      seatLook.pitch = Math.max(-0.5, Math.min(0.9, seatLook.pitch - (e.clientY - lastY) * k));
+    } else {
+      yaw -= (e.clientX - lastX) * k;
+      pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
+    }
   }
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
@@ -987,6 +996,9 @@ renderer.setAnimationLoop(() => {
     camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
     camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
+  } else if (S.seat && seatLook.base) {   // sitting: the view from the chair, turned by however far you've dragged
+    qYaw.setFromAxisAngle(UP, seatLook.yaw); qPitch.setFromAxisAngle(X_AXIS, seatLook.pitch);
+    camera.quaternion.copy(seatLook.base).premultiply(qYaw).multiply(qPitch);
   } else if (!S.seat) {
     keyWalk(dt);
     if (me.tx != null) {   // walking to where you clicked
@@ -1005,7 +1017,7 @@ renderer.setAnimationLoop(() => {
   } else if (marker.visible) marker.material.opacity = 0.8;
   if ((nearCheck -= dt) <= 0) {   // a few times a second: which table's panel to show
     nearCheck = 0.25;
-    const k = S.myName ? nearestTable() : null;
+    const k = S.seat ? S.seat.key : null;   // the table's panel shows only while you're sitting at it
     if (k !== panelKey) { panelKey = k; showPanel(k); }
   }
   moveAvatars(dt);

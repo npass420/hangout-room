@@ -1,6 +1,7 @@
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
+// Alone at a table? "Play alone" lets you play both sides; someone who sits across from you can "Join game" and take one.
 // Click one of your pieces to see where it can go (the squares light up), then click a square to move.
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
 // =====================================================================
@@ -366,17 +367,26 @@ function makeGame(key, x, z, frameMat, goldMat) {
 
 // ---------- Players ----------
 function validPlayer(G, c) { const id = G.st && G.st['p' + c]; return id && S.presence[id] ? id : ''; }
+// Playing alone: the same person holds both sides (p1 and p2 are both them). They only sit in one of the chairs, so the
+// other chair is still free to sit in; whoever sits there can join and take that side.
+function solo(G) { return !!(G.st && G.st.p1 && G.st.p1 === G.st.p2 && S.presence[G.st.p1]); }
+function chairHolder(G, side) {   // who is actually sitting in this chair
+  const id = validPlayer(G, side);
+  if (id && solo(G) && S.presence[id].s !== `${G.key}:${side}`) return '';   // the solo player is in the other chair
+  return id;
+}
 function playerName(G, c) { const id = validPlayer(G, c); return id ? S.presence[id].name : ''; }
 function bothSeated(G) { return !!(validPlayer(G, 1) && validPlayer(G, 2)); }
 function gameActive(G) { return !!G.st && bothSeated(G) && !G.st.over; }
 function mySide(G) { return G.st ? (G.st.p1 === myId ? 1 : G.st.p2 === myId ? 2 : 0) : 0; }
 function myTurn(G) { return gameActive(G) && G.st['p' + G.st.turn] === myId; }
-export function seatTaken(key, side) { const G = GAMES[key]; const id = G && validPlayer(G, side); return !!id && id !== myId; }
-export function seatHolder(key, side) { const G = GAMES[key]; return G ? validPlayer(G, side) : ''; }
+export function seatTaken(key, side) { const G = GAMES[key]; const id = G && chairHolder(G, side); return !!id && id !== myId; }
+export function seatHolder(key, side) { const G = GAMES[key]; return G ? chairHolder(G, side) : ''; }
 
 // Sitting down claims that side of the board; standing up gives it back
 export function sit(key, side) {
   const G = GAMES[key];
+  if (solo(G) && G.st.p1 !== myId && !chairHolder(G, side)) return Promise.resolve(true);   // the empty chair at someone's solo game: sit and watch (or join)
   return runTransaction(G.ref, st => {
     if (!st) return st;
     const id = st['p' + side];
@@ -387,7 +397,8 @@ export function sit(key, side) {
 }
 export function stand(key, side) {
   const G = GAMES[key];
-  if (G && G.st && G.st['p' + side] === myId) update(G.ref, { ['p' + side]: '' }).catch(() => {});
+  if (G && G.st && G.st.p1 === myId && G.st.p2 === myId) update(G.ref, { p1: '', p2: '' }).catch(() => {});   // done playing alone
+  else if (G && G.st && G.st['p' + side] === myId) update(G.ref, { ['p' + side]: '' }).catch(() => {});
   if (G) { G.sel = -1; G.targets = []; G.pendingPromo = null; refreshMarks(G); }
 }
 
@@ -508,11 +519,11 @@ document.head.appendChild(css);
 const panel = document.createElement('div');
 panel.id = 'tablePanel'; panel.className = 'panel';
 panel.innerHTML = `<div class="tpTitle"></div><div class="tpStatus"></div><div class="tpPlayers"></div><div class="tpPromo"></div>
-  <div class="tpBtns"><button class="tpNew">New game</button><button class="tpAccept">🤝 Accept draw</button><button class="tpDraw">Offer draw</button><button class="tpResign">Resign</button><button class="tpStand">Stand up</button></div>`;
+  <div class="tpBtns"><button class="tpSolo">Play alone</button><button class="tpJoin">Join game</button><button class="tpNew">New game</button><button class="tpAccept">🤝 Accept draw</button><button class="tpDraw">Offer draw</button><button class="tpResign">Resign</button><button class="tpStand">Stand up</button></div>`;
 document.body.appendChild(panel);
 const q = s => panel.querySelector(s);
 const el = { title: q('.tpTitle'), status: q('.tpStatus'), players: q('.tpPlayers'), promo: q('.tpPromo'), newG: q('.tpNew'),
-             accept: q('.tpAccept'), draw: q('.tpDraw'), resign: q('.tpResign'), stand: q('.tpStand') };
+             accept: q('.tpAccept'), draw: q('.tpDraw'), resign: q('.tpResign'), stand: q('.tpStand'), solo: q('.tpSolo'), join: q('.tpJoin') };
 let shown = null;   // the game the panel is showing
 export function showPanel(key) { shown = key ? GAMES[key] : null; refreshPanel(); }
 for (const [p, label] of [['Q', '♛ Queen'], ['R', '♜ Rook'], ['B', '♝ Bishop'], ['N', '♞ Knight']]) {
@@ -540,6 +551,8 @@ armButton(el.resign, 'Resign', G => resign(G), () => true);
 el.draw.addEventListener('click', () => { if (shown) offerDraw(shown); });
 el.accept.addEventListener('click', () => { if (shown) answerDraw(shown); });
 el.stand.addEventListener('click', () => { if (hooks.standUp) hooks.standUp(); });
+el.solo.addEventListener('click', () => { if (shown) playAlone(shown); });
+el.join.addEventListener('click', () => { if (shown) joinGame(shown); });
 
 function resultText(G) {
   const st = G.st, n = c => `${playerName(G, c) || G.sides[c]} (${G.sides[c]})`;
@@ -558,9 +571,13 @@ function refreshPanel() {
   const st = G.st, side = mySide(G);
   el.title.textContent = G.title;
   let s;
+  const alone = solo(G), watchingSolo = alone && st.p1 !== myId;
   if (!validPlayer(G, 1) && !validPlayer(G, 2)) s = 'Sit in a chair to play';
-  else if (!bothSeated(G)) s = side ? 'Waiting for someone to sit across from you' : 'One seat open, sit down to play';
+  else if (!bothSeated(G)) s = side ? 'Waiting for someone to sit across from you, or play alone' : 'One seat open, sit down to play';
+  else if (watchingSolo) s = `${playerName(G, 1)} is playing alone` + (st.over ? ` · ${resultText(G)}` : '');
   else if (st.over) s = resultText(G);
+  else if (alone) s = (G.key === 'chess' && st.check ? 'Check! ' : '') + (G.key === 'checkers' && st.chain >= 0 ? 'Keep jumping! ' : '') +
+        (G.key === 'othello' && st.pass ? `${G.sides[st.pass]} has no move and passes. ` : '') + `Playing alone · ${G.sides[st.turn]} to move`;
   else {
     const who = `${G.sides[st.turn]}'s turn (${playerName(G, st.turn)})`;
     s = (G.key === 'chess' && st.check ? 'Check! ' : '') + (G.key === 'checkers' && st.chain >= 0 ? 'Keep jumping! ' : '') +
@@ -569,15 +586,17 @@ function refreshPanel() {
     else if (st.draw) s += ' · you offered a draw';
   }
   el.status.textContent = s;
-  let pl = `${G.sides[1]}: ${playerName(G, 1) || 'open'} · ${G.sides[2]}: ${playerName(G, 2) || 'open'}`;
+  let pl = alone ? `${G.sides[1]} and ${G.sides[2]}: ${playerName(G, 1)}` : `${G.sides[1]}: ${playerName(G, 1) || 'open'} · ${G.sides[2]}: ${playerName(G, 2) || 'open'}`;
   if (G.key === 'othello') pl += ` · ${otCount(st.board, 1)} – ${otCount(st.board, 2)}`;
   else if (G.key === 'chess' && st.last && st.last.f >= 0) pl += ` · last ${SQNAME(st.last.f)}–${SQNAME(st.last.t)}`;
   el.players.textContent = pl;
   const playing = gameActive(G) && side;
+  el.solo.style.display = side && !validPlayer(G, 3 - side) ? '' : 'none';
+  el.join.style.display = watchingSolo && S.seat && S.seat.key === G.key ? '' : 'none';
   el.newG.style.display = side && (!gameActive(G) || st.over || playing) ? '' : 'none';
-  el.accept.style.display = playing && st.draw && st.draw !== side ? '' : 'none';
-  el.draw.style.display = playing && G.key !== 'othello' && !st.draw ? '' : 'none';
-  el.resign.style.display = playing ? '' : 'none';
+  el.accept.style.display = playing && !alone && st.draw && st.draw !== side ? '' : 'none';
+  el.draw.style.display = playing && !alone && G.key !== 'othello' && !st.draw ? '' : 'none';
+  el.resign.style.display = playing && !alone ? '' : 'none';
   el.stand.style.display = side ? '' : 'none';
   el.promo.style.display = G.pendingPromo && myTurn(G) ? '' : 'none';
   if (G.pendingPromo && !myTurn(G)) G.pendingPromo = null;
@@ -643,6 +662,23 @@ function newGame(G) {
     return { ...st, ...G.fresh(), turn: 1, over: 0, winner: 0, result: '', draw: 0, last: { f: -1, t: -1 }, moveNo: (st.moveNo || 0) + 1 };
   });
   G.sel = -1; G.targets = []; G.pendingPromo = null;
+}
+function playAlone(G) {   // take the empty side too, and start a fresh game
+  runTransaction(G.ref, st => {
+    if (!st) return;
+    const mine = st.p1 === myId ? 1 : st.p2 === myId ? 2 : 0, other = st['p' + (3 - mine)];
+    if (!mine || (other && other !== myId && S.presence[other])) return;   // someone sat down after all
+    return { ...st, ...G.fresh(), p1: myId, p2: myId, turn: 1, over: 0, winner: 0, result: '', draw: 0, last: { f: -1, t: -1 }, moveNo: (st.moveNo || 0) + 1 };
+  });
+  G.sel = -1; G.targets = []; G.pendingPromo = null;
+}
+function joinGame(G) {   // sitting across from someone playing alone: take this chair's side, and the game goes on with two
+  const side = S.seat && S.seat.key === G.key ? S.seat.side : 0;
+  if (!side) return;
+  runTransaction(G.ref, st => {
+    if (!st || !st.p1 || st.p1 !== st.p2 || st.p1 === myId) return;
+    return { ...st, ['p' + side]: myId, draw: 0 };
+  });
 }
 function resign(G) {
   const me = mySide(G);
