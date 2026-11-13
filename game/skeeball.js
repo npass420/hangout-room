@@ -1,15 +1,16 @@
 // =====================================================================
 // skeeball.js — two skee-ball machines side by side against the back wall of the Game Room, on the right.
-// Holographic Tetris cabinets (holo.jpg), a wide purple velvet lane with fine gold stitching up its sides (lane.jpg),
-// the balls (wood.jpg) waiting in slots down both sides of the lane under Tetris covers that slide open when a game
-// starts, a hump that launches the ball onto a big target board, and your orb (skeeorb.png) set in the backboard,
-// flaring whenever a ball drops. The board: rings in the middle (10 to 50), and round them 2 to 8 tiny rings (75 low,
-// 100 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp, so a ball can
-// roll in over the top but not back out.
-// Click a machine to play. Each roll is three steps: aim (the arrow follows your mouse; swing it wide to whip it off the
-// walls), stop the spin bar (a slow roll curls with it in slight slow motion; a hard one kicks off the walls with it),
-// then set the power yourself on the tachometer and click to let it go. Everyone in the room sees every roll (each
-// ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
+// Holographic Tetris cabinets (holo.jpg), a deep space runway of drifting stars, thick walls along it with the wooden
+// balls (wood.jpg) in a channel along the top of each, under Tetris covers that slide sideways open when a game starts,
+// a metal lipped hump that launches the ball onto the board, a vortex turning behind the rings, and the scoreboard above.
+// The board: polished metal rings in the middle (10 to 50), a 100 cup in each top corner, and down both sides 2 to 8 tiny
+// rings (75 low, 100 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
+// Click a machine to play: the screen splits, the hump and the board big across the top and your end along the bottom.
+// The power is a meter you set whenever you like (scroll wheel, the up and down keys, or drag on it) and it stays put.
+// A roll is two clicks: lock your aim (the arrow follows your mouse; swing it wide to whip it off the walls), then stop the
+// spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
+// Points pop up big and fly into the scoreboard. Everyone in the room sees every roll
+// (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }
@@ -20,27 +21,31 @@ import { sfx } from '../sounds.js';
 // ---------- The shape of a machine and how a ball moves on it (meters and seconds) ----------
 // u runs across the lane (right is plus), v runs down it from your end, y is up.
 // Every screen runs these same steps from the same start, so everyone sees the same ball end up in the same hole.
-const W = 1.5, HALF = W / 2, R = 0.03;                   // lane width, and a ball's radius
+const W = 1.9, HALF = W / 2, R = 0.03;                   // lane width, and a ball's radius
 const Y0 = 0.80, SLOPE = 0.12, L = 2.2;                  // how high the lane starts, how much it climbs a meter, how long it is
 const HU = 0.30, KICK = 0.75;                            // the hump: how long, and how steep it is at the lip (the launch)
 const HUMP_TOP = Y0 + SLOPE * L + HU * (SLOPE + (KICK - SLOPE) / 2);
-const B0 = L + HU + 0.24, BL = 2.0, B1 = B0 + BL, TILT = 0.55;    // the target board: where it starts, how long, how steep
+const B0 = L + HU + 0.24, BL = 1.2, B1 = B0 + BL, TILT = 0.55;    // the target board: where it starts, how long, how steep
 const YB = HUMP_TOP - 0.06, TROUGH = HUMP_TOP - 0.34;    // its bottom edge, and the gutter in front of it
 const LIP = 0.045;                                       // how tall the ring lips stand
-// The board: rings in the middle (10 on the outside to 50 in the little one at the top), and around them, 2 to 8 tiny
-// rings that sink away and pop up somewhere new after every ball (75 below the middle, 100 above it).
+// The board: rings in the middle (10 on the outside to 50 in the little one at the top), a 100 cup in each top corner,
+// and down both sides 2 to 8 tiny rings that sink away and pop up somewhere new after every ball (75 low, 100 high).
 // Each ring is [across, down the machine, radius]; each hole [across, down, radius, points].
-const CC = 0.95, ORBIT = 0.56, TINY = 0.062, TINY_HOLE = 0.036;   // the middle of the rings, and the circle the tiny rings sit on
-const CENTER = [[0, CC, 0.36, 10], [0, CC + 0.06, 0.27, 20], [0, CC + 0.12, 0.18, 30], [0, CC + 0.165, 0.12, 40], [0, CC + 0.2, 0.05, 50]];
-const CENTER_HOLES = [[0, CC - 0.285, 0.055, 10], [0, CC - 0.135, 0.055, 20], [0, CC - 0.0075, 0.05, 30], [0, CC + 0.0975, 0.045, 40], [0, CC + 0.2, 0.036, 50]];
+const CC = 0.6, TINY = 0.062, TINY_HOLE = 0.036;          // the middle of the rings, and the size of a tiny ring and its hole
+const CUP = 0.078, CUP_HOLE = 0.042, CUP_U = 0.73, CUP_V = 1.04;   // the two corner cups
+const CENTER = [[0, CC, 0.36, 10], [0, CC + 0.06, 0.27, 20], [0, CC + 0.12, 0.18, 30], [0, CC + 0.165, 0.12, 40], [0, CC + 0.2, 0.05, 50],
+                [-CUP_U, CUP_V, CUP, 100], [CUP_U, CUP_V, CUP, 100]];
+const CENTER_HOLES = [[0, CC - 0.285, 0.055, 10], [0, CC - 0.135, 0.055, 20], [0, CC - 0.0075, 0.05, 30], [0, CC + 0.0975, 0.045, 40], [0, CC + 0.2, 0.036, 50],
+                      [-CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 100], [CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 100]];
+const SPOTS = [[0.58, 0.18, 75], [0.82, 0.36, 75], [0.6, 0.6, 100], [0.84, 0.74, 100]];   // the tiny rings' spots on each side
 function layoutFor(g, n) {                               // the tiny rings for ball n of game g (the same on every screen)
   let s = (Math.floor(g / 1000) ^ Math.imul(n + 1, 2654435761)) >>> 0;
   const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-  const count = 2 + Math.floor(rnd() * 7), turn = rnd() * Math.PI * 2, slots = [0, 1, 2, 3, 4, 5, 6, 7];
+  const count = 2 + Math.floor(rnd() * 7), slots = [0, 1, 2, 3, 4, 5, 6, 7];
   for (let i = 7; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [slots[i], slots[j]] = [slots[j], slots[i]]; }   // a shuffle
   const tiny = slots.slice(0, count).map(k => {
-    const a = turn + k * Math.PI / 4, u = Math.cos(a) * ORBIT, v = CC + Math.sin(a) * ORBIT;
-    return { u, v: B0 + v, pts: v > CC ? 100 : 75 };
+    const [su, sv, pts] = SPOTS[k % 4], side = k < 4 ? -1 : 1;
+    return { u: side * (su + (rnd() - 0.5) * 0.05), v: B0 + sv + (rnd() - 0.5) * 0.05, pts };
   });
   return {
     tiny,
@@ -127,13 +132,14 @@ function stepBall(b, hit) {                              // one tiny step of a b
 }
 
 // ---------- Where the machines stand: side by side, their backs against the back wall ----------
-const MACHINES = [5.97, 7.82];            // their middles, across the room
-const BALLS = 20, SLOT = BALLS / 2;       // twenty balls: ten in the slot down each side of the lane
-const LEDGE = 0.13;                       // how wide each ball slot is
-const OUT = HALF + LEDGE;                 // from the middle of the lane to the outside walls (along the lane)
+const MACHINES = [5.46, 7.8];             // their middles, across the room
+const BALLS = 20, SLOT = BALLS / 2;       // twenty balls: ten in the channel along each side of the lane
+const WALL = 0.2, CH = 0.09, CH_D = 0.07;  // the thick walls along the lane, and the ball channel sunk into the top of each
+const OUT = HALF + WALL;                  // from the middle of the lane to the outside of those walls
+const WALL_H = 0.3;                       // how high they stand over the lane
 const VF = -0.12, VB = B1 + 0.06;         // the very front and back of a machine
 const FRONT_Z = -11 + VB + 0.02;          // the end you stand at (the back wall is at -11)
-const BACK_H = 1.3;                       // how tall the backboard stands over the top of the board
+const BACK_H = 0.55;                      // how tall the backboard (the scoreboard) stands over the top of the board
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 const COL = { 10: '#ff3fa8', 20: '#b36bff', 30: '#29e6ff', 40: '#ffd36a', 50: '#ffffff', 75: '#ff8a3d', 100: '#9dff4a' };
 const TILT_ROT = -Math.PI / 2 + Math.atan(TILT), STRETCH = Math.sqrt(1 + TILT * TILT);   // lying flat on the board
@@ -152,18 +158,68 @@ function canvasTex(w, h, draw) {
 }
 
 // ---------- The materials ----------
-const laneMat = new THREE.MeshPhysicalMaterial({ color: 0x5a2a9a, roughness: 0.9, sheen: 1, sheenRoughness: 0.4, sheenColor: 0xc8a0ff });
-const boardMat = new THREE.MeshPhysicalMaterial({ color: 0x5a2a9a, roughness: 0.9, sheen: 1, sheenRoughness: 0.45, sheenColor: 0xc8a0ff });
+// The lane: deep space. Stars drifting slowly up the runway, some twinkling, over a faint nebula glow.
+const spaceU = { uTime: { value: 0 } };
+const laneMat = new THREE.ShaderMaterial({
+  uniforms: spaceU,
+  vertexShader: `varying vec2 vP; void main() { vP = vec2(uv.x * ${W.toFixed(2)}, uv.y * ${W.toFixed(2)}); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform float uTime; varying vec2 vP;
+    float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+    float stars(vec2 p, float scale, float keep, float tw) {   // one layer of stars: a few cells of a grid hold a star
+      vec2 g = p * scale, id = floor(g); float h = h21(id);
+      if (h < keep) return 0.0;
+      vec2 at = fract(g) - 0.5 - (vec2(h21(id + 3.7), h21(id + 9.1)) - 0.5) * 0.7;
+      float s = smoothstep(0.09, 0.0, length(at));
+      return s * (0.55 + 0.45 * sin(uTime * tw * (1.0 + h * 3.0) + h * 50.0));
+    }
+    void main() {
+      vec2 p = vP - vec2(0.0, uTime * 0.03);
+      float n = noise(p * 1.3) * 0.6 + noise(p * 3.1) * 0.3 + noise(p * 7.0) * 0.1;
+      vec3 col = mix(vec3(0.012, 0.01, 0.04), vec3(0.09, 0.03, 0.2), smoothstep(0.35, 0.85, n));
+      col += vec3(0.03, 0.12, 0.18) * smoothstep(0.55, 0.95, noise(p * 0.8 + 4.0));
+      col += vec3(0.75, 0.8, 1.0) * stars(p, 26.0, 0.9, 1.3);
+      col += vec3(1.0, 0.85, 0.95) * stars(p + 7.0, 11.0, 0.95, 0.8) * 1.3;
+      col += vec3(0.7, 0.95, 1.0) * stars(vP - vec2(0.0, uTime * 0.07), 45.0, 0.93, 2.0) * 0.6;
+      gl_FragColor = vec4(col, 1.0);
+      #include <colorspace_fragment>
+    }`
+});
+// The board behind the rings: a vortex, deep purple and teal arms slowly turning round a bright core
+const vortexU = { uTime: { value: 0 }, uCenter: { value: new THREE.Vector2(0, CC) } };
+const boardMat = new THREE.ShaderMaterial({
+  uniforms: vortexU,
+  vertexShader: `varying vec2 vP; void main() { vP = vec2((uv.x - 0.5) * ${W.toFixed(2)}, uv.y * ${BL.toFixed(2)}); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform float uTime; uniform vec2 uCenter; varying vec2 vP;
+    float h21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
+    void main() {
+      vec2 d = vP - uCenter; float r = length(d), a = atan(d.y, d.x);
+      float sw = a + 4.0 / (r + 0.25) - uTime * 0.35;                       // the swirl: tighter toward the middle
+      float arms = 0.5 + 0.5 * sin(sw * 3.0 + noise(vec2(sw * 0.8, r * 4.0)) * 2.5);
+      float dust = noise(vec2(sw * 2.0, r * 9.0 - uTime * 0.6));
+      vec3 deep = vec3(0.02, 0.01, 0.06), violet = vec3(0.32, 0.08, 0.6), teal = vec3(0.05, 0.55, 0.7);
+      vec3 col = mix(deep, mix(violet, teal, smoothstep(0.3, 0.9, dust)), arms * smoothstep(1.3, 0.1, r) * 0.85);
+      col += vec3(1.0, 0.8, 1.0) * exp(-r * 9.0) * 1.2 + vec3(0.6, 0.4, 1.0) * exp(-r * 3.5) * 0.35;   // the bright core
+      col += vec3(0.9, 0.95, 1.0) * smoothstep(0.985, 1.0, h21(floor(vP * 60.0))) * 0.8;             // a few stars
+      gl_FragColor = vec4(col, 1.0);
+      #include <colorspace_fragment>
+    }`
+});
 const holoMat = new THREE.MeshStandardMaterial({ color: 0x4a3a8a, roughness: 0.35, metalness: 0.3, emissive: 0xffffff, emissiveIntensity: 0 });
 const coverMat = new THREE.MeshStandardMaterial({ color: 0x4a3a8a, roughness: 0.3, metalness: 0.4, emissive: 0xffffff, emissiveIntensity: 0 });
-const darkMat = new THREE.MeshStandardMaterial({ color: 0x14062a, roughness: 0.95 });
+const darkMat = new THREE.MeshStandardMaterial({ color: 0x0a0418, roughness: 0.95 });
+const chromeMat = new THREE.MeshPhysicalMaterial({ color: 0xe8e4ff, metalness: 0.9, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08,
+  emissive: 0x6a4aff, emissiveIntensity: 0.22 });   // the launch hump's lip, in the same polished metal as the rims
 const woodMat = new THREE.MeshPhysicalMaterial({ color: 0xb07a45, roughness: 0.45, clearcoat: 1, clearcoatRoughness: 0.15 });
-const orbMat = new THREE.MeshBasicMaterial({ color: 0x8a6bff, transparent: true, toneMapped: false });
-const trimMat = new THREE.MeshBasicMaterial({ color: 0xff3fa8, toneMapped: false });
-const tealMat = new THREE.MeshBasicMaterial({ color: 0x29e6ff, toneMapped: false });
-const ringMat = {}, holeMat = {};
+const rimMat = {}, bandMat = {}, holeMat = {};
 for (const [p, c] of Object.entries(COL)) {
-  ringMat[p] = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, emissive: new THREE.Color(c), emissiveIntensity: 1.6 });
+  // a ring's rim: polished metal tinted its color, with a glowing band of the color round its inside edge
+  rimMat[p] = new THREE.MeshPhysicalMaterial({ color: new THREE.Color(c).lerp(new THREE.Color(0xffffff), 0.35), metalness: 0.85, roughness: 0.22,
+    clearcoat: 1, clearcoatRoughness: 0.1, emissive: new THREE.Color(c), emissiveIntensity: 0.25 });
+  bandMat[p] = new THREE.MeshBasicMaterial({ color: new THREE.Color(c), toneMapped: false });
   holeMat[p] = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false, map: canvasTex(256, 256, x => {
     const g = x.createRadialGradient(128, 128, 0, 128, 128, 128);   // a deep dark well with its number glowing in it
     g.addColorStop(0, '#000000'); g.addColorStop(0.75, '#07010f'); g.addColorStop(0.92, '#2a0d4a'); g.addColorStop(1, 'rgba(42,13,74,0)');
@@ -173,24 +229,13 @@ for (const [p, c] of Object.entries(COL)) {
     x.shadowBlur = 6; x.fillStyle = '#ffffff'; x.globalAlpha = 0.7; x.fillText(p, 128, 136);
   }) });
 }
-const glowTex = canvasTex(128, 128, x => {   // a soft round glow, for behind the orb
-  const g = x.createRadialGradient(64, 64, 0, 64, 64, 64);
-  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(0.35, 'rgba(255,255,255,0.35)'); g.addColorStop(1, 'rgba(255,255,255,0)');
-  x.fillStyle = g; x.fillRect(0, 0, 128, 128);
-});
-
 const loaded = Promise.all([
-  loadTex('lane.jpg', t => {   // the stitched velvet: one copy is a lane's width, repeating down its length (and up the board)
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    for (const m of [laneMat, boardMat]) { m.map = t; m.color.setHex(0xffffff); m.needsUpdate = true; }
-  }),
   loadTex('holo.jpg', t => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(1.4, 1.4);
     holoMat.map = t; holoMat.emissiveMap = t; holoMat.color.setHex(0xffffff); holoMat.emissiveIntensity = 0.55; holoMat.needsUpdate = true;
-    const c = t.clone(); c.needsUpdate = true; c.repeat.set(0.25, 2);   // the slot covers: a strip of the same Tetris holo
+    const c = t.clone(); c.needsUpdate = true; c.repeat.set(0.4, 3);   // the channel covers: a strip of the same Tetris holo
     coverMat.map = c; coverMat.emissiveMap = c; coverMat.color.setHex(0xffffff); coverMat.emissiveIntensity = 0.7; coverMat.needsUpdate = true;
   }),
-  loadTex('skeeorb.png', t => { orbMat.map = t; orbMat.color.setHex(0xffffff); orbMat.needsUpdate = true; }),
   loadTex('wood.jpg', t => {
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     woodMat.map = t; woodMat.color.setHex(0xffffff); woodMat.needsUpdate = true;
@@ -198,11 +243,11 @@ const loaded = Promise.all([
 ]);
 
 // ---------- Building one machine ----------
-function surface(v0, v1, n, mat, u0 = -HALF, u1 = HALF, drop = 0) {   // a sheet following the height H(v): the lane, the board, a slot floor
+function surface(v0, v1, n, mat, u0 = -HALF, u1 = HALF, lift = 0) {   // a sheet following the height H(v): the lane, the board, a channel floor
   const pos = [], uv = [], idx = [];
   for (let i = 0; i <= n; i++) {
     const v = v0 + (v1 - v0) * i / n;
-    for (let j = 0; j <= 1; j++) { const u = j ? u1 : u0; pos.push(u, H(v) - drop, -v); uv.push((u + HALF) / W, v / W); }
+    for (let j = 0; j <= 1; j++) { const u = j ? u1 : u0; pos.push(u, H(v) + lift, -v); uv.push((u + HALF) / W, mat === boardMat ? (v - B0) / BL : v / W); }
     if (i < n) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
   }
   const g = new THREE.BufferGeometry();
@@ -212,31 +257,42 @@ function surface(v0, v1, n, mat, u0 = -HALF, u1 = HALF, drop = 0) {   // a sheet
   return new THREE.Mesh(g, mat);
 }
 function topEdge(v) {   // how high the board's walls come up: rising from the end of the lane to a tall cage round the board
-  if (v < L) return H(Math.max(v, 0)) + 0.3;
-  if (v < B0) return H(L) + 0.3 + (YB + 1.0 - H(L) - 0.3) * (v - L) / (B0 - L);
-  if (v <= B1) return H(v) + 1.0;
+  if (v < L) return H(Math.max(v, 0)) + WALL_H;
+  if (v < B0) return H(L) + WALL_H + (YB + BACK_H - H(L) - WALL_H) * (v - L) / (B0 - L);
+  if (v <= B1) return H(v) + BACK_H;
   return H(B1) + BACK_H;
 }
-function panel(v0, v1, top, x) {   // a holo side wall from v0 to v1, with its top edge following top(v), 4cm thick
+const laneTop = v => H(Math.max(v, 0)) + WALL_H;
+function panel(v0, v1, top, x, depth = 0.04) {   // a holo wall from v0 to v1 with its top edge following top(v), standing from x to x + depth
   const sh = new THREE.Shape();
   sh.moveTo(v0, 0); sh.lineTo(v1, 0);
   for (let i = 60; i >= 0; i--) { const v = v0 + (v1 - v0) * i / 60; sh.lineTo(v, top(v)); }
-  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.04, bevelEnabled: true, bevelThickness: 0.006, bevelSize: 0.006, bevelSegments: 2, curveSegments: 4 });
+  const g = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: true, bevelThickness: 0.005, bevelSize: 0.005, bevelSegments: 2, curveSegments: 4 });
   const m = new THREE.Mesh(g, holoMat);
   m.rotation.y = Math.PI / 2;   // the shape's x runs down the machine
   m.position.x = x;
   return m;
 }
-function tube(points, radius, mat, closed) {
-  return new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(points, closed), points.length * 2, radius, 8, closed), mat);
+// A ring's rim, built for real: a straight inside wall, a rounded top and a sloped outside, in polished tinted metal, with a
+// glowing band of its color round the inside edge. It's made flat and then laid down on the board's slope.
+function rimGeo(r) {
+  const t = 0.011, pts = [];
+  pts.push(new THREE.Vector2(r - t, -0.004), new THREE.Vector2(r - t, LIP * 0.72));
+  for (let k = 0; k <= 8; k++) { const a = Math.PI - k / 8 * Math.PI; pts.push(new THREE.Vector2(r + Math.cos(a) * t, LIP * 0.72 + Math.sin(a) * t * 1.6)); }
+  pts.push(new THREE.Vector2(r + t * 2.4, -0.004));
+  const g = new THREE.LatheGeometry(pts, 72);
+  g.rotateX(Math.PI / 2);   // standing up off the board
+  return g;
 }
-function ringMesh(u, v, r, mat) {   // a ring lip lying on the board
-  const pts = [];
-  for (let k = 0; k < 64; k++) {
-    const a = k / 64 * Math.PI * 2, rv = v + r * Math.sin(a);
-    pts.push(new THREE.Vector3(u + r * Math.cos(a), H(rv) + LIP * 0.45, -rv));
-  }
-  return tube(pts, LIP * 0.5, mat, true);
+function ringOnBoard(u, v, r, pts) {   // a whole ring: its rim and glowing band, lying on the board at (u, v)
+  const pod = new THREE.Group(), inner = new THREE.Group();
+  pod.rotation.x = TILT_ROT; pod.position.set(u, H(v), -v); pod.add(inner);
+  inner.scale.y = STRETCH;
+  const rim = new THREE.Mesh(rimGeo(r), rimMat[pts]);
+  const band = new THREE.Mesh(new THREE.TorusGeometry(r - 0.012, 0.0035, 6, 72), bandMat[pts]);
+  band.position.z = LIP * 0.7;
+  inner.add(rim, band);
+  return { pod, inner, rim, band };
 }
 function holeMesh(u, v, r, pts) {
   const m = new THREE.Mesh(new THREE.CircleGeometry(r * 1.05, 40), holeMat[pts]);
@@ -244,87 +300,80 @@ function holeMesh(u, v, r, pts) {
   m.rotation.x = TILT_ROT; m.scale.y = STRETCH;
   return m;
 }
-function tinyPod() {   // a tiny ring and its hole, as one piece that can sink into the board and pop back up
-  const pod = new THREE.Group(), inner = new THREE.Group();
-  pod.rotation.x = TILT_ROT; pod.add(inner);
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(TINY, LIP * 0.5, 10, 48), ringMat[75]);
-  ring.position.z = LIP * 0.45;
+function tinyPod(g) {   // a tiny ring and its hole, as one piece that can sink into the board and pop back up
+  const p = ringOnBoard(0, B0, TINY, 75);
   const hole = new THREE.Mesh(new THREE.CircleGeometry(TINY_HOLE * 1.05, 32), holeMat[75]);
   hole.position.set(0, -TINY + TINY_HOLE + 0.004, 0.003);
-  inner.add(ring, hole);
-  pod.visible = false;
-  return { pod, inner, ring, hole };
+  p.inner.add(hole); p.hole = hole;
+  p.pod.visible = false;
+  g.add(p.pod);
+  return p;
 }
-const SLOT_V = k => 0.12 + k * 0.1;                  // where the balls sit down each slot
-const slotY = v => H(v) - 0.025 + R;                 // (a slot's floor is a little lower than the lane)
+const SLOT_V = k => 0.12 + k * 0.1;                  // where the balls sit along each channel
+const CH_U = HALF + WALL / 2;                        // the middle of a channel, across
+const slotY = v => H(v) + WALL_H - CH_D + R;         // a ball sitting in a channel
+const SIGN_H = BACK_H - 0.06;                        // the scoreboard fills the backboard over the board
+const SIGN_PX = Math.round(1024 * SIGN_H / W);
 function buildMachine(i) {
   const g = new THREE.Group();
   g.position.set(MACHINES[i], 0, FRONT_Z);
   scene.add(g);
-  // the lane, its hump, the gutter in front of the board and the drops into it
+  // the deep space runway, its hump, the gutter in front of the board and the drops into it
   g.add(surface(-0.02, L, 60, laneMat), surface(L, L + HU, 24, laneMat));
   const gut = new THREE.Mesh(new THREE.PlaneGeometry(W, B0 - L - HU), darkMat);
   gut.rotation.x = -Math.PI / 2; gut.position.set(0, TROUGH, -(L + HU + B0) / 2); g.add(gut);
-  for (const [v, top] of [[L + HU, HUMP_TOP], [B0, YB]]) {
+  for (const [v, top] of [[B0, YB]]) {
     const f = new THREE.Mesh(new THREE.PlaneGeometry(W, top - TROUGH), darkMat);
     f.position.set(0, (top + TROUGH) / 2, -v); f.rotation.y = v === B0 ? 0 : Math.PI; g.add(f);
   }
-  // the target board, its rings in the middle, and eight tiny ring pods (a game shows 2 to 8 of them at a time)
+  // the launch hump's lip: a rounded metal bar right across the top edge, and metal caps on both ends of it
+  const lip = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, W, 24), chromeMat);
+  lip.rotation.z = Math.PI / 2;
+  lip.position.set(0, HUMP_TOP - 0.022, -(L + HU)); g.add(lip);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(W, HUMP_TOP - 0.022 - TROUGH), chromeMat);   // the hump's back face, down to the gutter
+  face.position.set(0, (HUMP_TOP - 0.022 + TROUGH) / 2, -(L + HU + 0.022)); face.rotation.y = Math.PI; g.add(face);
+  for (const sd of [-1, 1]) {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 12), chromeMat);
+    cap.position.set(sd * (HALF - 0.01), HUMP_TOP - 0.01, -(L + HU)); g.add(cap);
+  }
+  // the board: the vortex behind, the rings in the middle and their holes, and eight tiny ring pods (2 to 8 show at a time)
   g.add(surface(B0, B1, 14, boardMat));
-  CENTER.forEach(([u, v, r, p]) => g.add(ringMesh(u, B0 + v, r, ringMat[p])));
+  CENTER.forEach(([u, v, r, p]) => g.add(ringOnBoard(u, B0 + v, r, p).pod));
   CENTER_HOLES.forEach(([u, v, r, p]) => g.add(holeMesh(u, B0 + v, r, p)));
   const pods = [];
-  for (let k = 0; k < 8; k++) { const p = tinyPod(); g.add(p.pod); pods.push(p); }
-  // the walls: tall holo walls round the board, and along the lane the outside walls with a ball slot each side
+  for (let k = 0; k < 8; k++) pods.push(tinyPod(g));
+  // the walls round the board, tall
   g.add(panel(L, VB, topEdge, HALF), panel(L, VB, topEdge, -HALF - 0.04));
-  const laneTop = v => H(Math.max(v, 0)) + 0.3;
-  g.add(panel(VF, L + 0.04, laneTop, OUT), panel(VF, L + 0.04, laneTop, -OUT - 0.04));
-  const covers = [];
-  for (const side of [-1, 1]) {
-    const mid = side * (HALF + LEDGE / 2);
-    g.add(surface(VF, L, 30, darkMat, mid - LEDGE / 2, mid + LEDGE / 2, 0.025));   // the slot's floor
-    const cap = new THREE.Mesh(new THREE.BoxGeometry(LEDGE, 0.3, 0.04), holoMat);   // closing off the slot where the lane ends
-    cap.position.set(mid, H(L) + 0.12, -L - 0.02); g.add(cap);
-    const rail = [];   // a neon rail between the lane and the slot
-    for (let k = 0; k <= 20; k++) { const v = -0.02 + (L + 0.02) * k / 20; rail.push(new THREE.Vector3(side * HALF, H(v) + 0.03, -v)); }
-    g.add(tube(rail, 0.012, tealMat, false));
-    // the slot's cover: Tetris holo over the balls, sliding back into the far end of the slot when a game starts
-    const len = SLOT_V(SLOT - 1) - SLOT_V(0) + 0.14, far = SLOT_V(SLOT - 1) + 0.07;
-    const geo = new THREE.BoxGeometry(LEDGE + 0.01, 0.012, len); geo.translate(0, 0, len / 2);
+  // the thick walls along the lane, each with its ball channel sunk into the top, and a Tetris cover over it that
+  // slides sideways into the outside of the wall when a game starts
+  const covers = [], side = (WALL - CH) / 2;
+  for (const sd of [-1, 1]) {
+    const inX = sd > 0 ? HALF : -HALF - side, outX = sd > 0 ? HALF + side + CH : -OUT;
+    g.add(panel(VF, L + 0.04, laneTop, inX, side), panel(VF, L + 0.04, laneTop, outX, side));
+    const chMid = sd * CH_U;
+    g.add(surface(VF, L + 0.04, 30, darkMat, chMid - CH / 2, chMid + CH / 2, WALL_H - CH_D));   // the channel's floor
+    for (const v of [VF + 0.02, L + 0.02]) {   // closing off both ends of the channel
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(CH, CH_D, 0.04), holoMat);
+      cap.position.set(chMid, H(Math.max(v, 0)) + WALL_H - CH_D / 2, -v); g.add(cap);
+    }
+    const v0 = SLOT_V(0) - 0.07, v1 = SLOT_V(SLOT - 1) + 0.07, vm = (v0 + v1) / 2, len = (v1 - v0) * Math.sqrt(1 + SLOPE * SLOPE);
+    const geo = new THREE.BoxGeometry(CH + 0.012, 0.012, len); geo.translate(-sd * (CH + 0.012) / 2, 0, 0);   // anchored at the outside edge
     const c = new THREE.Mesh(geo, coverMat);
-    c.position.set(mid, slotY(far) + R + 0.012, -far); c.rotation.x = Math.atan(SLOPE);
+    c.position.set(sd * (CH_U + CH / 2 + 0.006), H(vm) + WALL_H + 0.004, -vm); c.rotation.x = Math.atan(SLOPE);
     g.add(c); covers.push(c);
   }
-  const front = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT + 0.08, H(VF) - 0.01, 0.04), holoMat);   // the front, under your end
+  const front = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT, H(VF) - 0.01, 0.04), holoMat);   // the front, under your end
   front.position.set(0, (H(VF) - 0.01) / 2, -VF + 0.02); g.add(front);
-  const lipF = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT + 0.08, 0.04, 0.04), trimMat);
-  lipF.position.set(0, H(VF) + 0.01, -VF + 0.02); g.add(lipF);
   const back = new THREE.Mesh(new THREE.BoxGeometry(W + 0.08, topEdge(VB), 0.06), holoMat);
   back.position.set(0, topEdge(VB) / 2, -(B1 + 0.03)); g.add(back);
-  // neon along the tops of all the walls
-  for (const [x, v0, v1, top] of [[HALF + 0.02, L, VB, topEdge], [-HALF - 0.02, L, VB, topEdge], [OUT + 0.02, VF, L + 0.04, laneTop], [-OUT - 0.02, VF, L + 0.04, laneTop]]) {
-    const pts = [];
-    for (let k = 0; k <= 50; k++) { const v = v0 + (v1 - v0) * k / 50; pts.push(new THREE.Vector3(x, top(Math.min(v, B1)) + 0.012, -v)); }
-    g.add(tube(pts, 0.011, trimMat, false));
-  }
-  // your orb, set in the backboard above the rings, slowly turning, with a glow round it and a neon rim
-  const ORB_R = 0.32, ORB_Y = H(B1) + 0.42, ORB_Z = -(B1 - 0.004);
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(ORB_R * 4, ORB_R * 4), new THREE.MeshBasicMaterial({ map: glowTex, color: 0x9a6bff,
-    transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-  glow.position.set(0, ORB_Y, ORB_Z - 0.002); g.add(glow);
-  const orb = new THREE.Mesh(new THREE.CircleGeometry(ORB_R, 64), orbMat);
-  orb.position.set(0, ORB_Y, ORB_Z); g.add(orb);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(ORB_R + 0.008, 0.016, 10, 72), trimMat);
-  rim.position.copy(orb.position); g.add(rim);
-  const orbLight = new THREE.PointLight(0x9a6bff, 1.5, 3, 1.6); orbLight.position.set(0, ORB_Y, ORB_Z + 0.4); g.add(orbLight);
-  // light over the board, so the rings and the balls shine
-  const boardLight = new THREE.PointLight(0x9fe8ff, 5, 4.5, 1.5); boardLight.position.set(0, YB + 1.3, -(B0 + 0.9)); g.add(boardLight);
-  // the sign at the top of the backboard: SKEE·BALL, the score and the balls left
-  const sc = document.createElement('canvas'); sc.width = 1024; sc.height = 420;
+  // light over the board, so the rims and the balls shine
+  const boardLight = new THREE.PointLight(0xd8c8ff, 6, 4.5, 1.5); boardLight.position.set(0, YB + 1.4, -(B0 + 0.6)); g.add(boardLight);
+  const laneLight = new THREE.PointLight(0xbfa8ff, 3, 3, 1.5); laneLight.position.set(0, Y0 + 0.9, -0.5); g.add(laneLight);
+  // the scoreboard: the whole backboard over the board
+  const sc = document.createElement('canvas'); sc.width = 1024; sc.height = SIGN_PX;
   const sTex = new THREE.CanvasTexture(sc); sTex.colorSpace = THREE.SRGBColorSpace; sTex.anisotropy = MAX_ANISO;
-  const SIGN_H = W * 420 / 1024;
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(W, SIGN_H), new THREE.MeshBasicMaterial({ map: sTex, toneMapped: false }));
-  sign.position.set(0, topEdge(VB) - 0.03 - SIGN_H / 2, ORB_Z); g.add(sign);
+  sign.position.set(0, H(B1) + 0.04 + SIGN_H / 2, -(B1 - 0.004)); g.add(sign);
   g.traverse(o => { if (o.isMesh) o.userData.skee = i; });   // clicking any part of it means "play this one"
   // the balls
   const balls = [];
@@ -332,15 +381,15 @@ function buildMachine(i) {
     const b = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 16), woodMat);
     b.visible = false; b.userData.skee = i; g.add(b); balls.push(b);
   }
-  return { i, g, pods, covers, orb, glow, orbLight, sc, sTex, balls,
-           data: null, tray: 0, live: [], seen: null, signKey: '', score: 0, cov: 0, lay: null, layN: -1, pop: null };
+  return { i, g, pods, covers, sc, sTex, balls, signY: H(B1) + 0.04 + SIGN_H / 2,
+           data: null, tray: 0, live: [], seen: null, signKey: '', score: 0, shown: 0, cov: 0, lay: null, layN: -1, pop: null, pops: [] };
 }
 
 // ---------- The best scores, up on the back wall over the machines ----------
 const hc = document.createElement('canvas'); hc.width = 1024; hc.height = 640;
 const hTex = new THREE.CanvasTexture(hc); hTex.colorSpace = THREE.SRGBColorSpace; hTex.anisotropy = MAX_ANISO;
 const hiBoard = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 1.4), new THREE.MeshBasicMaterial({ map: hTex, toneMapped: false }));
-hiBoard.position.set((MACHINES[0] + MACHINES[1]) / 2, 4.28, -10.94);
+hiBoard.position.set((MACHINES[0] + MACHINES[1]) / 2, 4.1, -10.94);
 scene.add(hiBoard);
 function neonText(x, text, px, py, size, col, align = 'center', font = '"Trebuchet MS", sans-serif') {
   x.save();
@@ -379,27 +428,62 @@ onValue(query(ref(db, 'game/skee/best'), orderByChild('score'), limitToLast(8)),
 // ---------- A machine's sign ----------
 function stale(d) { return !d || d.done || serverNow() - (d.t || 0) > 120000; }   // nobody's playing it (or they vanished)
 function paintSign(m, blink) {
-  const d = m.data, free = stale(d), over = d && d.done && serverNow() - d.t < 8000;
-  const key = [free, over, d && d.name, d && d.score, d && d.left, blink, best[0] && best[0].score].join('|');
+  const d = m.data, free = stale(d), over = d && d.done && serverNow() - d.t < 8000, shown = Math.round(m.shown);
+  const key = [free, over, d && d.name, shown, d && d.left, blink, best[0] && best[0].score].join('|');
   if (key === m.signKey) return;
   m.signKey = key;
-  const x = m.sc.getContext('2d');
-  frame(x, 1024, 420, '#b36bff');
-  neonText(x, 'SKEE·BALL', 512, 95, 92, '#ff3fa8');
+  const x = m.sc.getContext('2d'), w = 1024, h = SIGN_PX;
+  frame(x, w, h, '#b36bff');
+  // the left side: the name of the game, who's playing and the balls left; the right side: the score, big
+  const big = Math.min(h * 0.5, 150), small = Math.min(h * 0.14, 46);
+  neonText(x, 'SKEE·BALL', 250, h * 0.3, Math.min(h * 0.22, 76), '#ff3fa8');
   if (over) {
-    neonText(x, blink ? 'GAME OVER' : '', 300, 230, 56, '#ffd36a');
-    neonText(x, String(d.score), 740, 250, 130, '#29e6ff', 'center', '"Courier New", monospace');
-    neonText(x, d.name, 300, 320, 44, '#cdb8ff');
+    neonText(x, blink ? 'GAME OVER' : '', 250, h * 0.6, small * 1.15, '#ffd36a');
+    neonText(x, d.name, 250, h * 0.8, small, '#cdb8ff');
+    neonText(x, String(d.score), 735, h * 0.55, big, '#29e6ff', 'center', '"Courier New", monospace');
   } else if (free) {
-    neonText(x, blink ? 'PLAY ME' : '', 512, 235, 100, '#29e6ff');
+    neonText(x, blink ? 'PLAY ME' : '', 735, h * 0.45, Math.min(h * 0.3, 96), '#29e6ff');
     const bits = [d && d.name ? `last: ${d.name} ${d.score}` : '', best[0] ? `best: ${best[0].score}` : ''].filter(Boolean).join('   ·   ');
-    if (bits) neonText(x, bits, 512, 340, 40, '#ffd36a');
+    if (bits) neonText(x, bits, 512, h * 0.82, small * 0.8, '#ffd36a');
   } else {
-    neonText(x, d.name, 290, 215, 48, '#cdb8ff');
-    neonText(x, `balls ${d.left}`, 290, 300, 52, '#ffd36a');
-    neonText(x, String(d.score).padStart(4, '0'), 730, 255, 150, '#29e6ff', 'center', '"Courier New", monospace');
+    neonText(x, d.name, 250, h * 0.58, small, '#cdb8ff');
+    neonText(x, `balls ${d.left}`, 250, h * 0.8, small, '#ffd36a');
+    neonText(x, String(shown).padStart(4, '0'), 735, h * 0.55, big, '#29e6ff', 'center', '"Courier New", monospace');
   }
   m.sTex.needsUpdate = true;
+}
+
+// ---------- Big numbers: popping up out of the hole when a ball drops, then flying up into the scoreboard ----------
+function popNumber(m, pts, u, v) {
+  const col = COL[pts] || '#ffffff';
+  const tex = canvasTex(256, 128, x => {
+    x.font = 'bold 96px "Trebuchet MS", sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.shadowColor = col; x.shadowBlur = 24; x.fillStyle = col; x.fillText('+' + pts, 128, 66);
+    x.shadowBlur = 4; x.fillStyle = '#ffffff'; x.globalAlpha = 0.85; x.fillText('+' + pts, 128, 66);
+  });
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, toneMapped: false }));
+  sp.renderOrder = 10;
+  const from = new THREE.Vector3(u, H(v) + 0.05, -v), to = new THREE.Vector3(0.18, m.signY, -(B1 - 0.05));
+  m.g.add(sp);
+  m.pops.push({ sp, from, to, t: 0, pts });
+}
+function stepPops(m, dt) {
+  for (const p of m.pops) {
+    p.t += dt;
+    const k = p.t;
+    if (k < 0.6) {   // up out of the hole, growing big
+      const e = 1 - Math.pow(1 - k / 0.6, 3);
+      p.sp.position.copy(p.from).add(new THREE.Vector3(0, e * 0.35, 0));
+      p.sp.scale.set(0.2 + e * 0.5, (0.2 + e * 0.5) / 2, 1);
+    } else {         // then off up into the score
+      const e = Math.min(1, (k - 0.6) / 0.5), s = 0.7 - e * 0.45;
+      p.sp.position.lerpVectors(p.from.clone().add(new THREE.Vector3(0, 0.35, 0)), p.to, e * e);
+      p.sp.scale.set(s, s / 2, 1);
+      p.sp.material.opacity = 1 - Math.max(0, e - 0.7) / 0.3;
+      if (e >= 1) p.done = true;
+    }
+  }
+  m.pops = m.pops.filter(p => { if (p.t > 1.15) { m.g.remove(p.sp); p.sp.material.map.dispose(); p.sp.material.dispose(); return false; } return true; });
 }
 
 // ---------- The tiny rings: sinking away, and popping up in their new pattern ----------
@@ -409,7 +493,7 @@ function placePods(m, lay) {   // set the pods where this layout has its tiny ri
     p.pod.visible = !!t;
     if (!t) return;
     p.pod.position.set(t.u, H(t.v), -t.v);
-    p.ring.material = ringMat[t.pts]; p.hole.material = holeMat[t.pts];
+    p.rim.material = rimMat[t.pts]; p.band.material = bandMat[t.pts]; p.hole.material = holeMat[t.pts];
   });
 }
 function podScale(m, s, sink) {   // all the pods at one size, sunk this far into the board
@@ -435,9 +519,9 @@ function stepPop(m, dt) {
   }
 }
 
-// ---------- The balls: waiting in the side slots, rolling, sinking ----------
+// ---------- The balls: waiting in the wall channels, rolling, sinking ----------
 function busySet(m) { return new Set([...m.live.map(l => l.mesh), m.hand && m.hand.mesh].filter(Boolean)); }
-function placeTray(m) {   // the balls waiting in the slots, filling the two slots evenly from your end; the rest hidden (or busy)
+function placeTray(m) {   // the balls waiting in the channels, filling both evenly from your end; the rest hidden (or busy)
   let k = 0;
   const busy = busySet(m);
   for (const b of m.balls) {
@@ -445,12 +529,12 @@ function placeTray(m) {   // the balls waiting in the slots, filling the two slo
     if (k < m.tray) {
       const side = k % 2 ? 1 : -1, v = SLOT_V(Math.floor(k / 2));
       b.visible = true; b.scale.setScalar(1);
-      b.position.set(side * (HALF + LEDGE / 2), slotY(v), -v);
+      b.position.set(side * CH_U, slotY(v), -v);
       k++;
     } else b.visible = false;
   }
 }
-function freeBall(m) {   // the waiting ball nearest your end of the slots
+function freeBall(m) {   // the waiting ball nearest your end of the channels
   const busy = busySet(m);
   return m.balls.filter(b => !busy.has(b) && b.visible).sort((a, b) => b.position.z - a.position.z)[0] || m.balls.find(b => !busy.has(b));
 }
@@ -458,9 +542,9 @@ function near(m) {   // how loud this machine should be where you are
   const d = camera.position.distanceTo(m.g.position) + 0.5;
   return Math.min(1, 3 / d);
 }
-function launch(m, roll) {   // a ball leaves its slot and rolls (yours or anyone's: the same on every screen)
+function launch(m, roll) {   // a ball leaves its channel and rolls (yours or anyone's: the same on every screen)
   let mesh = m.hand && m.hand.mesh;
-  if (mesh) m.hand = null;                // yours: it's already out of the slot, sitting on the lane
+  if (mesh) m.hand = null;                // yours: it's already out of the channel, sitting on the lane
   else { mesh = freeBall(m); if (m.tray > 0) m.tray--; }
   if (!mesh) return null;
   if (!m.lay || m.layN !== roll.n) showLayout(m, roll.g, roll.n, false);
@@ -506,7 +590,7 @@ function updateLive(m, dt) {
     if (dist > 1e-6) { ax.set(-dv, 0, -du).normalize(); q.setFromAxisAngle(ax, dist / R); l.mesh.quaternion.premultiply(q); }
     if (b.on && b.v < B0) fastest = Math.max(fastest, Math.hypot(b.vu, b.vv) / 7);
     if (b.res) {
-      if (b.res.pts) { l.mesh.position.set(b.res.u, H(b.res.v) + R * 0.6, -b.res.v); sfx.skeeDrop(b.res.pts, k); m.flash = 1; }   // the orb flares
+      if (b.res.pts) { l.mesh.position.set(b.res.u, H(b.res.v) + R * 0.6, -b.res.v); sfx.skeeDrop(b.res.pts, k); popNumber(m, b.res.pts, b.res.u, b.res.v); }
       else sfx.skeeGutter(k);
       if (l.mine) mineDone(m, b.res.pts);
     }
@@ -532,7 +616,6 @@ ui.append(uiText, againBtn, quitBtn);
 document.body.appendChild(ui);
 againBtn.addEventListener('click', () => { if (my) claim(my); });
 quitBtn.addEventListener('click', () => leave());
-window.addEventListener('keydown', e => { if (e.key === 'Escape' && my) leave(); });
 function mine(m) { const d = m && m.data; return !!(d && d.id === myId && !d.done); }
 function rolling(m) { return m.live.some(l => !l.gone) || !!m.pop; }
 function showUi() {
@@ -541,58 +624,108 @@ function showUi() {
   const d = my.data, touch = my.hand && my.hand.touch;
   againBtn.style.display = mine(my) ? 'none' : '';
   if (!mine(my)) uiText.textContent = d && d.id === myId && d.done ? `Game over: ${d.score}` : 'Ready';
-  else if (my.hand) uiText.textContent = {
-    aim: touch ? 'Drag to aim, let go to lock it' : 'Aim with your mouse, click to lock it',
-    spin: 'Click to stop the spin bar',
-    power: touch ? 'Drag up and down for power, let go to roll' : 'Move up and down for power, click to roll' }[my.hand.stage];
+  else if (my.hand) uiText.textContent = my.hand.stage === 'aim'
+    ? (touch ? 'Drag to aim, let go to lock it · drag the meter for power' : 'Aim with your mouse, click to lock it · power: scroll wheel or ↑ ↓')
+    : (touch ? 'Tap to stop the spin bar and roll' : 'Click to stop the spin bar and roll · right click to aim again');
   else uiText.textContent = rolling(my) ? 'Rolling…' : my.tray ? 'Get ready…' : 'Last ball rolling…';
 }
 
-// ---------- A roll: aim (an arrow that follows you), spin (a timing bar), power (a tachometer you set) ----------
+// ---------- A roll: aim (an arrow that follows you), then spin (a timing bar) and it goes. The power is a meter you set ----------
+// whenever you like (scroll wheel or the up and down keys, or drag on the meter itself), and it stays where you leave it.
 const gauge = document.createElement('canvas');
 gauge.width = 440; gauge.height = 250;
-gauge.style.cssText = 'position:fixed;left:50%;bottom:76px;transform:translateX(-50%);width:330px;height:188px;z-index:25;display:none;pointer-events:none';
+gauge.style.cssText = 'position:fixed;left:14px;bottom:14px;width:330px;height:188px;z-index:25;display:none;touch-action:none;cursor:pointer';
 document.body.appendChild(gauge);
-const SPIN_TIME = 3.2, SEGS = 20, AIM_MAX = 0.5;   // the spin bar's trip across and back (seconds), the tach's segments, the widest aim (radians)
+const SPIN_TIME = 3.2, SEGS = 20, AIM_MAX = 0.5;   // the spin bar's trip across and back (seconds), the meter's segments, the widest aim (radians)
+const TACH_X = 220, TACH_Y = 236, TACH_R0 = 110, TACH_R1 = 168;   // the meter's middle and its inside and outside edges (on the gauge)
+let power = 8;                                     // the power you've set, in segments (1 to 20); it stays put between rolls
 function drawGauge(h) {
   const x = gauge.getContext('2d'), W2 = gauge.width;
   x.clearRect(0, 0, W2, gauge.height);
-  if (!h || h.stage === 'aim') { gauge.style.display = 'none'; return; }
+  if (!h && !canSet()) { gauge.style.display = 'none'; return; }   // (between rolls it stays up, so you can set the power any time)
   gauge.style.display = 'block';
-  // the spin bar, across the top
-  const bx = 40, bw = W2 - 80, by = 14, bh = 30;
+  // the spin bar, across the top (waiting in the middle until you've locked your aim)
+  const bx = 40, bw = W2 - 80, by = 14, bh = 30, live = !!h && h.stage === 'spin';
   x.fillStyle = 'rgba(10,4,24,0.8)'; x.fillRect(bx - 8, by - 6, bw + 16, bh + 12);
   const g = x.createLinearGradient(bx, 0, bx + bw, 0);
   g.addColorStop(0, '#29e6ff'); g.addColorStop(0.45, '#2a1a40'); g.addColorStop(0.55, '#2a1a40'); g.addColorStop(1, '#ff3fa8');
-  x.fillStyle = g; x.fillRect(bx, by, bw, bh);
+  x.save(); x.globalAlpha = live ? 1 : 0.4; x.fillStyle = g; x.fillRect(bx, by, bw, bh); x.restore();
   x.fillStyle = '#ffffff'; x.fillRect(bx + bw / 2 - 1, by - 4, 2, bh + 8);
   x.font = 'bold 22px "Trebuchet MS", sans-serif'; x.textBaseline = 'middle'; x.textAlign = 'center';
   x.fillStyle = '#29e6ff'; x.fillText('↺', bx - 22, by + bh / 2); x.fillStyle = '#ff3fa8'; x.fillText('↻', bx + bw + 22, by + bh / 2);
-  const sx = bx + (h.spin + 1) / 2 * bw;
-  x.save(); x.shadowColor = '#ffd36a'; x.shadowBlur = 14; x.fillStyle = h.stage === 'spin' ? '#ffd36a' : '#fff4d8';
-  x.beginPath(); x.moveTo(sx, by - 8); x.lineTo(sx + 9, by - 18); x.lineTo(sx - 9, by - 18); x.fill();
-  x.fillRect(sx - 3, by - 4, 6, bh + 8); x.restore();
-  // the tachometer: twenty segments round a half circle, green through gold to red, and a needle
-  const cx = W2 / 2, cy = 236, r0 = 110, r1 = 168;
-  x.fillStyle = 'rgba(10,4,24,0.8)'; x.beginPath(); x.arc(cx, cy, r1 + 12, Math.PI, 0); x.fill();
-  const lit = h.stage === 'spin' ? 0 : h.seg;
+  if (live) {
+    const sx = bx + (h.spin + 1) / 2 * bw;
+    x.save(); x.shadowColor = '#ffd36a'; x.shadowBlur = 14; x.fillStyle = '#ffd36a';
+    x.beginPath(); x.moveTo(sx, by - 8); x.lineTo(sx + 9, by - 18); x.lineTo(sx - 9, by - 18); x.fill();
+    x.fillRect(sx - 3, by - 4, 6, bh + 8); x.restore();
+  } else { x.font = 'bold 18px "Trebuchet MS", sans-serif'; x.fillStyle = '#cdb8ff'; x.fillText('SPIN', bx + bw / 2, by + bh / 2); }
+  // the power meter: twenty segments round a half circle, green through gold to red, and a needle
+  x.fillStyle = 'rgba(10,4,24,0.8)'; x.beginPath(); x.arc(TACH_X, TACH_Y, TACH_R1 + 12, Math.PI, 0); x.fill();
   for (let k = 0; k < SEGS; k++) {
     const a0 = Math.PI + k / SEGS * Math.PI + 0.012, a1 = Math.PI + (k + 1) / SEGS * Math.PI - 0.012;
-    const hue = 120 - k / (SEGS - 1) * 120, on = k < lit;
+    const hue = 120 - k / (SEGS - 1) * 120, on = k < power;
     x.fillStyle = on ? `hsl(${hue},100%,55%)` : `hsla(${hue},60%,30%,0.45)`;
     x.save(); if (on) { x.shadowColor = x.fillStyle; x.shadowBlur = 12; }
-    x.beginPath(); x.arc(cx, cy, r1, a0, a1); x.arc(cx, cy, r0, a1, a0, true); x.closePath(); x.fill(); x.restore();
+    x.beginPath(); x.arc(TACH_X, TACH_Y, TACH_R1, a0, a1); x.arc(TACH_X, TACH_Y, TACH_R0, a1, a0, true); x.closePath(); x.fill(); x.restore();
   }
-  const na = Math.PI + (lit / SEGS) * Math.PI;
-  x.strokeStyle = '#ffffff'; x.lineWidth = 4; x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + Math.cos(na) * (r1 + 6), cy + Math.sin(na) * (r1 + 6)); x.stroke();
-  x.fillStyle = '#ffffff'; x.beginPath(); x.arc(cx, cy, 9, 0, Math.PI * 2); x.fill();
-  if (h.stage === 'power') {
-    x.font = 'bold 54px "Courier New", monospace'; x.fillStyle = '#ffffff'; x.save(); x.shadowColor = '#ff3fa8'; x.shadowBlur = 16;
-    x.fillText(String(lit), cx, cy - 52); x.restore();
-  }
+  const na = Math.PI + (power / SEGS) * Math.PI;
+  x.strokeStyle = '#ffffff'; x.lineWidth = 4;
+  x.beginPath(); x.moveTo(TACH_X, TACH_Y); x.lineTo(TACH_X + Math.cos(na) * (TACH_R1 + 6), TACH_Y + Math.sin(na) * (TACH_R1 + 6)); x.stroke();
+  x.fillStyle = '#ffffff'; x.beginPath(); x.arc(TACH_X, TACH_Y, 9, 0, Math.PI * 2); x.fill();
+  x.font = 'bold 54px "Courier New", monospace'; x.save(); x.shadowColor = '#ff3fa8'; x.shadowBlur = 16;
+  x.fillText(String(power), TACH_X, TACH_Y - 52); x.restore();
+  x.font = 'bold 15px "Trebuchet MS", sans-serif'; x.fillStyle = '#cdb8ff'; x.fillText('POWER', TACH_X, TACH_Y - 16);
 }
+function setPower(seg) {   // set the power meter (and draw the waiting ball back to match)
+  seg = Math.max(1, Math.min(SEGS, Math.round(seg)));
+  if (seg === power) return;
+  power = seg;
+  sfx.skeeWall(0.12);
+  const h = my && my.hand;
+  if (h) placeHand(h);
+}
+function placeHand(h) {   // the ball waiting on the lane, drawn back further the more power you've set
+  const v = 0.08 - power / SEGS * 0.16;
+  h.mesh.position.set(0, H(Math.max(v, -0.02)) + R, -v);
+}
+function canSet() { return !!(my && mine(my)); }
+// The scroll wheel (a notch a segment; a touchpad needs a little more swipe), and the up and down keys
+let wheelAcc = 0, wheelT = 0;
+window.addEventListener('wheel', e => {
+  if (!canSet()) return;
+  if (performance.now() - wheelT > 250) wheelAcc = 0;
+  wheelT = performance.now();
+  wheelAcc -= e.deltaMode === 1 ? e.deltaY * 34 : e.deltaY;
+  while (Math.abs(wheelAcc) >= 100) { const st = Math.sign(wheelAcc); setPower(power + st); wheelAcc -= st * 100; }
+}, { passive: true });
+window.addEventListener('keydown', e => {
+  if (!my) return;
+  const a = document.activeElement;
+  if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'escape') { const h = my.hand; if (h && h.stage === 'spin') back(h); else leave(); return; }
+  if (!canSet()) return;
+  if (k === 'arrowup' || k === 'w') { setPower(power + 1); e.preventDefault(); }
+  if (k === 'arrowdown' || k === 's') { setPower(power - 1); e.preventDefault(); }
+});
+window.addEventListener('contextmenu', e => { if (my) e.preventDefault(); });   // right click is "aim again" while you play
+// Dragging (or clicking) on the meter itself
+let meterDrag = false;
+function meterAt(e) {
+  const r = gauge.getBoundingClientRect(), k = gauge.width / r.width;
+  const dx = (e.clientX - r.left) * k - TACH_X, dy = (e.clientY - r.top) * k - TACH_Y;
+  if (dy > 20) return;
+  setPower(Math.ceil((Math.atan2(Math.min(dy, -0.001), dx) + Math.PI) / Math.PI * SEGS));
+}
+gauge.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  if (!canSet()) return;
+  meterDrag = true; gauge.setPointerCapture(e.pointerId); meterAt(e);
+});
+gauge.addEventListener('pointermove', e => { if (meterDrag) meterAt(e); });
+for (const ev of ['pointerup', 'pointercancel']) gauge.addEventListener(ev, () => { meterDrag = false; });
 
-// The aiming arrow: chevrons glowing up the lane from the ball, the way it'll go (longer as the power builds)
+// The aiming arrow: chevrons glowing up the lane from the ball, the way it'll go (longer and hotter the more power)
 const aimCanvas = document.createElement('canvas'); aimCanvas.width = 64; aimCanvas.height = 512;
 { const x = aimCanvas.getContext('2d'), g = x.createLinearGradient(0, 512, 0, 0);
   g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(1, 'rgba(255,255,255,0)');
@@ -608,62 +741,56 @@ function showAim(h) {
   if (!h) return;
   aim.position.set(0, H(0.08) + 0.005, -0.08);
   aim.rotation.set(Math.atan(SLOPE), -h.aim, 0, 'YXZ');   // tipped up the lane's slope, turned the way it'll go
-  const p = h.stage === 'power' ? h.seg / SEGS : 0.3;
+  const p = power / SEGS;
   aim.scale.set(1, 1, 0.6 + p * 1.6);
-  aimMat.color.setHSL(h.stage === 'power' ? 0.33 - p * 0.33 : 0.52, 1, 0.55);
+  aimMat.color.setHSL(0.33 - p * 0.33, 1, h.stage === 'aim' ? 0.55 : 0.7);
 }
-function ballX(m) {   // where your ball is on the screen (pixels across)
-  const p = new THREE.Vector3(0, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(camera);
+function ballX(m) {   // where your ball is on the screen (pixels across, in the bottom strip)
+  const p = new THREE.Vector3(0, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(view && view.t >= 1 ? nearCam : camera);
   return (p.x + 1) / 2 * window.innerWidth;
 }
-function readyBall(m) {   // your turn and nothing rolling: the next ball comes up out of a slot onto the lane, ready to aim
+function readyBall(m) {   // your turn and nothing rolling: the next ball comes out of a channel onto the lane, ready to aim
   if (m.hand || m.tray <= 0 || rolling(m) || !mine(m) || (view && view.t < 1)) return;
   const mesh = freeBall(m);
   if (!mesh) return;
-  m.hand = { mesh, stage: 'aim', t: 0, aim: 0, spin: 0, seg: 8, y0: 0, seg0: 8 };
+  m.hand = { mesh, stage: 'aim', t: 0, aim: 0, spin: 0 };
   m.tray--; placeTray(m);
-  mesh.visible = true; mesh.position.set(0, H(0.08) + R, -0.08);
+  mesh.visible = true; placeHand(m.hand);
   m.g.add(aim);
   sfx.skeeThump(0.5);
   showUi();
 }
-function steer(h, e) {   // the pointer moving: swinging the aim, or raising and lowering the power
+function steer(h, e) {   // the pointer moving over the game swings the aim (until you've locked it)
   if (h.stage === 'aim') h.aim = Math.max(-1, Math.min(1, (e.clientX - ballX(my)) / (window.innerWidth * 0.32))) * AIM_MAX;
-  else if (h.stage === 'power') {
-    const seg = Math.round(h.seg0 + (h.y0 - e.clientY) / (window.innerHeight * 0.03));   // up a segment for every bit you move up
-    h.seg = Math.max(1, Math.min(SEGS, seg));
-    const v = 0.08 - h.seg / SEGS * 0.16;   // the ball draws back as the power builds
-    h.mesh.position.set(0, H(Math.max(v, -0.02)) + R, -v);
-  }
 }
-function next(h, e) {   // lock this step in and go on to the next
-  if (h.stage === 'aim') { h.stage = 'spin'; h.t = 0; sfx.skeeRim(0.8); }
-  else if (h.stage === 'spin') { h.stage = 'power'; h.y0 = e.clientY; h.seg0 = h.seg; sfx.skeeRim(0.8); }
-  else if (h.stage === 'power') { roll(my, h); return; }
-  showUi();
+function next(h) {   // the first click locks the aim and starts the spin bar; the second stops it, and the ball goes
+  if (h.stage === 'aim') { h.stage = 'spin'; h.t = 0; sfx.skeeRim(0.8); showUi(); }
+  else if (h.stage === 'spin') roll(my, h);
 }
+function back(h) { h.stage = 'aim'; h.t = 0; h.spin = 0; sfx.skeeWall(0.3); showUi(); }   // aim again
 function down(e) {
   const h = my && my.hand;
   if (!h || !mine(my)) return;
+  if (e.button === 2) { if (h.stage === 'spin') back(h); return; }
   h.touch = e.pointerType === 'touch';
-  if (h.touch && h.stage !== 'spin') { h.dragging = true; if (h.stage === 'power') { h.y0 = e.clientY; h.seg0 = h.seg; } steer(h, e); return; }   // phones: drag, then let go
-  next(h, e);
+  if (h.touch && h.stage === 'aim') { h.dragging = true; steer(h, e); return; }   // phones: drag to aim, let go to lock it
+  next(h);
 }
 function move(e) {
   const h = my && my.hand;
-  if (!h || (e.pointerType === 'touch' && !h.dragging)) return;
+  if (!h || meterDrag || e.target !== renderer.domElement || (e.pointerType === 'touch' && !h.dragging)) return;
   steer(h, e);
 }
 function up(e) {
   const h = my && my.hand;
   if (!h || !h.dragging) return;
   h.dragging = false;
-  next(h, e);
+  next(h);
 }
 function roll(m, h) {
   const d = m.data, n = BALLS - d.left;
   // everyone uses exactly the numbers that are sent, so their ball rolls the same as yours
-  const r = { n, g: d.g, by: myId, u: 0, p: +(h.seg / SEGS).toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
+  const r = { n, g: d.g, by: myId, u: 0, p: +(power / SEGS).toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
   const l = launch(m, r);
   if (!l) return;
   l.mine = true;
@@ -672,7 +799,7 @@ function roll(m, h) {
   update(ref(db, 'game/skee/m' + m.i), { left: m.myLeft, t: serverNow() }).catch(() => {});
   set(ref(db, 'game/skee/r' + m.i), r).catch(() => {});
   m.seen = d.g + ':' + n;
-  showAim(null); drawGauge(null);
+  showAim(null);
   showUi();
 }
 function mineDone(m, pts) {   // one of your balls finished: add up the score, and end the game after the last one
@@ -708,12 +835,71 @@ function claim(m) {   // start a game on this machine (if nobody else is playing
     showUi();
   }).catch(() => opts.banner && opts.banner('Could not start a game (check the database rules)', 4));
 }
-const PLAY_EYE = new THREE.Vector3(0, 2.45, 1.25), PLAY_LOOK = new THREE.Vector3(0, 0.9, -2.3), PLAY_FOV = 58;   // standing back from the lane
+// ---------- The split screen while you play: the whole board big across the top, and a strip along the bottom of
+// your end (your ball, the aim arrow and the balls in both walls). The lane in between is left out. ----------
+const NEAR_EYE = new THREE.Vector3(0, 1.55, 1.05), NEAR_LOOK = new THREE.Vector3(0, 0.82, -0.2);
+const GOAL_EYE = new THREE.Vector3(0, YB + 2.39, -(B0 - 1.17)), GOAL_LOOK = new THREE.Vector3(0, YB + 0.4, -(B0 + 0.5));   // high, looking down on the board
+// What the top view has to show, edge to edge: the end of the lane and the launch hump at the bottom, the whole board,
+// and the scoreboard at the top. The view is fitted tight round these on any screen, so none of it is wasted.
+const GOAL_BOX = [];
+for (const sd of [-1, 1]) GOAL_BOX.push(new THREE.Vector3(sd * HALF, H(L + 0.06), -(L + 0.06)), new THREE.Vector3(sd * (HALF + 0.04), HUMP_TOP, -(L + HU)),
+  new THREE.Vector3(sd * (HALF + 0.04), YB, -B0), new THREE.Vector3(sd * (HALF + 0.04), H(B1), -B1),
+  new THREE.Vector3(sd * W / 2, H(B1) + 0.04 + SIGN_H, -(B1 - 0.004)));
+let goalPts = [];
+const nearCam = new THREE.PerspectiveCamera(30, 1, 0.05, 40), goalCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
+const STRIP = 0.3;   // how much of the screen's height the bottom strip takes
+function placeCams(m) {
+  m.g.updateMatrixWorld();
+  for (const [cam, eye, look] of [[nearCam, NEAR_EYE, NEAR_LOOK], [goalCam, GOAL_EYE, GOAL_LOOK]]) {
+    cam.position.copy(m.g.localToWorld(eye.clone()));
+    cam.lookAt(m.g.localToWorld(look.clone()));
+  }
+  goalPts = GOAL_BOX.map(p => m.g.localToWorld(p.clone()));
+}
+const cp = new THREE.Vector3();
+function pageBits() { return [document.querySelector('#ui h1'), document.getElementById('hint')].filter(Boolean); }
+function frameGoal(cam, aspect) {   // the top view: from where it stands, just big enough to hold everything in GOAL_BOX
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  cam.updateMatrixWorld();
+  for (const p of goalPts) {
+    cp.copy(p).applyMatrix4(cam.matrixWorldInverse);
+    const x = cp.x / -cp.z, y = cp.y / -cp.z;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const pad = 0.015, mx = (x0 + x1) / 2, my2 = (y0 + y1) / 2;
+  let hw = (x1 - x0) / 2 + pad, hh = (y1 - y0) / 2 + pad;
+  if (hw / hh < aspect) hw = hh * aspect; else hh = hw / aspect;   // the screen's leftover room goes to the sides (or top and bottom)
+  const n = cam.near;
+  cam.aspect = aspect;
+  cam.projectionMatrix.makePerspective((mx - hw) * n, (mx + hw) * n, (my2 + hh) * n, (my2 - hh) * n, n, cam.far);
+  cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+}
+function fit(cam, aspect, wide, tall) {   // a field of view that shows at least this wide and this tall (degrees)
+  cam.aspect = aspect;
+  const byWide = 2 * Math.atan(Math.tan(wide * Math.PI / 360) / aspect) * 180 / Math.PI;
+  cam.fov = Math.max(tall, byWide);
+  cam.updateProjectionMatrix();
+}
+function renderSplit() {   // draws the two views; false when you're not playing (so the room draws as usual)
+  if (!my || !view || view.t < 1) return false;
+  const w = window.innerWidth, h = window.innerHeight, hb = Math.round(h * STRIP), gap = 3;
+  frameGoal(goalCam, w / (h - hb - gap));
+  fit(nearCam, w / hb, 82, 18);
+  renderer.setScissorTest(true);
+  renderer.setViewport(0, hb + gap, w, h - hb - gap); renderer.setScissor(0, hb + gap, w, h - hb - gap);
+  renderer.render(scene, goalCam);
+  renderer.setViewport(0, 0, w, hb); renderer.setScissor(0, 0, w, hb);
+  renderer.render(scene, nearCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  ui.style.bottom = (hb - 22) + 'px';   // the bar of words sits on the line between the two views, out of the way
+  for (const el of pageBits()) el.style.visibility = 'hidden';   // and the room's name and walking tips aren't needed while you play
+  return true;
+}
 function enter(m) {
   my = m;
-  m.g.updateMatrixWorld();
-  const to = m.g.localToWorld(PLAY_EYE.clone()), look = m.g.localToWorld(PLAY_LOOK.clone());
-  const toQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(to, look, new THREE.Vector3(0, 1, 0)));
+  placeCams(m);
+  const to = nearCam.position.clone(), toQ = nearCam.quaternion.clone();   // glide down to your end, then the screen splits
   view = { t: 0, fromP: camera.position.clone(), fromQ: camera.quaternion.clone(), to, toQ, fromF: camera.fov };
   opts.enter && opts.enter(to.x, to.z);
   showUi();
@@ -727,6 +913,8 @@ function leave() {
     onDisconnect(ref(db, 'game/skee/m' + m.i)).cancel();
   }
   my = null; view = null;
+  drawGauge(null); ui.style.bottom = '18px';
+  for (const el of pageBits()) el.style.visibility = '';
   camera.fov = BASE_FOV; camera.updateProjectionMatrix();
   showUi();
   const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
@@ -741,7 +929,7 @@ machines.forEach(m => {
     const d = s.val(), was = m.data;
     m.data = d && typeof d === 'object' ? d : null;
     const playing = m.data && !stale(m.data);
-    if (playing && (!was || was.g !== m.data.g)) {   // a new game: full slots, and the covers slide open
+    if (playing && (!was || was.g !== m.data.g)) {   // a new game: full channels, and the covers slide open
       for (const l of m.live) l.mesh.visible = false;
       m.live = []; m.hand = null;
       if (my === m) { showAim(null); drawGauge(null); }
@@ -751,7 +939,7 @@ machines.forEach(m => {
       m.seen = m.data.g + ':' + (n - 1);
       if (m.data.left === BALLS) sfx.skeePour(0, near(m));
     }
-    if (!playing && !m.live.length && !m.hand) m.tray = BALLS;   // between games the slots sit full under their covers
+    if (!playing && !m.live.length && !m.hand) m.tray = BALLS;   // between games the channels sit full under their covers
     placeTray(m);
     if (my === m) showUi();
   }, () => {});
@@ -773,19 +961,21 @@ machines.forEach(m => {
 let blinkT = 0;
 function updateAll(dt) {
   blinkT += dt;
+  spaceU.uTime.value = blinkT; vortexU.uTime.value = blinkT;
   const blink = Math.floor(blinkT * 1.6) % 2 === 0;
   let roll = 0;
   for (const m of machines) {
     roll = Math.max(roll, updateLive(m, dt));
     stepPop(m, dt);
-    const open = m.data && !stale(m.data) ? 1 : 0;   // the slot covers: slid back while a game's on
+    const open = m.data && !stale(m.data) ? 1 : 0;   // the channel covers: slid open while a game's on
     m.cov += (open - m.cov) * Math.min(1, dt * 4);
-    for (const c of m.covers) c.scale.z = Math.max(0.02, 1 - m.cov);
-    m.orb.rotation.z -= dt * 0.25;                       // the orb's galaxy slowly turns
-    m.flash = Math.max(0, (m.flash || 0) - dt * 1.5);    // and flares when a ball drops
-    m.glow.material.opacity = 0.45 + 0.1 * Math.sin(blinkT * 2 + m.i) + m.flash * 0.6;
-    m.glow.scale.setScalar(1 + m.flash * 0.35);
-    m.orbLight.intensity = 1.5 + m.flash * 6;
+    for (const c of m.covers) c.scale.x = Math.max(0.02, 1 - m.cov);   // (they slide sideways into the outside of the wall)
+    stepPops(m, dt);
+    // the score on the board counts up as each big number lands in it (points still flying up aren't on it yet)
+    const flying = m.pops.reduce((a, p) => a + (p.done ? 0 : p.pts), 0);
+    const target = Math.max(0, (m.data && !m.data.done ? m.data.score || 0 : m.data ? m.data.score || 0 : 0) - flying);
+    if (target >= m.shown || target === 0) m.shown += (target - m.shown) * Math.min(1, dt * 8);   // (it never counts backwards)
+    if (Math.abs(target - m.shown) < 0.5) m.shown = target;
     paintSign(m, blink);
   }
   if (my) {
@@ -800,7 +990,6 @@ function updateAll(dt) {
     const k = view.t * view.t * (3 - 2 * view.t);
     camera.position.lerpVectors(view.fromP, view.to, k);
     camera.quaternion.slerpQuaternions(view.fromQ, view.toQ, k);
-    camera.fov = view.fromF + (PLAY_FOV - view.fromF) * k; camera.updateProjectionMatrix();   // zoomed in a little on the board
   }
 }
 
@@ -811,6 +1000,7 @@ export function makeSkee(o) {
     get playing() { return !!my; },
     update: updateAll,
     start(i) { const m = machines[i]; if (!m) return; if (my === m) return; claim(m); },
-    down, move, up, leave
+    down, move, up, leave,
+    render: renderSplit
   };
 }
