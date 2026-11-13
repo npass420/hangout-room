@@ -1,8 +1,8 @@
 // =====================================================================
 // games.js — the Game Room: a big neon arcade hall behind the Frog King's door. Neon walls (neonwall.jpg), a floor of
 // puffy midnight blue glitter velvet cushions (cushion.jpg) with glowing seams that squish under your feet, neon tubes
-// along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. The games come next: bowling down the left side, pool in the middle, skee-ball on
-// the right; for now their spots are marked out on the floor.
+// along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. Two skee-ball machines
+// stand on the right (skeeball.js); bowling down the left side and pool in the middle come next, their spots marked out on the floor.
 // You walk in through the frog's doors (gdoor.jpg, a Kindroid picture). Clicking them twice whooshes you back to the Cave.
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
 // =====================================================================
@@ -16,6 +16,7 @@ import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 import { makeClock } from '../clock.js';
 import { inRoom } from '../world.js';
+import { makeSkee } from './skeeball.js';
 
 document.querySelector('#ui h1').textContent = 'Game Room';
 document.title = 'Game Room';
@@ -208,8 +209,7 @@ function floorHeight(x, z) {   // how high the cushions are at a spot (for stand
 const ZONES = [
   { name: 'Bowling', x0: -8.6, x1: -5.0, z0: -10.6, z1: 6.5, col: PINK },
   { name: 'Pool', x0: -2.6, x1: 2.6, z0: -8.0, z1: -3.0, col: TEAL },
-  { name: 'Pool', x0: -2.6, x1: 2.6, z0: -1.5, z1: 3.5, col: TEAL },
-  { name: 'Skee-Ball', x0: 5.0, x1: 8.6, z0: -10.0, z1: -1.0, col: PINK }
+  { name: 'Pool', x0: -2.6, x1: 2.6, z0: -1.5, z1: 3.5, col: TEAL }
 ];
 for (const zn of ZONES) {
   const mat = new THREE.MeshBasicMaterial({ color: zn.col, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
@@ -229,6 +229,13 @@ for (const zn of ZONES) {
 // You come in through them: the room fades in with you a few steps outside, the doors swing open, you walk in and they
 // shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
+
+// ---------- Skee-ball: two machines on the right (click one to play; while you play, the machine has the mouse) ----------
+const skee = makeSkee({
+  banner: (text, secs) => showBanner(text, secs),
+  enter(x, z) { me.tx = me.tz = null; marker.visible = false; me.x = x; me.z = z; sendSpot(true); },   // you're standing at the machine
+  leave(x, z, y, p) { [me.x, me.z] = clampSpot(x, z); yaw = y; pitch = p; sendSpot(true); }             // back to walking, from right there
+});
 
 // ---------- A round window by the door, onto the sky outside (it follows your own clock), and a neon clock over it ----------
 // (Quick ones for now; they'll get their proper look later.)
@@ -501,6 +508,7 @@ function leaveRoom() {
 }
 function goHome() {   // the whoosh back to the Cave
   if (!S.myName) return;
+  skee.leave();
   travelHome(() => remove(ref(db, 'game/presence/' + myId)));
 }
 leaveBtn.addEventListener('click', leaveRoom);
@@ -568,7 +576,7 @@ const me = { x: DOOR_X + (Math.random() - 0.5) * 1.2, z: HZ - 1.6, tx: null, tz:
 // Jumping: a big floaty bounce off the cushions
 const JUMP_UP = 4.2, GRAVITY = 7, JUMP_TIME = 2 * JUMP_UP / GRAVITY;   // how fast you leave the floor, how hard you fall, how long you're up
 function jump() {
-  if (intro || !S.myName || me.air > 0 || me.vy) return;
+  if (intro || !S.myName || me.air > 0 || me.vy || skee.playing) return;
   me.vy = JUMP_UP;
   sfx.bounce();
   if (S.myName) update(ref(db, 'game/presence/' + myId), { j: Date.now() }).catch(() => {});   // so everyone sees you hop
@@ -679,6 +687,7 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.door) return { door: true };
+  if (u.skee != null) return { skee: u.skee };
   if (u.floor) return { floor: hit.point };
   return null;
 }
@@ -688,6 +697,7 @@ let pinchDist = 0;
 function pinchSpread() { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); }
 canvas.addEventListener('pointerdown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
+  if (skee.playing) { skee.down(e); return; }   // pulling back a skee-ball
   touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
   down = { x: e.clientX, y: e.clientY };
@@ -696,6 +706,7 @@ canvas.addEventListener('pointerdown', e => {
 function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
 window.addEventListener('pointercancel', e => { down = null; endTouch(e); });
 window.addEventListener('pointermove', e => {
+  if (skee.playing) { skee.move(e); return; }
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();
@@ -716,6 +727,7 @@ window.addEventListener('pointermove', e => {
 });
 let lastTap = { t: 0, x: 0, y: 0 };
 window.addEventListener('pointerup', e => {
+  if (skee.playing) { skee.up(e); down = null; endTouch(e); return; }   // letting go: it rolls
   const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
   endTouch(e);
@@ -723,6 +735,7 @@ window.addEventListener('pointerup', e => {
   const p = pickUnder(e);
   if (!p) return;
   if (p.door) leaveRoom();
+  else if (p.skee != null) skee.start(p.skee);
   else if (p.floor) {   // a second tap close by and soon after: run there instead
     const again = performance.now() - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40;
     walkTo(p.floor.x, p.floor.z, again);
@@ -745,7 +758,9 @@ renderer.setAnimationLoop(() => {
   { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
   entrance.update(dt);       // the doors on their springs
   wallClock.update(); updatePort();
+  skee.update(dt);           // the balls, the orbs and the signs (and the camera, while you're playing)
   if (intro) playIntro(dt);   // walking in through the door
+  else if (skee.playing) fall(dt);
   else {
     if (keys.has(' ')) jump();   // hold Space to keep bouncing
     fall(dt);
@@ -796,7 +811,7 @@ function playIntro(dt) {                              // the camera and the door
 window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
 camera.position.copy(OUTSIDE); camera.rotation.set(0.04, 0, 0);
 (async () => {
-  await Promise.race([Promise.all([wallLoaded, floorLoaded, skyLoaded, entrance.loaded]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  await Promise.race([Promise.all([wallLoaded, floorLoaded, skyLoaded, entrance.loaded, skee.loaded]), wait(8000)]);   // a slow connection doesn't keep you out forever
   renderer.compile(scene, camera);
   renderer.render(scene, camera);
   await frames(3);

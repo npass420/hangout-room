@@ -127,6 +127,19 @@ function boing(from, to, { dur = 0.25, vol = 0.05, wob = 14, depth = 0.04, delay
 }
 const vary = () => 0.94 + Math.random() * 0.12;   // never quite the same twice
 let lastPat = 0;
+// The skee-ball rumble: one rolling hum shared by every ball on the lanes, its loudness and pitch following the fastest one
+let rum = null;
+function rumble(c) {
+  if (!rum) {
+    const src = c.createBufferSource(); src.buffer = noise(c); src.loop = true;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 200; lp.Q.value = 1.2;
+    const g = c.createGain(); g.gain.value = 0;
+    src.connect(lp); lp.connect(g); g.connect(master);
+    src.start();
+    rum = { lp, g };
+  }
+  return rum;
+}
 
 export const sfx = {
   // Chat and the room
@@ -196,6 +209,53 @@ export const sfx = {
     lastPat = now;
     tone(165 * vary(), { dur: 0.07, vol: 0.011, slideTo: 125 });
     hiss({ dur: 0.05, vol: 0.008, f: 520 });
+  },
+
+  // Skee-ball: hard wooden balls on velvet and wood (k is how loud: quieter the farther away you are)
+  skeeRoll(level) {   // called every frame: the rolling hum (0 is silent)
+    if (!ctx || (!level && !rum)) return;
+    const r = rumble(ctx), t = ctx.currentTime, l = muted ? 0 : Math.min(1, level);
+    r.g.gain.setTargetAtTime(l * 0.12, t, 0.06);
+    r.lp.frequency.setTargetAtTime(140 + l * 420, t, 0.06);
+  },
+  skeeRelease(k = 1) {   // the ball leaves your hand and drops onto the lane
+    hiss({ dur: 0.1, vol: 0.05 * k, type: 'bandpass', f: 1100, q: 1.5 });
+    tone(190 * vary(), { type: 'triangle', dur: 0.09, vol: 0.07 * k, slideTo: 140 });
+  },
+  skeeThump(k = 1) {     // a solid wooden knock: off the hump, onto the board, into the tray
+    if (k < 0.02) return;
+    tone(170 * vary(), { type: 'triangle', dur: 0.1, vol: 0.1 * k, slideTo: 115 });
+    hiss({ dur: 0.05, vol: 0.05 * k, type: 'bandpass', f: 1500, q: 2 });
+  },
+  skeeRim(k = 1) {       // the rattle off a ring lip
+    if (k < 0.02) return;
+    tone(1050 * vary(), { type: 'square', dur: 0.025, vol: 0.018 * k });
+    tone(1650 * vary(), { type: 'triangle', dur: 0.035, vol: 0.022 * k, delay: 0.014 });
+  },
+  skeeWall(k = 1) {      // off the side or the back
+    if (k < 0.02) return;
+    tone(290 * vary(), { type: 'triangle', dur: 0.06, vol: 0.06 * k, slideTo: 210 });
+  },
+  skeeDrop(pts, k = 1) { // down a hole: a hollow plunk, then a ding that's higher the more it's worth
+    tone(420, { dur: 0.22, vol: 0.06 * k, slideTo: 130 });
+    hiss({ dur: 0.18, vol: 0.04 * k, f: 500, f2: 150, delay: 0.05 });
+    const notes = { 10: [523], 20: [587, 784], 30: [659, 880], 40: [784, 988, 1175], 50: [880, 1109, 1319], 100: [784, 988, 1175, 1568, 1976] }[pts] || [523];
+    notes.forEach((f, i) => tone(f, { type: 'triangle', dur: 0.22, vol: 0.08 * k, delay: 0.28 + i * 0.08 }));
+    if (pts === 100) [1568, 1976, 2349].forEach((f, i) => tone(f, { type: 'sine', dur: 0.6, vol: 0.05 * k, delay: 0.7 + i * 0.05 }));
+  },
+  skeeGutter(k = 1) {    // missed: a dull thud into the gutter
+    tone(95, { dur: 0.25, vol: 0.09 * k, slideTo: 60 });
+    hiss({ dur: 0.1, vol: 0.04 * k, f: 300 });
+  },
+  skeePour(i, k = 1) {   // a ball coming out of the orb: a sparkle and a little rush of air
+    tone(880 + i * 70, { type: 'sine', dur: 0.25, vol: 0.035 * k });
+    tone(1760 + i * 140, { type: 'sine', dur: 0.18, vol: 0.015 * k, delay: 0.04 });
+    hiss({ dur: 0.3, vol: 0.03 * k, type: 'bandpass', f: 600, f2: 2400, q: 1.4 });
+  },
+  skeeOver(great) {      // the end of a game (a bigger tune for a top score)
+    const n = great ? [523, 659, 784, 1047, 1319] : [784, 659, 523];
+    n.forEach((f, i) => tone(f, { type: 'triangle', dur: 0.25, vol: 0.09, delay: i * 0.13 }));
+    if (great) [523, 659, 784, 1047].forEach(f => tone(f, { type: 'triangle', dur: 1.0, vol: 0.05, delay: 0.7 }));
   }
 };
 
