@@ -9,6 +9,8 @@
 // Coming back through a room's portal, the Cave fades in from black.
 // =====================================================================
 import { sfx } from '../sounds.js';
+import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
+inCave();
 const PLACES = {
   orb:   { name: 'Doodle Gallery', file: '../studio/studio.js' },
   right: { name: 'Table Room', file: '../table/tables.js' },
@@ -181,6 +183,7 @@ function tryEnter(place) {
   setName(name);
   going = place; goneAt = performance.now(); hover = null;
   nameBox.classList.add('leaving');
+  leaveCave();   // off to a room: you'll show up there instead
   sfx.whoosh();   // through the portal
 }
 // Once the screen is black: load the room, say you're here, and wait for it to be ready before showing it
@@ -221,6 +224,7 @@ function setName(name) {
   nameTip.textContent = PHONE ? 'Tap the orb ✦ or an open door' : 'Touch the orb ✦ or an open door';
   nameBox.classList.add('named');
   nameInput.blur();
+  joinCave(name);   // on the online list, here in the Cave
 }
 function pickName() {
   const name = nameInput.value.trim().slice(0, 20);

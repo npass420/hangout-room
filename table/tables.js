@@ -13,6 +13,8 @@ import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, ca
 import { sfx, setupMute } from '../sounds.js';
 import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
+import { makeClock } from '../clock.js';
+import { inRoom } from '../world.js';
 import { TABLE_Y, startGames, updateGames, refreshGames, setRoomEnv, addShiny, showPanel, sit, stand, seatTaken, seatHolder,
          tap, canTap, pickables, squareAt } from './boardgames.js';
 
@@ -165,8 +167,8 @@ const H2 = HEIGHT / 2, R2 = ROOM / 2;
 const WAIN = 1.0;                                            // the wainscot comes up to the chair rail
 // The way in: an old tavern door, cut out of its picture (where it sits in the picture, as parts of its size)
 const DOOR_X = 1.6;
-const ENTRANCE = { file: new URL('tdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
-  door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 }, casing: { side: 0.1, top: 0.095 }, edge: 0x24160c };
+const ENTRANCE = { style: 'tavern', file: new URL('tdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
+  door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 } };
 for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door, window, clock), left, right
   plane(ROOM, WAIN, wallMat, x, WAIN / 2, z, 0, ry);                          // wood below
   plane(ROOM, HEIGHT - WAIN, paperMat, x, WAIN + (HEIGHT - WAIN) / 2, z, 0, ry);   // wallpaper above
@@ -174,8 +176,8 @@ for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], 
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
-// Baseboards, a chair rail and a crown along every wall (the baseboard and rail tuck in under the door's surround)
-const DOOR_GAP = doorSpan(ENTRANCE) * 0.8;
+// Baseboards, a chair rail and a crown along every wall (the baseboard and rail stop at the door's surround)
+const DOOR_GAP = doorSpan(ENTRANCE);
 for (const [y, h, d] of [[0.07, 0.14, 0.03], [1.0, 0.06, 0.035], [HEIGHT - 0.08, 0.16, 0.06]]) {
   for (const [x, z, w, dd] of [[0, -R2 + d / 2, ROOM, d], [0, R2 - d / 2, ROOM, d], [-R2 + d / 2, 0, d, ROOM], [R2 - d / 2, 0, d, ROOM]]) {
     if (z > 0 && y < 3) {   // the entry wall: one piece each side of the doorway
@@ -279,72 +281,16 @@ function makeWindow(x, z, rotY) {
 }
 makeWindow(-1.6, ROOM / 2 - 0.02, Math.PI);      // on the entry wall, left of the door
 
-// ---------- A big red dot-matrix wall clock (your local time, with A or P) ----------
-const CLK_FONT = {
-  '0': ['01110', '10001', '10011', '10101', '11001', '10001', '01110'],
-  '1': ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
-  '2': ['01110', '10001', '00001', '00010', '00100', '01000', '11111'],
-  '3': ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
-  '4': ['00010', '00110', '01010', '10010', '11111', '00010', '00010'],
-  '5': ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
-  '6': ['00110', '01000', '10000', '11110', '10001', '10001', '01110'],
-  '7': ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
-  '8': ['01110', '10001', '10001', '01110', '10001', '10001', '01110'],
-  '9': ['01110', '10001', '10001', '01111', '00001', '00010', '01100'],
-  ':': ['00000', '01100', '01100', '00000', '01100', '01100', '00000'],
-  'A': ['01110', '10001', '10001', '11111', '10001', '10001', '10001'],
-  'P': ['11110', '10001', '10001', '11110', '10000', '10000', '10000'],
-  ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000']
-};
-const CLK_COLS = 37, CLK_ROWS = 9, CLK_DOT = 12;
-const clockCanvas = document.createElement('canvas');
-clockCanvas.width = CLK_COLS * CLK_DOT; clockCanvas.height = CLK_ROWS * CLK_DOT;
-const clockCtx = clockCanvas.getContext('2d');
-const clockTex = new THREE.CanvasTexture(clockCanvas);
-clockTex.colorSpace = THREE.SRGBColorSpace;
-let clockShown = '';
-
-function makeWallClock(x, z, rotY) {
-  const g = new THREE.Group();
-  const w = 1.25, h = w * CLK_ROWS / CLK_COLS;
-  box(w + 0.05, h + 0.05, 0.05, goldMat, 0, 0, 0, g);
-  const face = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: clockTex, toneMapped: false }));
-  face.position.z = 0.026;
-  g.add(face);
-  g.position.set(x, 2.8, z);
-  g.rotation.y = rotY;
-  scene.add(g);
-}
-makeWallClock(-1.6, ROOM / 2 - 0.03, Math.PI);   // above the window
-
-function updateClock() {
-  const d = new Date();
-  const h12 = d.getHours() % 12 || 12;
-  const text = (h12 + ':' + String(d.getMinutes()).padStart(2, '0') + (d.getHours() < 12 ? 'A' : 'P')).padStart(6, ' ');
-  if (text === clockShown) return;               // only redraw when the minute changes
-  clockShown = text;
-  const lit = new Set();
-  [...text].forEach((ch, i) => {
-    const glyph = CLK_FONT[ch] || CLK_FONT[' '];
-    glyph.forEach((row, r) => [...row].forEach((bit, c) => {
-      if (bit === '1') lit.add((r + 1) * CLK_COLS + (1 + i * 6 + c));
-    }));
-  });
-  const g = clockCtx;
-  g.fillStyle = '#0c0b0a'; g.fillRect(0, 0, clockCanvas.width, clockCanvas.height);
-  for (let r = 0; r < CLK_ROWS; r++) for (let c = 0; c < CLK_COLS; c++) {
-    const on = lit.has(r * CLK_COLS + c);
-    g.fillStyle = on ? '#ff2a1f' : '#3a1613';     // red lit dots, dim unlit dots
-    g.beginPath(); g.arc(c * CLK_DOT + CLK_DOT / 2, r * CLK_DOT + CLK_DOT / 2, CLK_DOT * 0.42, 0, Math.PI * 2); g.fill();
-  }
-  clockTex.needsUpdate = true;
-}
+// ---------- A dot-matrix wall clock above the window: the day and your local time ----------
+const wallClock = makeClock({ lit: '#ff2a1f', dim: '#3a1613', width: 1.25, frame: goldMat });
+wallClock.group.position.set(-1.6, 2.92, R2 - 0.03);
+wallClock.group.rotation.y = Math.PI;
+scene.add(wallClock.group);
 
 // ---------- The way in: the front of the building outside, and its doors (click them twice to leave) ----------
 // You come in through them: the room fades in with you a few steps outside, the doors swing open, you walk in and they
 // shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
-
 
 // ---------- Lights ----------
 scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm light everywhere (the tables get their own)
@@ -523,32 +469,13 @@ function moveAvatars(dt) {   // everyone else glides toward where they're walkin
   }
 }
 
-const GAME_NAMES = { checkers: 'Checkers', chess: 'Chess', othello: 'Othello' };
-function seatText(s) { const k = typeof s === 'string' ? s.split(':')[0] : ''; return GAME_NAMES[k] ? ` · playing ${GAME_NAMES[k]}` : ''; }
-// ---------- Who's here list ----------
-const whoList = document.getElementById('whoList');
+// ---------- Who's online: everyone, in every room and the Cave, each with an icon for where they are (world.js) ----------
 const connEl = document.getElementById('conn');
 const whoBtn = document.getElementById('whoBtn');
-function refreshWho() {
-  whoList.textContent = '';
-  const people = Object.entries(S.presence);
-  document.querySelector('#who h2').textContent = `In the Table Room (${people.length})`;
-  whoBtn.textContent = `👥 ${people.length}`;
-  for (const [id, p] of people) {
-    const div = document.createElement('div');
-    const dot = document.createElement('span');
-    dot.textContent = '● ';
-    dot.style.color = RAINBOW_CSS[colorIndex(p)];
-    div.appendChild(dot);
-    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''}${seatText(p.s)}`));
-    whoList.appendChild(div);
-  }
-}
-hooks.refreshWho = refreshWho;
+inRoom('tables');
 
 function refreshAll() {
   refreshAvatars();
-  refreshWho();
   refreshGames();
   checkMySeat();
 }
@@ -971,6 +898,7 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
+  entrance.update(dt);       // the doors on their springs
   if (intro) playIntro(dt);   // walking in through the door
   else if (anim) {
     anim.t += dt;
@@ -1004,7 +932,7 @@ renderer.setAnimationLoop(() => {
   }
   moveAvatars(dt);
   updateGames(dt);
-  updateClock();
+  wallClock.update();
   updateSky();
   renderer.render(scene, camera);
 });
@@ -1020,14 +948,14 @@ function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k)
 function playIntro(dt) {                              // the camera and the doors, moment by moment
   if (intro.t >= 0) intro.t += dt;
   const t = Math.max(0, intro.t);
-  entrance.setOpen(easeIO((t - 0.8) / 0.9) - easeIO((t - 3.4) / 0.8));   // the doors swing open, then shut behind you
-  if (intro.t >= 0.7 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as they open
+  if (t >= 0.8 && !intro.opened) { intro.opened = true; entrance.open(); }    // the doors swing open...
+  if (t >= 3.4 && !intro.closed) { intro.closed = true; entrance.close(); }   // ...and shut behind you
   const k = easeIO((t - 1.2) / 2.3);                  // the walk: through the doorway, then over to your spot
   const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
   const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
   camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE, z);
   camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
-  if (t > 4.3) { entrance.setOpen(0); intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
+  if (t > 4.3) { intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
 }
 window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
 camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);

@@ -3,21 +3,11 @@
 // =====================================================================
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-import { getDatabase, ref, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { ref, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { db, myId } from './world.js';
 
-// ---------- Online connection (Firebase) ----------
-const firebaseConfig = {
-  apiKey: "AIzaSyATJ802q3tyJ5XAzek9M_XoDTl24uHxyu4",
-  authDomain: "hangout-room-872ee.firebaseapp.com",
-  databaseURL: "https://hangout-room-872ee-default-rtdb.firebaseio.com",
-  projectId: "hangout-room-872ee",
-  storageBucket: "hangout-room-872ee.firebasestorage.app",
-  messagingSenderId: "779393375939",
-  appId: "1:779393375939:web:ec8f83ec990e0d7458cc76"
-};
-export const db = getDatabase(initializeApp(firebaseConfig));
-export const myId = 'u' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);  // a new id for each tab
+// ---------- Online connection (Firebase): set up in world.js, shared from here too ----------
+export { db, myId };
 
 // Things several files read and change
 export const S = {
@@ -87,43 +77,6 @@ export function std(color, roughness = 0.8, extra = {}) {
 export const envMap = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(renderer), 0.04).texture;
 export const goldMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8 });
 export function easeInOut(k) { return k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; }
-
-// ---------- Getting a room ready behind the Cave, so it shows up without a stutter ----------
-// A room loads its pictures, takes its reflection snapshot, builds its shaders and sends every texture to the
-// graphics card while the Cave still covers the screen. Only then does it say it's ready ('room-ready'), and it
-// starts drawing itself when the Cave opens the portal ('room-show').
-export const stage = { live: false };
-window.addEventListener('room-show', () => { stage.live = true; });
-export const nextFrame = () => new Promise(r => window.requestAnimationFrame(() => r()));
-export const within = (p, ms) => Promise.race([Promise.resolve(p).catch(() => {}), new Promise(r => setTimeout(r, ms))]);
-export async function getReady({ wait = [], snap, warm = [], hintText }) {
-  for (const w of wait) { await w(); await nextFrame(); }       // pictures, the first data, each one with a breath between
-  const extra = warm.map(make => make());                        // stand-ins (like a snowman) so their shaders get built now
-  extra.forEach(o => scene.add(o));
-  await renderer.compileAsync(scene, camera); await nextFrame();
-  extra.forEach(o => { o.visible = false; });                     // (not in the reflections)
-  if (snap) { snap(); await nextFrame(); }                       // the snapshot gives the polish its reflections...
-  extra.forEach(o => { o.visible = true; });
-  await renderer.compileAsync(scene, camera); await nextFrame(); // ...which needs the shaders built once more
-  const seen = new Set();
-  scene.traverse(o => {
-    for (const m of [].concat(o.material || [])) {
-      for (const k of ['map', 'envMap', 'emissiveMap', 'roughnessMap', 'normalMap', 'alphaMap']) {
-        const t = m[k];
-        if (t && !t.isRenderTargetTexture && !seen.has(t)) seen.add(t);
-      }
-    }
-  });
-  let n = 0;
-  for (const t of seen) { renderer.initTexture(t); if (++n % 6 === 0) await nextFrame(); }   // a few at a time
-  await nextFrame();
-  renderer.render(scene, camera);                                // one quiet practice draw, still behind the Cave
-  extra.forEach(o => scene.remove(o));
-  await nextFrame();
-  const hint = document.getElementById('hint');
-  if (hint) hint.textContent = hintText;
-  window.dispatchEvent(new Event('room-ready'));
-}
 
 // ---------- Rainbow colors and name tags ----------
 // ROY G BIV: each person gets the first rainbow color nobody in the room is using

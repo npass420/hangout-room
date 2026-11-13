@@ -4,15 +4,18 @@
 // along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. The games come next: bowling down the left side, pool in the middle, skee-ball on
 // the right; for now their spots are marked out on the floor.
 // You walk in through the frog's doors (gdoor.jpg, a Kindroid picture). Clicking them twice whooshes you back to the Cave.
+// It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, EYE, renderer, scene, camera, canvas, BASE_FOV,
-         std, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
+         std, goldMat, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sfx, setupMute } from '../sounds.js';
 import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
+import { makeClock } from '../clock.js';
+import { inRoom } from '../world.js';
 
 document.querySelector('#ui h1').textContent = 'Game Room';
 document.title = 'Game Room';
@@ -24,10 +27,9 @@ const PINK = new THREE.Color(0xff3fa8), TEAL = new THREE.Color(0x29e6ff);
 
 // ---------- The way in: the Frog King's doors, traced from their picture (their left side, bottom corner to top middle) ----------
 const DOOR_X = 2;
-const ENTRANCE = { file: new URL('gdoor.jpg', import.meta.url).href, x: DOOR_X, z: HZ, height: 2.6, roomHalf: HX, roomHeight: RH,
+const ENTRANCE = { style: 'frog', file: new URL('gdoor.jpg', import.meta.url).href, x: DOOR_X, z: HZ, height: 2.6, roomHalf: HX, roomHeight: RH,
   door: { points: [[0.300, 0.887], [0.287, 0.82], [0.280, 0.75], [0.281, 0.65], [0.290, 0.55], [0.303, 0.50], [0.333, 0.45],
-                   [0.373, 0.423], [0.430, 0.413], [0.500, 0.410]] },
-  casing: { side: 0.1, top: 0.08 }, edge: 0x2f8f6a };
+                   [0.373, 0.423], [0.430, 0.413], [0.500, 0.410]] } };
 
 // ---------- The walls: the neon wall picture, all the way round, glowing in the dark ----------
 function loadTex(file, setup) {   // a promise that's done once the picture is on, or has failed
@@ -130,6 +132,9 @@ for (let i = 0; i < 6; i++) {
 // is drawn on top, evenly everywhere and twinkling as you move; the seams between cushions glow; and the floor sinks a
 // little under everyone's feet.
 const TILE = 1.2, PUFF = 0.17;   // a cushion's size, and how high it puffs up
+function doorFlat(x, z) {        // flat in front of the doors, so they can swing open over the floor
+  return Math.max(0, Math.min(1, (Math.hypot(x - DOOR_X, z - HZ) - doorSpan(ENTRANCE) + 0.25) / 0.6));
+}
 const floorGeo = (() => {
   const per = PHONE ? 6 : 12, nx = Math.round(HX * 2 / TILE * per), nz = Math.round(HZ * 2 / TILE * per);
   const g = new THREE.PlaneGeometry(HX * 2, HZ * 2, nx, nz);
@@ -137,7 +142,7 @@ const floorGeo = (() => {
   const p = g.attributes.position;
   for (let i = 0; i < p.count; i++) {
     const fx = ((p.getX(i) / TILE) % 1 + 1) % 1, fz = ((p.getZ(i) / TILE) % 1 + 1) % 1;
-    const wall = Math.min(1, (HX - Math.abs(p.getX(i))) / 0.15, (HZ - Math.abs(p.getZ(i))) / 0.15);   // flat where it meets the walls
+    const wall = Math.min(1, (HX - Math.abs(p.getX(i))) / 0.15, (HZ - Math.abs(p.getZ(i))) / 0.15, doorFlat(p.getX(i), p.getZ(i)));   // flat where it meets the walls
     p.setY(i, PUFF * wall * Math.pow(Math.sin(Math.PI * fx) * Math.sin(Math.PI * fz), 0.55));   // round and full, pulled down at the seams
   }
   g.computeVertexNormals();
@@ -196,7 +201,7 @@ const floorLoaded = loadTex('cushion.jpg', t => {
 });
 function floorHeight(x, z) {   // how high the cushions are at a spot (for standing on them)
   const fx = ((x / TILE) % 1 + 1) % 1, fz = ((z / TILE) % 1 + 1) % 1;
-  return PUFF * Math.pow(Math.sin(Math.PI * fx) * Math.sin(Math.PI * fz), 0.55);
+  return PUFF * doorFlat(x, z) * Math.pow(Math.sin(Math.PI * fx) * Math.sin(Math.PI * fz), 0.55);
 }
 
 // ---------- Where the games will go: glowing outlines on the floor, with a name floating over each ----------
@@ -224,7 +229,57 @@ for (const zn of ZONES) {
 // You come in through them: the room fades in with you a few steps outside, the doors swing open, you walk in and they
 // shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
-doorSpan(ENTRANCE);
+
+// ---------- A round window by the door, onto the sky outside (it follows your own clock), and a neon clock over it ----------
+// (Quick ones for now; they'll get their proper look later.)
+const portCanvas = document.createElement('canvas');
+portCanvas.width = portCanvas.height = 256;
+const portTex = new THREE.CanvasTexture(portCanvas);
+portTex.colorSpace = THREE.SRGBColorSpace;
+const PORT_STARS = Array.from({ length: 70 }, () => [Math.random(), Math.random(), Math.random()]);
+const PORT_SKY = {
+  night: ['#040818', '#0d1d45'], dawn: ['#2b4f8f', '#ff9e6b'], day: ['#3d8fe0', '#a9d8ff'], dusk: ['#3a2a6b', '#ff7a45']
+};
+let portMinute = -1;
+function updatePort() {
+  const now = new Date(), minute = now.getHours() * 60 + now.getMinutes();
+  if (minute === portMinute) return;   // once a minute is plenty
+  portMinute = minute;
+  const h = minute / 60, phase = (h < 5 || h >= 21) ? 'night' : h < 7 ? 'dawn' : h < 17.5 ? 'day' : 'dusk';
+  const g = portCanvas.getContext('2d'), grd = g.createLinearGradient(0, 0, 0, 256);
+  grd.addColorStop(0, PORT_SKY[phase][0]); grd.addColorStop(1, PORT_SKY[phase][1]);
+  g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
+  if (phase === 'night') {
+    g.fillStyle = '#ffffff';
+    for (const [x, y, b] of PORT_STARS) { g.globalAlpha = 0.3 + b * 0.7; g.fillRect(x * 256, y * 200, 1 + b * 1.6, 1 + b * 1.6); }
+    g.globalAlpha = 1;
+  }
+  portTex.needsUpdate = true;
+}
+updatePort();
+{
+  const g = new THREE.Group();
+  g.position.set(-3, 2.1, HZ - 0.03); g.rotation.y = Math.PI;
+  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), new THREE.MeshBasicMaterial({ map: portTex, toneMapped: false }));
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.67, 0.08, 18, 64),
+    new THREE.MeshPhysicalMaterial({ color: 0xff8da0, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.12, emissive: 0xff3f8a, emissiveIntensity: 0.25 }));
+  rim.scale.z = 0.7;
+  const halo = new THREE.Mesh(new THREE.RingGeometry(0.74, 0.86, 64),
+    new THREE.MeshBasicMaterial({ color: TEAL, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  halo.position.z = -0.01;
+  g.add(glass, rim, halo);
+  for (let i = 0; i < 8; i++) {   // little gold bolts round the rim
+    const a = i / 8 * Math.PI * 2, b = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 8), goldMat);
+    b.position.set(Math.cos(a) * 0.67, Math.sin(a) * 0.67, 0.07);
+    g.add(b);
+  }
+  scene.add(g);
+}
+const wallClock = makeClock({ lit: '#3ff0ff', dim: '#0c2630', back: '#04050d', width: 1.15,
+  frame: new THREE.MeshStandardMaterial({ color: 0x14102a, roughness: 0.5 }), glow: 'rgba(41,230,255,0.4)' });
+wallClock.group.position.set(-3, 3.45, HZ - 0.04);
+wallClock.group.rotation.y = Math.PI;
+scene.add(wallClock.group);
 
 // ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
 const WALK = 2.6;     // walking speed, meters a second (a big room)
@@ -275,6 +330,8 @@ function refreshAvatars() {
     if (fresh) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const a = avatars[id], to = spotOf(p);
     a.tx = to.x; a.tz = to.z;
+    if (!fresh && p.j && p.j !== a.j) a.jumpT = performance.now();   // they just jumped
+    a.j = p.j;
     if (fresh) a.g.position.set(to.x, 0, to.z);   // someone new just appears where they are
   }
 }
@@ -282,45 +339,36 @@ function moveAvatars(dt, t) {   // everyone else bounces along toward where they
   for (const a of Object.values(avatars)) {
     const p = a.g.position, dx = a.tx - p.x, dz = a.tz - p.z, d = Math.hypot(dx, dz);
     if (d > 0.001) {
-      const step = Math.min(d, WALK * dt);
+      const step = Math.min(d, WALK * (d > 1 ? 2 : 1) * dt);   // keeping up when they sprint
       p.x += dx / d * step; p.z += dz / d * step;
       a.phase = (a.phase || 0) + step * 5;
     }
-    p.y = floorHeight(p.x, p.z) - 0.04 + (d > 0.001 ? Math.abs(Math.sin(a.phase)) * 0.12 : 0);   // a little hop as they go
+    a.air = jumpHeight((performance.now() - (a.jumpT || 0)) / 1000);
+    p.y = floorHeight(p.x, p.z) - 0.04 + (d > 0.001 ? Math.abs(Math.sin(a.phase)) * 0.12 : 0) + a.air;   // a little hop as they go
   }
 }
-function pressFeet() {   // where the floor sinks in: under you and under everyone else
+function jumpHeight(t) {   // how high a jump is, t seconds after leaving the floor (the same arc as your own)
+  return t > 0 && t < JUMP_TIME ? JUMP_UP * t - GRAVITY / 2 * t * t : 0;
+}
+function pressFeet() {   // where the floor sinks in: under you and under everyone else (deeper just after landing, none in the air)
   const feet = floorU.uFeet.value;
   let i = 0;
-  if (!intro) feet[i++].set(me.x, me.z, 0.05, 0);
-  for (const a of Object.values(avatars)) { if (i >= FEET) break; feet[i++].set(a.g.position.x, a.g.position.z, 0.06, 0); }
+  if (!intro) feet[i++].set(me.x, me.z, me.air > 0.02 ? 0 : 0.05 + me.land * 0.12, 0);
+  for (const a of Object.values(avatars)) {
+    if (i >= FEET) break;
+    const since = (performance.now() - (a.jumpT || 0)) / 1000 - JUMP_TIME;   // seconds since they landed
+    feet[i++].set(a.g.position.x, a.g.position.z, a.air > 0.02 ? 0 : 0.06 + (since > 0 && since < 0.4 ? (0.4 - since) * 0.3 : 0), 0);
+  }
   for (; i < FEET; i++) feet[i].z = 0;
 }
 
-// ---------- Who's here list ----------
-const whoList = document.getElementById('whoList');
+// ---------- Who's online: everyone, in every room and the Cave, each with an icon for where they are (world.js) ----------
 const connEl = document.getElementById('conn');
 const whoBtn = document.getElementById('whoBtn');
-function refreshWho() {
-  whoList.textContent = '';
-  const people = Object.entries(S.presence);
-  document.querySelector('#who h2').textContent = `In the Game Room (${people.length})`;
-  whoBtn.textContent = `👥 ${people.length}`;
-  for (const [id, p] of people) {
-    const div = document.createElement('div');
-    const dot = document.createElement('span');
-    dot.textContent = '● ';
-    dot.style.color = RAINBOW_CSS[colorIndex(p)];
-    div.appendChild(dot);
-    div.appendChild(document.createTextNode(`${p.name}${id === myId ? ' (you)' : ''}`));
-    whoList.appendChild(div);
-  }
-}
-hooks.refreshWho = refreshWho;
+inRoom('game');
 
 function refreshAll() {
   refreshAvatars();
-  refreshWho();
 }
 hooks.refreshAll = refreshAll;
 
@@ -513,8 +561,33 @@ nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom();
 
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
 const hint = document.getElementById('hint');
-hint.textContent = PHONE ? 'Drag to look · tap the floor to bounce over' : 'Drag to look · click the floor to walk (or W A S D)';
-const me = { x: DOOR_X + (Math.random() - 0.5) * 1.2, z: HZ - 1.6, tx: null, tz: null, phase: 0, moving: 0 };   // you start just inside the door
+hint.textContent = PHONE ? 'Drag to look · tap the floor to walk, double tap to run · ⤒ to jump'
+                         : 'Drag to look · click the floor to walk, double click to run (or W A S D) · Space to jump · Shift to sprint';
+const me = { x: DOOR_X + (Math.random() - 0.5) * 1.2, z: HZ - 1.6, tx: null, tz: null, phase: 0, moving: 0,   // you start just inside the door
+  run: false, air: 0, vy: 0, land: 0 };
+// Jumping: a big floaty bounce off the cushions
+const JUMP_UP = 4.2, GRAVITY = 7, JUMP_TIME = 2 * JUMP_UP / GRAVITY;   // how fast you leave the floor, how hard you fall, how long you're up
+function jump() {
+  if (intro || !S.myName || me.air > 0 || me.vy) return;
+  me.vy = JUMP_UP;
+  sfx.bounce();
+  if (S.myName) update(ref(db, 'game/presence/' + myId), { j: Date.now() }).catch(() => {});   // so everyone sees you hop
+}
+function fall(dt) {   // up, over and back down onto the cushions
+  if (me.vy || me.air > 0) {
+    me.vy -= GRAVITY * dt; me.air += me.vy * dt;
+    if (me.air <= 0) { me.air = 0; me.vy = 0; me.land = 1; sfx.land(); }
+  }
+  me.land = Math.max(0, me.land - dt * 3);
+}
+if (PHONE) {   // a jump button for phones, bottom left
+  const b = document.createElement('button');
+  b.textContent = '⤒';
+  b.style.cssText = 'position:fixed;left:14px;bottom:84px;width:58px;height:58px;border-radius:50%;font-size:26px;z-index:20;' +
+    'background:rgba(41,230,255,0.25);color:#e8fbff;border:2px solid rgba(41,230,255,0.7);box-shadow:0 0 14px rgba(41,230,255,0.5)';
+  b.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+  document.body.appendChild(b);
+}
 let yaw = 0, pitch = -0.08;                   // facing down the hall
 function mySpot() {   // what everyone else sees: where you're standing (or walking to)
   const x = me.tx != null ? me.tx : me.x, z = me.tz != null ? me.tz : me.z;
@@ -528,7 +601,8 @@ function sendSpot(now) {   // tell everyone where you're going (a few times a se
   sentAt = performance.now();
   update(ref(db, 'game/presence/' + myId), mySpot()).catch(() => {});
 }
-function walkTo(x, z) {
+function walkTo(x, z, run) {
+  me.run = !!run;
   [me.tx, me.tz] = clampSpot(x, z);
   marker.position.set(me.tx, floorHeight(me.tx, me.tz) + 0.02, me.tz);
   marker.visible = true; markerFade = 1;
@@ -538,8 +612,9 @@ function setFov(f) {
   camera.fov = Math.max(20, Math.min(BASE_FOV, f));
   camera.updateProjectionMatrix();
 }
-function eyeHeight() {   // standing on the cushions, with a little bounce in your step while you walk
-  return EYE + floorHeight(me.x, me.z) * 0.5 + Math.abs(Math.sin(me.phase)) * 0.05 * me.moving;
+function eyeHeight() {   // standing on the cushions, with a little bounce in your step while you walk (more when running)
+  const fast = me.run || keys.has('shift') ? 2 : 1;
+  return EYE + floorHeight(me.x, me.z) * 0.5 + Math.abs(Math.sin(me.phase)) * 0.05 * fast * me.moving + me.air - me.land * 0.06;
 }
 camera.position.set(me.x, EYE, me.z);
 camera.rotation.set(pitch, yaw, 0);
@@ -558,15 +633,16 @@ function typing() { const a = document.activeElement; return !!(a && (a.tagName 
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   const k = e.key.toLowerCase();
-  if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+  if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift'].includes(k)) {
     keys.add(k);
-    if (k.startsWith('arrow')) e.preventDefault();   // don't scroll the page
+    if (k.startsWith('arrow') || k === ' ') e.preventDefault();   // don't scroll the page
   }
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right turn; returns how far you went
   if (!keys.size || typing()) return 0;
+  const speed = WALK * (keys.has('shift') ? 2 : 1);   // Shift: sprint
   if (keys.has('arrowleft')) yaw += 1.8 * dt;
   if (keys.has('arrowright')) yaw -= 1.8 * dt;
   const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
@@ -578,9 +654,9 @@ function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right t
   const len = Math.hypot(mx, mz);
   mx /= len; mz /= len;
   me.tx = me.tz = null; marker.visible = false;
-  [me.x, me.z] = clampSpot(me.x + mx * WALK * dt, me.z + mz * WALK * dt);
+  [me.x, me.z] = clampSpot(me.x + mx * speed * dt, me.z + mz * speed * dt);
   sendSpot(false);
-  return WALK * dt;
+  return speed * dt;
 }
 
 // Scroll to zoom
@@ -638,6 +714,7 @@ window.addEventListener('pointermove', e => {
     canvas.style.cursor = p ? 'pointer' : 'grab';
   }
 });
+let lastTap = { t: 0, x: 0, y: 0 };
 window.addEventListener('pointerup', e => {
   const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
@@ -646,7 +723,11 @@ window.addEventListener('pointerup', e => {
   const p = pickUnder(e);
   if (!p) return;
   if (p.door) leaveRoom();
-  else if (p.floor) walkTo(p.floor.x, p.floor.z);
+  else if (p.floor) {   // a second tap close by and soon after: run there instead
+    const again = performance.now() - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40;
+    walkTo(p.floor.x, p.floor.z, again);
+    lastTap = { t: again ? 0 : performance.now(), x: e.clientX, y: e.clientY };
+  }
 });
 
 // ---------- Window resize ----------
@@ -662,16 +743,22 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1), t = clock.elapsedTime;
   floorU.uTime.value = t; skyU.uTime.value = t;
   { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
+  entrance.update(dt);       // the doors on their springs
+  wallClock.update(); updatePort();
   if (intro) playIntro(dt);   // walking in through the door
   else {
+    if (keys.has(' ')) jump();   // hold Space to keep bouncing
+    fall(dt);
     let went = keyWalk(dt);
-    if (me.tx != null) {   // walking to where you clicked
+    if (me.tx != null) {   // walking (or running) to where you clicked
       const dx = me.tx - me.x, dz = me.tz - me.z, d = Math.hypot(dx, dz);
-      const step = Math.min(d, WALK * dt);
+      const step = Math.min(d, WALK * (me.run ? 2 : 1) * dt);
       if (d > 0.001) { me.x += dx / d * step; me.z += dz / d * step; went += step; }
-      if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; }
+      if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; me.run = false; }
     }
+    const step0 = Math.floor(me.phase / Math.PI);
     me.phase += went * 4.2;
+    if (Math.floor(me.phase / Math.PI) !== step0 && me.air <= 0) sfx.pat();   // a tiny pat on the cushions with each step
     me.moving += ((went > 0 ? 1 : 0) - me.moving) * Math.min(1, dt * 8);   // the bounce eases in and out
     camera.position.set(me.x, eyeHeight(), me.z);
     camera.rotation.set(pitch, yaw, 0);
@@ -697,14 +784,14 @@ function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k)
 function playIntro(dt) {                              // the camera and the doors, moment by moment
   if (intro.t >= 0) intro.t += dt;
   const t = Math.max(0, intro.t);
-  entrance.setOpen(easeIO((t - 0.9) / 0.9) - easeIO((t - 3.6) / 0.8));   // the doors swing open, then shut behind you
-  if (intro.t >= 0.8 && !intro.whoosh) { intro.whoosh = true; sfx.whooshSoft(); }   // a soft whoosh as they open
+  if (t >= 0.9 && !intro.opened) { intro.opened = true; entrance.open(); }    // the doors swing open...
+  if (t >= 3.6 && !intro.closed) { intro.closed = true; entrance.close(); }   // ...and shut behind you
   const k = easeIO((t - 1.3) / 2.4);                  // the walk: through the doorway, then over to your spot
   const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
   const past = Math.max(0, Math.min(1, (HZ - 0.2 - z) / (HZ - 0.2 - me.z)));   // only drift sideways once you're inside
   camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE + (eyeHeight() - EYE) * k, z);
   camera.rotation.set(0.04 + (pitch - 0.04) * k, 0, 0);
-  if (t > 4.5) { entrance.setOpen(0); intro = null; camera.position.set(me.x, eyeHeight(), me.z); camera.rotation.set(pitch, yaw, 0); }
+  if (t > 4.5) { intro = null; camera.position.set(me.x, eyeHeight(), me.z); camera.rotation.set(pitch, yaw, 0); }
 }
 window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
 camera.position.copy(OUTSIDE); camera.rotation.set(0.04, 0, 0);
