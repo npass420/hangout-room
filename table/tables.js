@@ -165,7 +165,7 @@ const H2 = HEIGHT / 2, R2 = ROOM / 2;
 const WAIN = 1.0;                                            // the wainscot comes up to the chair rail
 // The way in: an old tavern door, cut out of its picture (where it sits in the picture, as parts of its size)
 const DOOR_X = 1.6;
-const ENTRANCE = { file: new URL('door.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
+const ENTRANCE = { file: new URL('tdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
   door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 }, frameMat: trimMat };
 for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door, window, clock), left, right
   plane(ROOM, WAIN, wallMat, x, WAIN / 2, z, 0, ry);                          // wood below

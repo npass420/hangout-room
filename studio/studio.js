@@ -86,7 +86,7 @@ function plane(w, h, mat, x, y, z, rx, ry) {
 const H2 = HEIGHT / 2, R2 = ROOM / 2;
 // The way in: grand black and gold gallery doors, cut out of their picture (where they sit in it, as parts of its size)
 const DOOR_X = 1.6;
-const ENTRANCE = { file: new URL('door.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
+const ENTRANCE = { file: new URL('sdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
   door: { x0: 0.256, x1: 0.740, top: 0.137, bottom: 0.923 }, frameMat: goldMat };
 plane(ROOM, HEIGHT, wallMats[0], 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
 plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
