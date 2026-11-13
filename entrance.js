@@ -10,26 +10,43 @@ import { scene } from './core.js';
 
 const THICK = 0.05;   // how thick the doors are
 
+// A doorway traced point by point (door.points: its left side, from the bottom corner up to the top middle, as parts of the
+// picture's size) becomes a smooth curve, mirrored for the right side; its box (x0, x1, top, bottom) is worked out from it.
+function traced(d) {
+  if (!d.points || d.curve) return d;
+  const half = new THREE.SplineCurve(d.points.map(([x, y]) => new THREE.Vector2(x, y))).getPoints(48);
+  const xs = half.map(p => p.x), ys = half.map(p => p.y);
+  d.x0 = Math.min(...xs); d.x1 = 1 - d.x0; d.top = Math.min(...ys); d.bottom = Math.max(...ys);
+  d.curve = half;   // left side, bottom corner to top middle
+  return d;
+}
 // How far the surround reaches out from the doorway's middle, in meters, so the room can stop its rails and baseboards at it
 export function doorSpan(spec) {
-  const d = spec.door, S = spec.height / (d.bottom - d.top);
+  const d = traced(spec.door), S = spec.height / (d.bottom - d.top);
   return ((d.x1 - d.x0) / 2 + spec.casing.side) * S;
 }
 
 // spec: { file (the picture), x, z (the doorway's middle on the entry wall), height (of the doors), roomHalf, roomHeight,
 //         door: { x0, x1, top, bottom, spring } where the doors sit in the picture, as parts of its size (spring: where a
-//         round top starts curving; leave it out for square doors),
+//         round top starts curving; leave it out for square doors), or door: { points } for a doorway traced point by point,
 //         casing: { side, top } how much of the picture around the doorway makes the surround inside,
 //         edge: the color of the doors' edges }
 export function makeEntrance(spec) {
-  const d = spec.door, S = spec.height / (d.bottom - d.top);   // the picture's size in meters
+  const d = traced(spec.door), S = spec.height / (d.bottom - d.top);   // the picture's size in meters
   const W = (d.x1 - d.x0) * S, Hd = spec.height, lw = W / 2, arched = d.spring != null;
   const springH = arched ? (d.bottom - d.spring) * S : Hd, archH = arched ? (d.spring - d.top) * S : 0;
   const mid = (d.x0 + d.x1) / 2;
   // The doorway's outline, in pixels of a canvas showing the picture (or part of it): straight sides, round or square top
-  function outline(g, px, offX, offY) {
+  function outline(g, px, offX, offY, tuck = 1) {   // tuck < 1 pulls a traced outline in a little (the front's hole overlaps the doors)
     const X0 = d.x0 * px - offX, X1 = d.x1 * px - offX, B = d.bottom * px - offY, T = d.top * px - offY;
     g.beginPath();
+    if (d.curve) {   // traced: up the left side, then back down the right side
+      const X = x => (0.5 + (x - 0.5) * tuck) * px - offX, Y = y => ((d.top + d.bottom) / 2 + (y - (d.top + d.bottom) / 2) * tuck) * px - offY;
+      d.curve.forEach((p, i) => (i ? g.lineTo : g.moveTo).call(g, X(p.x), Y(p.y)));
+      for (let i = d.curve.length - 2; i >= 0; i--) g.lineTo(X(1 - d.curve[i].x), Y(d.curve[i].y));
+      g.closePath();
+      return;
+    }
     g.moveTo(X0, B);
     if (arched) {
       const Sy = d.spring * px - offY;
@@ -71,6 +88,13 @@ export function makeEntrance(spec) {
   // Each half's shape, in meters, 0 to lw across (the doorway's middle is at lw for the left door, at 0 for the right)
   function halfShape(left) {
     const sh = new THREE.Shape();
+    if (d.curve) {   // traced: the left door follows the curve; the right door is its mirror image
+      const pts = d.curve.map(p => new THREE.Vector2((p.x - d.x0) * S, (d.bottom - p.y) * S));
+      pts.push(new THREE.Vector2(lw, 0));
+      if (!left) pts.forEach(p => { p.x = lw - p.x; });
+      sh.setFromPoints(pts);
+      return sh;
+    }
     if (!arched) { sh.moveTo(0, 0); sh.lineTo(lw, 0); sh.lineTo(lw, Hd); sh.lineTo(0, Hd); sh.lineTo(0, 0); return sh; }
     if (left) {
       sh.moveTo(0, 0); sh.lineTo(lw, 0); sh.lineTo(lw, springH + archH);
@@ -132,7 +156,7 @@ export function makeEntrance(spec) {
       const g = front.getContext('2d');
       g.drawImage(img, 0, 0, P, P);
       g.globalCompositeOperation = 'destination-out';
-      outline(g, P, 0, 0); g.fill();
+      outline(g, P, 0, 0, 0.985); g.fill();
       frontMat.map = canvasTex(front); frontMat.color.setHex(0xffffff); frontMat.needsUpdate = true;
       for (const lp of leafPics) {   // this door's half of the doorway
         const lg = lp.c.getContext('2d');

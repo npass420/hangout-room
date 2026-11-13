@@ -1,10 +1,10 @@
 // =====================================================================
 // cave.js — the Cave: the front door of the site. The inside of a great snow block igloo (cave.jpg, a Kindroid image),
 // with a glowing snow globe on a mound in the middle and an old carved stone archway on each side.
-// Pick your name, then touch the snow globe (the Doodle Gallery) or the doorway on the right (the Table Room).
+// Pick your name, then touch the snow globe (the Doodle Gallery), the doorway on the right (the Table Room) or the
+// doorway on the left (the Game Room).
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
-// The doorway on the left is the Game Room, coming soon: give it its file in PLACES below and it opens for clicks.
 // The swirl in the middle of the globe turns slowly, and snow drifts down inside the glass.
 // Coming back through a room's portal, the Cave fades in from black.
 // =====================================================================
@@ -12,7 +12,7 @@ import { sfx } from '../sounds.js';
 const PLACES = {
   orb:   { name: 'Doodle Gallery', file: '../studio/studio.js' },
   right: { name: 'Table Room', file: '../table/tables.js' },
-  left:  { name: 'Game Room', file: null }
+  left:  { name: 'Game Room', file: '../game/games.js' }
 };
 
 // Where things sit in cave.jpg, measured in parts of the picture's width (across 0 to 1, down 0 to ASPECT)
