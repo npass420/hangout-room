@@ -17,9 +17,11 @@
 // click to stop the power as it fills the P lights and back, then click to stop the spin as it swings left and right
 // through the S lights. The ball always starts straight up the lane; the spin curves it gently and kicks it off the walls
 // and rims the way it spins. Every roll wobbles a touch, like a real ball. Right click (or Esc) is a step back.
+// With a mouse, the pointer is locked into the game while you play (hidden, and it can't run off the screen), so the ball
+// slides all the way to either rail. Esc frees the mouse (the browser's own rule); a click on the game locks it again.
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
-// VERSION 7
+// VERSION 8
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }
@@ -871,6 +873,7 @@ const chatOpen = () => document.body.classList.contains('skeeChat');
 function showChat(on) {
   document.body.classList.toggle('skeeChat', on);
   const input = document.getElementById('chatInput');
+  if (on) unlockMouse();   // free the mouse so you can type and click
   if (on) { chatDot.style.display = 'none'; const msgs = document.getElementById('msgs'); if (msgs) msgs.scrollTop = msgs.scrollHeight; if (input) input.focus(); }
   else if (input && document.activeElement === input) input.blur();
 }
@@ -954,7 +957,7 @@ const overNote = document.createElement('div');
 overNote.style.cssText = 'font-size:18px;min-height:22px';
 const overBtns = document.createElement('div');
 overBtns.style.cssText = 'display:flex;gap:10px;margin-top:8px';
-overBtns.append(button('🎳  Play again', () => { if (my) claim(my); }), button('✕  Done', () => leave()));
+overBtns.append(button('🎳  Play again', () => { if (my) { lockMouse(); claim(my); } }), button('✕  Done', () => leave()));
 over.append(overHead, overScore, overNote, overBtns);
 document.body.appendChild(over);
 function showOver(score, newPb, rank) {
@@ -964,6 +967,7 @@ function showOver(score, newPb, rank) {
   if (newPb && rank) overNote.textContent += `   ·   🏆 #${rank}`;
   overNote.style.color = newPb || rank ? '#9dff4a' : '#cdb8ff';
   over.style.display = 'flex';
+  unlockMouse();   // free the mouse for the buttons
 }
 function hideOver() { over.style.display = 'none'; }
 
@@ -982,9 +986,32 @@ function placeHand(h) {   // the ball waiting at your end (drawn back as the pow
   const v = 0.08 - (h.stage === 'place' ? 0.25 : h.pw) * 0.16;
   h.mesh.position.set(h.u, H(Math.max(v, -0.02)) + R, -v);
 }
+// ---------- Mouse lock: while you play with a mouse, the pointer is locked into the game ----------
+const cvs = renderer.domElement;
+let unlockedAt = 0, quietUntil = 0, lockFailedAt = -1e9;
+const locked = () => document.pointerLockElement === cvs;
+const usesMouse = () => !(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+function lockMouse() {
+  if (!usesMouse() || locked() || !cvs.requestPointerLock) return;
+  try { const p = cvs.requestPointerLock(); if (p && p.catch) p.catch(() => { lockFailedAt = performance.now(); }); }
+  catch (e) { lockFailedAt = performance.now(); }
+}
+function unlockMouse() {
+  if (!locked()) return;
+  quietUntil = performance.now() + 600;   // (freed on purpose: no note about it)
+  try { document.exitPointerLock(); } catch (e) {}
+}
+document.addEventListener('pointerlockerror', () => { lockFailedAt = performance.now(); });
+document.addEventListener('pointerlockchange', () => {
+  if (locked() || !my) return;
+  unlockedAt = performance.now();
+  if (unlockedAt > quietUntil) opts.banner && opts.banner('🖱 Mouse freed · click the game to keep playing', 2.5);
+});
+
 window.addEventListener('keydown', e => {
   if (!my) return;
   const k = e.key.toLowerCase();
+  if (k === 'escape' && performance.now() - unlockedAt < 300) return;   // that Esc just freed the mouse
   if (k === 'escape' && chatOpen()) { showChat(false); return; }   // Esc tucks the chat away first
   if (k === 'escape' && menuOpen()) { showMenu(false); return; }     // then the menu
   if (k === 'escape' && document.fullscreenElement) return;         // (in full screen, Esc is the browser's: it leaves full screen)
@@ -1030,7 +1057,8 @@ function readyBall(m) {   // your turn and nothing rolling: the next ball comes 
 }
 function steer(h, e) {   // moving the pointer slides the ball across from where it is (a small move, a small change)
   if (h.stage !== 'place') return;
-  if (h.lastX != null) { h.u = Math.max(-U_MAX, Math.min(U_MAX, h.u + (e.clientX - h.lastX) / (window.innerWidth * PLACE_SWEEP) * 2 * U_MAX)); placeHand(h); }
+  const dx = locked() ? e.movementX || 0 : h.lastX != null ? e.clientX - h.lastX : 0;   // (locked: how far the mouse moved)
+  if (dx) { h.u = Math.max(-U_MAX, Math.min(U_MAX, h.u + dx / (window.innerWidth * PLACE_SWEEP) * 2 * U_MAX)); placeHand(h); }
   h.lastX = e.clientX;
 }
 function next(h) {   // click one sets the ball and starts the power, click two stops the power and starts the spin, click three: it goes
@@ -1045,6 +1073,7 @@ function back(h) {   // a step back: from the spin to the power, or from the pow
   placeHand(h); sfx.skeeWall(0.3);
 }
 function down(e) {
+  if (my && e.pointerType === 'mouse' && !locked() && over.style.display !== 'flex' && performance.now() - lockFailedAt > 3000) { lockMouse(); return; }   // a click while the mouse is free just locks it again
   const h = my && my.hand;
   if (!h || !mine(my)) return;
   if (e.button === 2) { back(h); return; }
@@ -1114,12 +1143,12 @@ function claim(m) {   // start a game on this machine (if nobody else is playing
     if (cur && cur.id && cur.id !== myId && !stale(cur)) return;   // someone's playing: leave it alone
     return { id: myId, name: S.myName, score: 0, left: BALLS, g: Date.now(), t: serverNow() };
   }).then(res => {
-    if (!res.committed) { opts.banner && opts.banner(`${(res.snapshot.val() || {}).name || 'Someone'} is playing that one`, 3); if (!my) goFull(false); return; }
+    if (!res.committed) { opts.banner && opts.banner(`${(res.snapshot.val() || {}).name || 'Someone'} is playing that one`, 3); if (!my) { goFull(false); unlockMouse(); } return; }
     hideOver(); showTitle();   // the controls flash up once at the start of every game
     m.score = 0; m.rolling = 0; m.myLeft = BALLS;
     onDisconnect(r).update({ done: true });
     if (my !== m) enter(m);
-  }).catch(() => opts.banner && opts.banner('Could not start a game (check the database rules)', 4));
+  }).catch(() => { if (!my) unlockMouse(); opts.banner && opts.banner('Could not start a game (check the database rules)', 4); });
 }
 // ---------- The split screen while you play: the whole board big across the top, and a strip along the bottom of
 // your end (your ball, the aim arrow and the balls in both walls). The lane in between is left out. ----------
@@ -1228,7 +1257,7 @@ function leave() {
   }
   my = null; view = null;
   playMode(false);
-  hideOver(); showMenu(false); goFull(false);
+  hideOver(); showMenu(false); goFull(false); unlockMouse();
   for (const el of pageBits()) el.style.visibility = '';
   hud.style.display = 'none';
   for (const mm of machines) for (const p of mm.pops) if (p.el) p.done = true;   // (big numbers still on the screen go)
@@ -1322,7 +1351,7 @@ export function makeSkee(o) {
     loaded,
     get playing() { return !!my; },
     update: updateAll,
-    start(i) { const m = machines[i]; if (!m || my === m) return; if (wantFull) goFull(true); claim(m); },   // (full screen, if it's on, has to start right on the click)
+    start(i) { const m = machines[i]; if (!m || my === m) return; lockMouse(); if (wantFull) goFull(true); claim(m); },   // (the mouse lock and full screen have to start right on the click)
     down, move, up, leave,
     render: renderSplit
   };

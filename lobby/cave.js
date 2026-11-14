@@ -7,10 +7,12 @@
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
 // The galaxy in the middle of the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
+// Up top, the three blocks of the dome's top row over the orb are gone: the sky shows through, following your own clock
+// (night with slowly turning stars, then morning, day and evening).
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 3
+// VERSION 4
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -79,7 +81,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // with softly fading edges, so it can turn on its own while everything around it stays still.
 const SWIRL = 0.34;   // how much of the orb turns, around the middle of its galaxy (part of the orb's radius)
 const caveImg = new Image();
-let caveReady = false, soft = null, swirl = null, feathered = null, wings = null, wingsFor = '';
+let caveReady = false, soft = null, swirl = null, feathered = null, wings = null;
 caveImg.onload = () => {
   soft = document.createElement('canvas'); soft.width = soft.height = 48;
   soft.getContext('2d').drawImage(caveImg, 0, 0, 48, 48);
@@ -154,23 +156,19 @@ window.addEventListener('deviceorientation', e => {
   if (e.gamma == null) return;
   lookTo = { x: clamp(e.gamma / 25, -1, 1), y: clamp((e.beta - 45) / 25, -1, 1) };
 });
-function makeWings() {   // the sides of a very wide screen: the picture's edges mirrored outward, blurred and a little darker
-  wings = document.createElement('canvas'); wings.width = Math.round(W / 2); wings.height = Math.round(H / 2);
-  const wg = wings.getContext('2d'), k = 0.5;
-  wg.scale(k, k);
-  const B = Math.max(W, H) * 1.1;
-  wg.drawImage(soft, (W - B) / 2, (H - B) / 2, B, B);
-  wg.filter = 'blur(14px)';
-  const h = D * ASPECT;
-  for (const side of [-1, 1]) {   // flipped copies, butting up against each side of the picture
-    wg.save();
-    wg.translate(side < 0 ? ox : ox + 2 * D, 0);
-    wg.scale(-1, 1);
-    wg.drawImage(caveImg, 0, oy, D, h);
-    wg.restore();
-  }
+function makeWings() {   // the sides of a very wide screen: one blurred, slightly darker copy of the picture, drawn flipped
+  // against each side every frame (so it drifts with the picture and the seams always line up)
+  const n = 640, h = Math.round(n * ASPECT), p = 24;
+  const src = document.createElement('canvas'); src.width = n + p * 2; src.height = h + p * 2;
+  const sg = src.getContext('2d');
+  sg.drawImage(caveImg, 0, 0, n + p * 2, h + p * 2);   // a stretched copy underneath, so the blur has no empty edges to pull in
+  sg.drawImage(caveImg, p, p, n, h);
+  wings = document.createElement('canvas'); wings.width = n; wings.height = h;
+  const wg = wings.getContext('2d');
+  wg.filter = 'blur(6px)';
+  wg.drawImage(src, -p, -p);
   wg.filter = 'none';
-  wg.fillStyle = 'rgba(8,12,36,0.12)'; wg.fillRect(0, 0, W, H);
+  wg.fillStyle = 'rgba(8,12,36,0.12)'; wg.fillRect(0, 0, n, h);
 }
 function sx(u) { return ox + offset(DRIFT)[0] + u * D; }   // a spot in the picture, on screen
 function sy(v) { return oy + offset(DRIFT)[1] + v * D; }
@@ -278,6 +276,50 @@ document.getElementById('nameChange').addEventListener('click', () => {
 }
 window.addEventListener('resize', build);
 
+// ---------- The sky through the top of the dome ----------
+// The opening: the three blocks of the top row over the orb, traced round their grooves (in the picture's own pixels, 2600
+// wide, turned into parts of its width). Only their bottom edge shows on most screens; a taller window shows more.
+const HOLE = [[980, 505], [1150, 512], [1240, 518], [1350, 522], [1430, 516], [1540, 522], [1546, 560], [1544, 608],
+              [1430, 617], [1300, 623], [1150, 621], [980, 613]].map(([x, y]) => [x / 2600, y / 2600]);
+const HOLE_BOX = { u0: Math.min(...HOLE.map(p => p[0])), u1: Math.max(...HOLE.map(p => p[0])),
+                   v0: Math.min(...HOLE.map(p => p[1])), v1: Math.max(...HOLE.map(p => p[1])) };
+// The sky through the day, by your own clock: [hour, color at the top, color at the bottom, how bright the stars are].
+// Kept a little muted, so the daylight doesn't fight the Cave's own blue light.
+const SKY = [[0, [5, 8, 28], [16, 24, 64], 1], [4.5, [8, 12, 36], [26, 34, 84], 0.9], [6, [42, 52, 120], [210, 140, 130], 0.3],
+             [7.5, [70, 115, 190], [150, 190, 230], 0], [17, [66, 108, 180], [150, 185, 225], 0], [18.5, [52, 44, 112], [225, 120, 90], 0.15],
+             [20, [16, 18, 54], [52, 42, 104], 0.7], [21.5, [5, 8, 28], [16, 24, 64], 1], [24, [5, 8, 28], [16, 24, 64], 1]];
+const SKY_STARS = (() => { const r = seeded(11), out = []; for (let i = 0; i < 140; i++) out.push({ u: r(), v: r(), s: 0.5 + r() * 1.3, ph: r() * 7, tw: 0.5 + r() * 2 }); return out; })();
+const mixRGB = (a, b, k) => a.map((c, i) => Math.round(c + (b[i] - c) * k));
+function skyNow() {
+  const d = new Date(), h = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
+  let i = 0;
+  while (i < SKY.length - 2 && SKY[i + 1][0] <= h) i++;
+  const a = SKY[i], b = SKY[i + 1], k = (h - a[0]) / (b[0] - a[0]);
+  return { top: mixRGB(a[1], b[1], k), bottom: mixRGB(a[2], b[2], k), stars: a[3] + (b[3] - a[3]) * k };
+}
+function drawSky(t) {
+  const path = new window.Path2D();
+  HOLE.forEach(([u, v], i) => (i ? path.lineTo(sx(u), sy(v)) : path.moveTo(sx(u), sy(v))));
+  path.closePath();
+  const sky = skyNow(), x0 = sx(HOLE_BOX.u0), y0 = sy(HOLE_BOX.v0), w = (HOLE_BOX.u1 - HOLE_BOX.u0) * D, h = (HOLE_BOX.v1 - HOLE_BOX.v0) * D;
+  g.save();
+  g.clip(path);
+  const grd = g.createLinearGradient(0, y0, 0, y0 + h);
+  grd.addColorStop(0, `rgb(${sky.top})`); grd.addColorStop(1, `rgb(${sky.bottom})`);
+  g.fillStyle = grd; g.fillRect(x0 - 4, y0 - 4, w + 8, h + 8);
+  if (sky.stars > 0.02) {   // stars, far away (they drift with the mouse less than the stone does) and slowly turning across
+    const [px, py] = offset(DRIFT * -0.6);
+    for (const s of SKY_STARS) {
+      const a = sky.stars * (0.35 + 0.65 * Math.max(0, Math.sin(t * s.tw + s.ph)) ** 2);
+      g.fillStyle = `rgba(235,242,255,${a})`;
+      g.beginPath(); g.arc(x0 + ((s.u + t * 0.0015) % 1) * w + px, y0 + s.v * h + py, s.s * Math.max(1, D / 1800), 0, Math.PI * 2); g.fill();
+    }
+  }
+  g.restore();
+  g.strokeStyle = 'rgba(16,24,64,0.5)'; g.lineWidth = Math.max(1.5, D * 0.0012); g.lineJoin = 'round';   // the cut edge of the stone
+  g.stroke(path);
+}
+
 // ---------- Drawing every frame ----------
 function label(text, x, y, size, glowColor, lit) {   // a name floating in the air, glowing softly
   g.font = `italic ${size}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'bottom';
@@ -320,9 +362,15 @@ function frame(now) {
       g.drawImage(soft, (W - B) / 2, (H - B) / 2, B, B);
       g.fillStyle = 'rgba(8,12,36,0.35)'; g.fillRect(0, 0, W, H);
     }
-    if (wide) {
-      if (wingsFor !== W + 'x' + H) { makeWings(); wingsFor = W + 'x' + H; }
-      g.drawImage(wings, 0, 0, W, H);
+    if (wide) {   // the flipped blurred copies, butting up against each side of the picture and drifting with it
+      if (!wings) makeWings();
+      for (const side of [-1, 1]) {
+        g.save();
+        g.translate(side < 0 ? sx(0) : sx(0) + 2 * D, 0);
+        g.scale(-1, 1);
+        g.drawImage(wings, 0, sy(0), D, D * ASPECT);
+        g.restore();
+      }
     }
     g.drawImage(wide ? feathered : caveImg, sx(0), sy(0), D, D * ASPECT);
     // A door you touched gives a little shiver
@@ -336,6 +384,7 @@ function frame(now) {
         sx(a.x0) + Math.sin(now * 0.08) * sh * 4, sy(a.top), (a.x1 - a.x0) * D, (a.bottom - a.top) * D);
       g.restore();
     }
+    drawSky(t);   // the opening at the top of the dome
   }
 
   // The arches: a soft glow over the one you point at (or the one you touched)

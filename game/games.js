@@ -4,9 +4,11 @@
 // along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. Two skee-ball machines
 // stand on the right (skeeball.js); bowling down the left side and pool in the middle come next, their spots marked out on the floor.
 // You walk in through the frog's doors (gdoor.jpg, a Kindroid picture). Clicking them twice whooshes you back to the Cave.
-// By the door, a round window onto the sky (following your own clock), with a neon clock over it (clock.jpg) that shows your time.
+// On the door wall: a neon clock over the door (clock.jpg) that shows your time, and a round window onto the sky to the door's left.
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
-// VERSION 2
+// The neon walls are alive: they breathe gently, slow waves of light run along their lines, and pink and teal slowly
+// trade places (and back again) every couple of minutes.
+// VERSION 4
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -53,6 +55,42 @@ for (const [len, x, z, ry] of [[HX * 2, 0, -HZ, 0], [HX * 2, 0, HZ, Math.PI], [H
   wallMats.push(mat);
   plane(len, RH, mat, x, RH / 2, z, 0, ry);
 }
+// The walls come alive (in the shader, so it costs next to nothing): the neon breathes, waves of light run across it,
+// and pink and teal slowly trade places. Only the bright neon changes; the dark blue of the wall stays as it is.
+const wallU = { uTime: { value: 0 } };
+const WALL_GLSL = `uniform float uTime; varying vec3 vWallP;
+  vec3 rgb2hsv(vec3 c) {
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float d = q.x - min(q.w, q.y);
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+  }
+  vec3 hsv2rgb(vec3 c) { vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0); return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y); }
+  vec3 neonSwap(vec3 c) {   // pink and teal trade places: hues mirrored round blue-violet (pink 0.917 <-> teal 0.514), bright neon only
+    vec3 h = rgb2hsv(c);
+    float k = 0.5 - 0.5 * cos(uTime * 6.2832 / 150.0);
+    float w = smoothstep(0.2, 0.55, h.z) * smoothstep(0.3, 0.6, h.y);
+    h.x = fract(mix(h.x, 1.4306 - h.x, k * w));
+    return hsv2rgb(h);
+  }
+`;
+for (const m of wallMats) m.onBeforeCompile = sh => {
+  sh.uniforms.uTime = wallU.uTime;
+  sh.vertexShader = 'varying vec3 vWallP;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+    '#include <begin_vertex>\n  vWallP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = WALL_GLSL + sh.fragmentShader
+    .replace('#include <map_fragment>', '#include <map_fragment>\n  diffuseColor.rgb = neonSwap(diffuseColor.rgb);')
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  {
+    float s = max(max(emissive.r, emissive.g), emissive.b);
+    vec3 e = neonSwap(totalEmissiveRadiance / max(s, 1e-3)) * s;
+    float lum = max(max(e.r, e.g), e.b) / max(s, 1e-3);
+    float breathe = 0.9 + 0.08 * sin(uTime * 0.8) + 0.03 * sin(uTime * 2.3);
+    float wave = pow(0.5 + 0.5 * sin((vWallP.x + vWallP.z) * 0.7 + vWallP.y * 1.1 - uTime * 1.3), 10.0);
+    totalEmissiveRadiance = e * (breathe + wave * 0.7 * smoothstep(0.2, 0.6, lum));
+  }`);
+};
 const WALL_ASPECT = 1 / 0.785;   // the picture is this many times wider than it is tall
 const wallLoaded = loadTex('neonwall.jpg', t => {
   for (const m of wallMats) {   // one copy of the picture is a wall's height tall; side by side, every other one flipped
@@ -239,6 +277,8 @@ const skee = makeSkee({
 });
 
 // ---------- A round window by the door, onto the sky outside (it follows your own clock) ----------
+// It sits to the door's left as you face the door from inside, clear of the frog's padded surround (about 1.9 m out each side).
+const WIN_X = DOOR_X + 3.3;
 // (Quick ones for now; they'll get their proper look later.)
 const portCanvas = document.createElement('canvas');
 portCanvas.width = portCanvas.height = 256;
@@ -267,7 +307,7 @@ function updatePort() {
 updatePort();
 {
   const g = new THREE.Group();
-  g.position.set(-3, 2.1, HZ - 0.03); g.rotation.y = Math.PI;
+  g.position.set(WIN_X, 2.1, HZ - 0.03); g.rotation.y = Math.PI;
   const glass = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), new THREE.MeshBasicMaterial({ map: portTex, toneMapped: false }));
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.67, 0.08, 18, 64),
     new THREE.MeshPhysicalMaterial({ color: 0xff8da0, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.12, emissive: 0xff3f8a, emissiveIntensity: 0.25 }));
@@ -283,7 +323,7 @@ updatePort();
   }
   scene.add(g);
 }
-// ---------- The neon clock over the window: its pink and blue rings (clock.jpg) and glowing hands showing your own time ----------
+// ---------- The neon clock over the door: its pink and blue rings (clock.jpg) and glowing hands showing your own time ----------
 const DIAL = { x: 507, y: 510, ring: 445, face: 402 };   // where things sit in clock.jpg (in its pixels, out of 1024)
 const CLOCK_SIZE = 1.2;                                  // how big the whole picture is on the wall (meters)
 const dialCanvas = document.createElement('canvas'); dialCanvas.width = dialCanvas.height = 512;
@@ -319,7 +359,7 @@ function updateNeonClock() {   // drawn again ten times a second, so the second 
 }
 {
   const g = new THREE.Group();
-  g.position.set(-3, 3.65, HZ - 0.04); g.rotation.y = Math.PI;
+  g.position.set(DOOR_X, 4.0, HZ - 0.04); g.rotation.y = Math.PI;   // just above the frog's surround (its top is about 3.25 m up)
   const off = n => (n - 512) / 1024 * CLOCK_SIZE;   // from the middle of the picture to a spot in it, in meters
   const face = new THREE.Mesh(new THREE.CircleGeometry(DIAL.face / 1024 * CLOCK_SIZE, 64), new THREE.MeshBasicMaterial({ color: 0x04050d }));
   face.position.set(off(DIAL.x), -off(DIAL.y), 0);   // its dark face, behind the glowing picture
@@ -749,7 +789,7 @@ canvas.addEventListener('pointerdown', e => {
 function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
 window.addEventListener('pointercancel', e => { down = null; endTouch(e); });
 window.addEventListener('pointermove', e => {
-  if (skee.playing) { canvas.style.cursor = 'none'; skee.move(e); return; }   // no mouse pointer over the game while you play
+  if (skee.playing) { skee.move(e); return; }   // (while you play, the mouse is locked into the game: no pointer)
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();
@@ -797,7 +837,7 @@ window.addEventListener('resize', () => {
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1), t = clock.elapsedTime;
-  floorU.uTime.value = t; skyU.uTime.value = t;
+  floorU.uTime.value = t; skyU.uTime.value = t; wallU.uTime.value = t;
   { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
   entrance.update(dt);       // the doors on their springs
   updateNeonClock(); updatePort();
