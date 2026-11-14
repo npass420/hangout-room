@@ -5,10 +5,11 @@
 // a metal lipped hump that launches the ball onto the board, and a vortex turning behind the rings.
 // The board: polished metal rings in the middle (10 to 50), a small 150 cup in each top corner, and down both sides 2 to 8
 // bigger pockets (60 low, 75 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
-// Click a machine to play: the screen splits, the hump and the board big across the top with depth, and your end along
-// the bottom. The power is a 15 step meter you set whenever you like (scroll wheel, the up and down keys, or drag on it).
-// A roll is two clicks: lock your aim (the arrow follows your mouse; swing it wide to whip it off the walls), then stop the
-// spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
+// Click a machine to play: the game fills the screen (the room's panels tuck away; 💬 or Enter brings the chat up, ☰ is the
+// menu), split into the hump and the board big across the top with depth and your end along the bottom (V: one deep view).
+// The power is a 15 step meter you set whenever you like (scroll wheel, the up and down keys, or drag on it).
+// A roll is three clicks: place the ball across your end, lock your aim (the arrow follows your mouse; swing it wide to whip
+// it off the walls), then stop the spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
 // =====================================================================
@@ -317,7 +318,7 @@ function buildMachine(i) {
   g.position.set(MACHINES[i], 0, FRONT_Z);
   scene.add(g);
   // the deep space runway, its hump, the gutter in front of the board and the drops into it
-  g.add(surface(-0.02, L, 60, laneMat), surface(L, L + HU, 24, laneMat));
+  g.add(surface(VF, L, 60, laneMat), surface(L, L + HU, 24, laneMat));
   const gut = new THREE.Mesh(new THREE.PlaneGeometry(W, B0 - L - HU), darkMat);
   gut.rotation.x = -Math.PI / 2; gut.position.set(0, TROUGH, -(L + HU + B0) / 2); g.add(gut);
   for (const [v, top] of [[B0, YB]]) {
@@ -351,18 +352,15 @@ function buildMachine(i) {
     const chMid = sd * CH_U;
     g.add(panel(VF, L + 0.04, v => laneTop(v) - CH_D - 0.006, chMid - CH / 2, CH));   // solid under the channel, so the wall's ends are closed
     g.add(surface(VF, L + 0.04, 30, darkMat, chMid - CH / 2, chMid + CH / 2, WALL_H - CH_D));   // the channel's floor
-    for (const v of [VF + 0.02, L + 0.02]) {   // closing off both ends of the channel
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(CH, CH_D, 0.04), holoMat);
-      cap.position.set(chMid, H(Math.max(v, 0)) + WALL_H - CH_D / 2, -v); g.add(cap);
-    }
+    for (const v of [VF, L]) g.add(panel(v, v + 0.04, laneTop, chMid - CH / 2, CH));   // the channel's two ends: solid wall, full height
     const v0 = SLOT_V(0) - 0.07, v1 = SLOT_V(SLOT - 1) + 0.07, vm = (v0 + v1) / 2, len = (v1 - v0) * Math.sqrt(1 + SLOPE * SLOPE);
     const geo = new THREE.BoxGeometry(CH + 0.012, 0.012, len); geo.translate(-sd * (CH + 0.012) / 2, 0, 0);   // anchored at the outside edge
     const c = new THREE.Mesh(geo, coverMat);
     c.position.set(sd * (CH_U + CH / 2 + 0.006), H(vm) + WALL_H + 0.004, -vm); c.rotation.x = Math.atan(SLOPE);
     g.add(c); covers.push(c);
   }
-  const front = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT, H(VF) - 0.01, 0.04), holoMat);   // the front, under your end
-  front.position.set(0, (H(VF) - 0.01) / 2, -VF + 0.02); g.add(front);
+  const front = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT, H(VF), 0.04), holoMat);   // the front, under your end, right up to the lane
+  front.position.set(0, H(VF) / 2, -VF + 0.02); g.add(front);
   const back = new THREE.Mesh(new THREE.BoxGeometry(W + 0.08, topEdge(VB), 0.06), holoMat);
   back.position.set(0, topEdge(VB) / 2, -(B1 + 0.03)); g.add(back);
   // light over the board, so the rims and the balls shine
@@ -429,18 +427,20 @@ const hudScore = document.createElement('div');
 hudScore.style.cssText = 'font:bold 64px "Courier New",monospace;line-height:1;color:#dffbff;text-shadow:0 0 10px #29e6ff,0 0 26px #29e6ff';
 const hudBalls = document.createElement('div');
 hudBalls.style.cssText = 'font-weight:bold;font-size:18px;margin-top:4px;color:#ffd36a;text-shadow:0 0 10px #ffd36a';
-const hudKeys = document.createElement('div');
-hudKeys.style.cssText = 'font-size:13px;margin-top:6px;opacity:0.75';
-hudKeys.textContent = 'V · switch view   ·   Enter · chat';
-hud.append(hudScore, hudBalls, hudKeys);
+const hudBest = document.createElement('div');
+hudBest.style.cssText = 'font-size:14px;margin-top:2px;color:#cdb8ff';
+hud.append(hudScore, hudBalls, hudBest);
+let pb = 0;   // your personal best, kept on this computer
+try { pb = +localStorage.getItem('skeePB') || 0; } catch (e) {}
 document.body.appendChild(hud);
 let hudKey = '';
 function paintHud(m) {
-  const d = m.data, key = Math.round(m.shown) + '|' + (d ? d.left : '') + '|' + !!(d && d.done);
+  const d = m.data, key = Math.round(m.shown) + '|' + (d ? d.left : '') + '|' + !!(d && d.done) + '|' + pb;
   if (key === hudKey) return;
   hudKey = key;
   hudScore.textContent = String(Math.round(m.shown)).padStart(4, '0');
   hudBalls.textContent = !d ? '' : d.done ? 'GAME OVER' : `${d.left} ball${d.left === 1 ? '' : 's'} left`;
+  hudBest.textContent = pb ? `your best: ${pb}` : '';
 }
 
 // ---------- Big numbers: bursting up out of the hole when a ball drops ----------
@@ -536,7 +536,7 @@ function stepPop(m, dt) {
     if (!p.sounded) { p.sounded = true; sfx.skeePour(4, near(m) * 0.7); }
     const k = Math.min(1, (p.t - 0.35) / 0.45);                                 // ...and the new ones pop up, with a little bounce
     podScale(m, k < 1 ? Math.sin(k * Math.PI * 0.62) / Math.sin(Math.PI * 0.62) * (1 + 0.15 * Math.sin(k * Math.PI)) : 1, (1 - k) * 0.03);
-    if (k >= 1) { m.pop = null; podScale(m, 1, 0); if (my === m) showUi(); }
+    if (k >= 1) { m.pop = null; podScale(m, 1, 0); }
   }
 }
 
@@ -624,32 +624,11 @@ function updateLive(m, dt) {
 let my = null;             // the machine you're playing, or null
 let opts = {};
 let view = null;           // the camera gliding to (or sitting at) the playing spot
-const ui = document.createElement('div');
-ui.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:25;display:none;gap:10px;align-items:center;' +
-  'padding:8px 12px;border-radius:14px;background:rgba(10,4,24,0.72);border:1px solid rgba(179,107,255,0.6);color:#efe6ff;' +
-  'font:14px "Trebuchet MS",sans-serif;box-shadow:0 0 16px rgba(179,107,255,0.4)';
-const uiText = document.createElement('span');
-const againBtn = document.createElement('button'); againBtn.textContent = '🎳 Play again';
-const quitBtn = document.createElement('button'); quitBtn.textContent = '✕ Done';
-for (const b of [againBtn, quitBtn]) b.style.cssText = 'font:bold 14px "Trebuchet MS",sans-serif;padding:7px 12px;border-radius:10px;cursor:pointer;' +
-  'background:rgba(255,63,168,0.25);color:#fff;border:1px solid rgba(255,63,168,0.8)';
-ui.append(uiText, againBtn, quitBtn);
-document.body.appendChild(ui);
-againBtn.addEventListener('click', () => { if (my) claim(my); });
-quitBtn.addEventListener('click', () => leave());
+const BTN_CSS = 'font:bold 15px "Trebuchet MS",sans-serif;padding:9px 16px;border-radius:12px;cursor:pointer;' +
+  'background:rgba(255,63,168,0.22);color:#fff;border:1px solid rgba(255,63,168,0.8);text-align:left';
+function button(label, fn) { const b = document.createElement('button'); b.textContent = label; b.style.cssText = BTN_CSS; b.addEventListener('click', fn); return b; }
 function mine(m) { const d = m && m.data; return !!(d && d.id === myId && !d.done); }
 function rolling(m) { return m.live.some(l => !l.gone) || !!m.pop; }
-function showUi() {
-  if (!my) { ui.style.display = 'none'; return; }
-  ui.style.display = 'flex';
-  const d = my.data, touch = my.hand && my.hand.touch;
-  againBtn.style.display = mine(my) ? 'none' : '';
-  if (!mine(my)) uiText.textContent = d && d.id === myId && d.done ? `Game over: ${d.score}` : 'Ready';
-  else if (my.hand) uiText.textContent = my.hand.stage === 'aim'
-    ? (touch ? 'Drag to aim, let go to lock it · drag the meter for power' : 'Aim with your mouse, click to lock it · power: scroll wheel or ↑ ↓')
-    : (touch ? 'Tap to stop the spin bar and roll' : 'Click to stop the spin bar and roll · right click to aim again');
-  else uiText.textContent = rolling(my) ? 'Rolling…' : my.tray ? 'Get ready…' : 'Last ball rolling…';
-}
 
 // ---------- While you play, the chat and the people list are tucked away: the 💬 button or Enter brings them up ----------
 const chatCss = document.createElement('style');
@@ -680,7 +659,90 @@ function playMode(on) {   // tuck the room's panels away while you play, and bri
   if (!on) showChat(false);
   chatBtn.style.display = on ? 'block' : 'none';
   chatDot.style.display = 'none';
+  menuBtn.style.display = on ? 'block' : 'none';
 }
+
+// ---------- Full screen: starting a game fills the whole screen (no tabs, no taskbar); leaving puts it back ----------
+let wantFull = true, ourFull = false;
+try { wantFull = localStorage.getItem('skeeFull') !== 'off'; } catch (e) {}
+function goFull(on) {
+  const el = document.documentElement;
+  try {
+    if (on && el.requestFullscreen && !document.fullscreenElement) { ourFull = true; el.requestFullscreen({ navigationUI: 'hide' }).catch(() => { ourFull = false; }); }
+    if (!on && ourFull && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    if (!on) ourFull = false;
+  } catch (e) {}
+}
+
+// ---------- The title card: SKEE·BALL across the screen for a moment while you step up to the machine ----------
+const title = document.createElement('div');
+title.style.cssText = 'position:fixed;inset:0;z-index:30;display:none;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;' +
+  'background:radial-gradient(ellipse at center, rgba(40,10,70,0.92), rgba(4,2,12,0.98));transition:opacity 0.6s;font-family:"Trebuchet MS",sans-serif';
+const titleBig = document.createElement('div');
+titleBig.textContent = 'SKEE·BALL';
+titleBig.style.cssText = 'font-weight:bold;font-size:min(16vw,150px);letter-spacing:0.06em;color:#fff;text-shadow:0 0 18px #ff3fa8,0 0 50px #ff3fa8,0 0 90px #b36bff';
+const titleSmall = document.createElement('div');
+titleSmall.textContent = 'scroll: power   ·   click: place   ·   click: aim   ·   click: spin';
+titleSmall.style.cssText = 'margin-top:14px;font-size:min(4vw,26px);color:#dffbff;text-shadow:0 0 12px #29e6ff;letter-spacing:0.12em';
+title.append(titleBig, titleSmall);
+document.body.appendChild(title);
+let titleTimer = 0;
+function showTitle() {
+  clearTimeout(titleTimer);
+  title.style.display = 'flex'; title.style.opacity = '1';
+  titleTimer = setTimeout(() => { title.style.opacity = '0'; titleTimer = setTimeout(() => { title.style.display = 'none'; }, 650); }, 1300);
+}
+
+// ---------- The menu (☰): a new game, the view, full screen, sound, and leaving ----------
+const menuBtn = document.createElement('button');
+menuBtn.textContent = '☰';
+menuBtn.title = 'Menu';
+menuBtn.style.cssText = chatBtn.style.cssText + ';right:78px';
+const menu = document.createElement('div');
+menu.style.cssText = 'position:fixed;right:16px;top:76px;z-index:28;display:none;flex-direction:column;gap:8px;padding:12px;border-radius:16px;' +
+  'background:rgba(10,4,24,0.88);border:1px solid rgba(179,107,255,0.7);box-shadow:0 0 22px rgba(179,107,255,0.45)';
+const mNew = button('🎳  New game', () => { showMenu(false); if (my) claim(my); });
+const mView = button('', () => { setMode(mode === 'split' ? 'deep' : 'split'); menuLabels(); });
+const mFull = button('', () => { wantFull = !wantFull; try { localStorage.setItem('skeeFull', wantFull ? 'on' : 'off'); } catch (e) {} goFull(wantFull); menuLabels(); });
+const mSound = button('', () => { const b = document.getElementById('mute'); if (b) b.click(); setTimeout(menuLabels, 50); });
+const mLeave = button('✕  Leave the game', () => leave());
+menu.append(mNew, mView, mFull, mSound, mLeave);
+document.body.append(menuBtn, menu);
+function menuLabels() {
+  mView.textContent = mode === 'split' ? '👁  Deep view  (V)' : '👁  Split view  (V)';
+  mFull.textContent = wantFull ? '⛶  Full screen: on' : '⛶  Full screen: off';
+  const b = document.getElementById('mute');
+  mSound.textContent = (b && /🔇/.test(b.textContent) ? '🔇' : '🔊') + '  Sound';
+}
+const menuOpen = () => menu.style.display === 'flex';
+function showMenu(on) { menu.style.display = on ? 'flex' : 'none'; if (on) menuLabels(); }
+menuBtn.addEventListener('click', () => showMenu(!menuOpen()));
+
+// ---------- Game over: a card with your score, your best, and what next ----------
+const over = document.createElement('div');
+over.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:29;display:none;flex-direction:column;align-items:center;gap:10px;' +
+  'padding:26px 40px;border-radius:22px;background:rgba(10,4,24,0.9);border:2px solid rgba(255,63,168,0.8);' +
+  'box-shadow:0 0 40px rgba(255,63,168,0.5);font-family:"Trebuchet MS",sans-serif;color:#efe6ff;text-align:center';
+const overHead = document.createElement('div');
+overHead.style.cssText = 'font-weight:bold;font-size:22px;letter-spacing:0.2em;color:#ffd36a;text-shadow:0 0 10px #ffd36a';
+const overScore = document.createElement('div');
+overScore.style.cssText = 'font:bold 96px "Courier New",monospace;line-height:1;color:#dffbff;text-shadow:0 0 14px #29e6ff,0 0 40px #29e6ff';
+const overNote = document.createElement('div');
+overNote.style.cssText = 'font-size:18px;min-height:22px';
+const overBtns = document.createElement('div');
+overBtns.style.cssText = 'display:flex;gap:10px;margin-top:8px';
+overBtns.append(button('🎳  Play again', () => { if (my) claim(my); }), button('✕  Done', () => leave()));
+over.append(overHead, overScore, overNote, overBtns);
+document.body.appendChild(over);
+function showOver(score, newPb, rank) {
+  overHead.textContent = 'GAME OVER';
+  overScore.textContent = String(score);
+  overNote.textContent = newPb ? '⭐ NEW PERSONAL BEST! ⭐' : rank ? `🏆 #${rank} on the high score board` : `your best: ${pb}`;
+  if (newPb && rank) overNote.textContent += `   ·   🏆 #${rank}`;
+  overNote.style.color = newPb || rank ? '#9dff4a' : '#cdb8ff';
+  over.style.display = 'flex';
+}
+function hideOver() { over.style.display = 'none'; }
 
 // ---------- A roll: aim (an arrow that follows you), then spin (a timing bar) and it goes. The power is a meter you set ----------
 // whenever you like (scroll wheel or the up and down keys, or drag on the meter itself), and it stays where you leave it.
@@ -738,9 +800,9 @@ function setPower(seg) {   // set the power meter (and draw the waiting ball bac
   const h = my && my.hand;
   if (h) placeHand(h);
 }
-function placeHand(h) {   // the ball waiting on the lane, drawn back further the more power you've set
+function placeHand(h) {   // the ball waiting on the lane where you've placed it, drawn back further the more power you've set
   const v = 0.08 - power / SEGS * 0.16;
-  h.mesh.position.set(0, H(Math.max(v, -0.02)) + R, -v);
+  h.mesh.position.set(h.u, H(Math.max(v, -0.02)) + R, -v);
 }
 function canSet() { return !!(my && mine(my)); }
 // The scroll wheel (a notch a segment; a touchpad needs a little more swipe), and the up and down keys
@@ -756,16 +818,18 @@ window.addEventListener('keydown', e => {
   if (!my) return;
   const k = e.key.toLowerCase();
   if (k === 'escape' && chatOpen()) { showChat(false); return; }   // Esc tucks the chat away first
+  if (k === 'escape' && menuOpen()) { showMenu(false); return; }     // then the menu
+  if (k === 'escape' && document.fullscreenElement) return;         // (in full screen, Esc is the browser's: it leaves full screen)
   const a = document.activeElement;
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
   if (k === 'enter') { showChat(true); e.preventDefault(); return; }
   if (k === 'v') { setMode(mode === 'split' ? 'deep' : 'split'); return; }
-  if (k === 'escape') { const h = my.hand; if (h && h.stage === 'spin') back(h); else leave(); return; }
+  if (k === 'escape') { const h = my.hand; if (h && h.stage !== 'place') back(h); else leave(); return; }
   if (!canSet()) return;
   if (k === 'arrowup' || k === 'w') { setPower(power + 1); e.preventDefault(); }
   if (k === 'arrowdown' || k === 's') { setPower(power - 1); e.preventDefault(); }
 });
-window.addEventListener('contextmenu', e => { if (my) e.preventDefault(); });   // right click is "aim again" while you play
+window.addEventListener('contextmenu', e => { if (my) e.preventDefault(); });   // right click is "a step back" while you play
 // Dragging (or clicking) on the meter itself
 let meterDrag = false;
 function meterAt(e) {
@@ -796,41 +860,51 @@ aim.visible = false;
 function showAim(h) {
   aim.visible = !!h;
   if (!h) return;
-  aim.position.set(0, H(0.08) + 0.005, -0.08);
+  aim.position.set(h.u, H(0.08) + 0.005, -0.08);
+  aim.visible = h.stage !== 'place';   // (the arrow comes out once you've placed the ball)
   aim.rotation.set(Math.atan(SLOPE), -h.aim, 0, 'YXZ');   // tipped up the lane's slope, turned the way it'll go
   const p = power / SEGS;
   aim.scale.set(1, 1, 0.6 + p * 1.6);
   aimMat.color.setHSL(0.33 - p * 0.33, 1, h.stage === 'aim' ? 0.55 : 0.7);
 }
-function ballX(m) {   // where your ball is on the screen (pixels across, in the bottom strip)
-  const p = new THREE.Vector3(0, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(view && view.t >= 1 ? (mode === 'deep' ? deepCam : nearCam) : camera);
+function laneX(m, u) {   // where a spot across your end of the lane is on the screen (pixels across)
+  const p = new THREE.Vector3(u, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(view && view.t >= 1 ? (mode === 'deep' ? deepCam : nearCam) : camera);
   return (p.x + 1) / 2 * window.innerWidth;
 }
+const U_MAX = HALF - 0.08;   // how far toward a wall you can place the ball
 function readyBall(m) {   // your turn and nothing rolling: the next ball comes out of a channel onto the lane, ready to aim
   if (m.hand || m.tray <= 0 || rolling(m) || !mine(m) || (view && view.t < 1)) return;
   const mesh = freeBall(m);
   if (!mesh) return;
-  m.hand = { mesh, stage: 'aim', t: 0, aim: 0, spin: 0 };
+  m.hand = { mesh, stage: 'place', t: 0, u: 0, aim: 0, spin: 0 };
   m.tray--; placeTray(m);
   mesh.visible = true; placeHand(m.hand);
   m.g.add(aim);
   sfx.skeeThump(0.5);
-  showUi();
 }
-function steer(h, e) {   // the pointer moving over the game swings the aim (until you've locked it)
-  if (h.stage === 'aim') h.aim = Math.max(-1, Math.min(1, (e.clientX - ballX(my)) / (window.innerWidth * 0.32))) * AIM_MAX;
+function steer(h, e) {   // the pointer moving over the game slides the ball across, then swings the aim (until each is locked)
+  if (h.stage === 'place') {
+    const x0 = laneX(my, -HALF), x1 = laneX(my, HALF);
+    h.u = Math.max(-U_MAX, Math.min(U_MAX, -HALF + (e.clientX - x0) / (x1 - x0) * W));
+    placeHand(h);
+  } else if (h.stage === 'aim') h.aim = Math.max(-1, Math.min(1, (e.clientX - laneX(my, h.u)) / (window.innerWidth * 0.32))) * AIM_MAX;
 }
-function next(h) {   // the first click locks the aim and starts the spin bar; the second stops it, and the ball goes
-  if (h.stage === 'aim') { h.stage = 'spin'; h.t = 0; sfx.skeeRim(0.8); showUi(); }
+function next(h) {   // click one places the ball, click two locks the aim and starts the spin bar, click three stops it and it goes
+  if (h.stage === 'place') { h.stage = 'aim'; sfx.skeeThump(0.4); }
+  else if (h.stage === 'aim') { h.stage = 'spin'; h.t = 0; sfx.skeeRim(0.8); }
   else if (h.stage === 'spin') roll(my, h);
 }
-function back(h) { h.stage = 'aim'; h.t = 0; h.spin = 0; sfx.skeeWall(0.3); showUi(); }   // aim again
+function back(h) {   // a step back: from the spin to the aim, or from the aim to placing the ball
+  if (h.stage === 'spin') { h.stage = 'aim'; h.t = 0; h.spin = 0; }
+  else if (h.stage === 'aim') h.stage = 'place';
+  sfx.skeeWall(0.3);
+}
 function down(e) {
   const h = my && my.hand;
   if (!h || !mine(my)) return;
-  if (e.button === 2) { if (h.stage === 'spin') back(h); return; }
+  if (e.button === 2) { back(h); return; }
   h.touch = e.pointerType === 'touch';
-  if (h.touch && h.stage === 'aim') { h.dragging = true; steer(h, e); return; }   // phones: drag to aim, let go to lock it
+  if (h.touch && h.stage !== 'spin') { h.dragging = true; steer(h, e); return; }   // phones: drag to place (then to aim), let go to lock it
   next(h);
 }
 function move(e) {
@@ -847,7 +921,7 @@ function up(e) {
 function roll(m, h) {
   const d = m.data, n = BALLS - d.left;
   // everyone uses exactly the numbers that are sent, so their ball rolls the same as yours
-  const r = { n, g: d.g, by: myId, u: 0, p: +powerP().toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
+  const r = { n, g: d.g, by: myId, u: +h.u.toFixed(4), p: +powerP().toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
   const l = launch(m, r);
   if (!l) return;
   l.mine = true;
@@ -857,7 +931,6 @@ function roll(m, h) {
   set(ref(db, 'game/skee/r' + m.i), r).catch(() => {});
   m.seen = d.g + ':' + n;
   showAim(null);
-  showUi();
 }
 function mineDone(m, pts) {   // one of your balls finished: add up the score, and end the game after the last one
   m.score += pts;
@@ -874,9 +947,10 @@ function mineDone(m, pts) {   // one of your balls finished: add up the score, a
     if (m.score > 0) push(ref(db, 'game/skee/best'), { name: S.myName, score: m.score, t: Date.now() }).catch(() => {});
     const place = best.filter(b => b.score >= m.score).length;
     sfx.skeeOver(m.score >= (best[0] ? best[0].score : 1));
-    opts.banner && opts.banner(place < 8 && m.score > 0 ? `🏆 ${m.score}! That's on the high score board` : `Game over: ${m.score}`, 4);
+    const newPb = m.score > pb;
+    if (newPb) { pb = m.score; try { localStorage.setItem('skeePB', String(pb)); } catch (e) {} }
+    setTimeout(() => { if (my === m) showOver(m.score, newPb, place < 8 && m.score > 0 ? place + 1 : 0); }, 1500);   // once the last number's landed
   }
-  setTimeout(() => { if (my === m) showUi(); }, 700);
 }
 function claim(m) {   // start a game on this machine (if nobody else is playing it)
   if (!S.myName) return;
@@ -885,11 +959,11 @@ function claim(m) {   // start a game on this machine (if nobody else is playing
     if (cur && cur.id && cur.id !== myId && !stale(cur)) return;   // someone's playing: leave it alone
     return { id: myId, name: S.myName, score: 0, left: BALLS, g: Date.now(), t: serverNow() };
   }).then(res => {
-    if (!res.committed) { opts.banner && opts.banner(`${(res.snapshot.val() || {}).name || 'Someone'} is playing that one`, 3); return; }
+    if (!res.committed) { opts.banner && opts.banner(`${(res.snapshot.val() || {}).name || 'Someone'} is playing that one`, 3); if (!my) goFull(false); return; }
+    hideOver();
     m.score = 0; m.rolling = 0; m.myLeft = BALLS;
     onDisconnect(r).update({ done: true });
     if (my !== m) enter(m);
-    showUi();
   }).catch(() => opts.banner && opts.banner('Could not start a game (check the database rules)', 4));
 }
 // ---------- The split screen while you play: the whole board big across the top, and a strip along the bottom of
@@ -959,10 +1033,8 @@ function renderSplit() {   // draws the two views; false when you're not playing
   if (mode === 'deep') {   // the one deep view
     frameGoal(deepCam, w / h, deepPts);
     renderer.render(scene, deepCam);
-    ui.style.bottom = ''; ui.style.top = '14px';   // the bar of words goes up top, clear of your ball
     return true;
   }
-  ui.style.top = '';
   frameGoal(goalCam, w / (h - hb - gap));
   fit(nearCam, w / hb, 82, 18);
   renderer.setScissorTest(true);
@@ -972,17 +1044,16 @@ function renderSplit() {   // draws the two views; false when you're not playing
   renderer.render(scene, nearCam);
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, w, h);
-  ui.style.bottom = (hb - 22) + 'px';   // the bar of words sits on the line between the two views, out of the way
   return true;
 }
 function enter(m) {
   my = m;
   playMode(true);
+  showTitle();
   placeCams(m);
   const to = nearCam.position.clone(), toQ = nearCam.quaternion.clone();   // glide down to your end, then the screen splits
   view = { t: 0, fromP: camera.position.clone(), fromQ: camera.quaternion.clone(), to, toQ, fromF: camera.fov };
   opts.enter && opts.enter(to.x, to.z);
-  showUi();
 }
 function leave() {
   if (!my) return;
@@ -993,13 +1064,13 @@ function leave() {
     onDisconnect(ref(db, 'game/skee/m' + m.i)).cancel();
   }
   my = null; view = null;
-  drawGauge(null); ui.style.bottom = '18px'; ui.style.top = '';
+  drawGauge(null);
   playMode(false);
+  hideOver(); showMenu(false); goFull(false);
   for (const el of pageBits()) el.style.visibility = '';
   hud.style.display = 'none';
   for (const mm of machines) for (const p of mm.pops) if (p.el) p.done = true;   // (big numbers still on the screen go)
   camera.fov = BASE_FOV; camera.updateProjectionMatrix();
-  showUi();
   const e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
   opts.leave && opts.leave(camera.position.x, camera.position.z, e.y, e.x);
 }
@@ -1024,7 +1095,6 @@ machines.forEach(m => {
     }
     if (!playing && !m.live.length && !m.hand) m.tray = BALLS;   // between games the channels sit full under their covers
     placeTray(m);
-    if (my === m) showUi();
   }, () => {});
   let first = true;
   onValue(ref(db, 'game/skee/r' + m.i), s => {
@@ -1080,7 +1150,7 @@ export function makeSkee(o) {
     loaded,
     get playing() { return !!my; },
     update: updateAll,
-    start(i) { const m = machines[i]; if (!m) return; if (my === m) return; claim(m); },
+    start(i) { const m = machines[i]; if (!m || my === m) return; if (wantFull) goFull(true); claim(m); },   // (full screen has to start right on the click)
     down, move, up, leave,
     render: renderSplit
   };
