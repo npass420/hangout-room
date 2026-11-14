@@ -4,8 +4,9 @@
 // along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. Two skee-ball machines
 // stand on the right (skeeball.js); bowling down the left side and pool in the middle come next, their spots marked out on the floor.
 // You walk in through the frog's doors (gdoor.jpg, a Kindroid picture). Clicking them twice whooshes you back to the Cave.
+// By the door, a round window onto the sky (following your own clock), with a neon clock over it (clock.jpg) that shows your time.
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
-// VERSION 1
+// VERSION 2
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -15,7 +16,6 @@ import { db, myId, S, hooks, EYE, renderer, scene, camera, canvas, BASE_FOV,
 import { sfx, setupMute } from '../sounds.js';
 import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
-import { makeClock } from '../clock.js';
 import { inRoom } from '../world.js';
 import { makeSkee } from './skeeball.js';
 
@@ -238,7 +238,7 @@ const skee = makeSkee({
   leave(x, z, y, p) { [me.x, me.z] = clampSpot(x, z); yaw = y; pitch = p; sendSpot(true); }             // back to walking, from right there
 });
 
-// ---------- A round window by the door, onto the sky outside (it follows your own clock), and a neon clock over it ----------
+// ---------- A round window by the door, onto the sky outside (it follows your own clock) ----------
 // (Quick ones for now; they'll get their proper look later.)
 const portCanvas = document.createElement('canvas');
 portCanvas.width = portCanvas.height = 256;
@@ -283,11 +283,52 @@ updatePort();
   }
   scene.add(g);
 }
-const wallClock = makeClock({ lit: '#3ff0ff', dim: '#0c2630', back: '#04050d', width: 1.15,
-  frame: new THREE.MeshStandardMaterial({ color: 0x14102a, roughness: 0.5 }), glow: 'rgba(41,230,255,0.4)' });
-wallClock.group.position.set(-3, 3.45, HZ - 0.04);
-wallClock.group.rotation.y = Math.PI;
-scene.add(wallClock.group);
+// ---------- The neon clock over the window: its pink and blue rings (clock.jpg) and glowing hands showing your own time ----------
+const DIAL = { x: 507, y: 510, ring: 445, face: 402 };   // where things sit in clock.jpg (in its pixels, out of 1024)
+const CLOCK_SIZE = 1.2;                                  // how big the whole picture is on the wall (meters)
+const dialCanvas = document.createElement('canvas'); dialCanvas.width = dialCanvas.height = 512;
+const dialTex = new THREE.CanvasTexture(dialCanvas);
+dialTex.colorSpace = THREE.SRGBColorSpace;
+const dialImg = new Image();
+let dialReady = false, dialTick = -1;
+dialImg.onload = () => { dialReady = true; };
+dialImg.onerror = () => console.warn('clock.jpg did not load');
+dialImg.src = new URL('clock.jpg', import.meta.url).href;
+function updateNeonClock() {   // drawn again ten times a second, so the second hand glides
+  const d = new Date(), tick = Math.floor(d.getTime() / 100);
+  if (!dialReady || tick === dialTick) return;
+  dialTick = tick;
+  const g = dialCanvas.getContext('2d'), k = 512 / 1024, cx = DIAL.x * k, cy = DIAL.y * k, fr = DIAL.face * k;
+  g.globalCompositeOperation = 'source-over';
+  g.drawImage(dialImg, 0, 0, 512, 512);   // (its black adds no light, so on the wall only the neon shows)
+  g.globalCompositeOperation = 'lighter';
+  const sec = d.getSeconds() + d.getMilliseconds() / 1000, min = d.getMinutes() + sec / 60, hr = d.getHours() % 12 + min / 60;
+  const hand = (turn, len, tail, w, col, alpha) => {
+    const a = turn * Math.PI * 2 - Math.PI / 2, c = Math.cos(a), sn = Math.sin(a);
+    g.strokeStyle = col; g.globalAlpha = alpha; g.lineWidth = w * fr; g.lineCap = 'round';
+    g.shadowColor = col; g.shadowBlur = fr * 0.12;
+    g.beginPath(); g.moveTo(cx - c * tail * fr, cy - sn * tail * fr); g.lineTo(cx + c * len * fr, cy + sn * len * fr); g.stroke();
+  };
+  hand(hr / 12, 0.5, 0.08, 0.06, '#ff5fd0', 1);
+  hand(min / 60, 0.76, 0.1, 0.034, '#4fb8ff', 1);
+  hand(sec / 60, 0.84, 0.16, 0.012, '#e8dcff', 0.8);
+  g.globalAlpha = 1; g.shadowBlur = fr * 0.1; g.shadowColor = '#c9a8ff';
+  g.fillStyle = '#f2eaff'; g.beginPath(); g.arc(cx, cy, fr * 0.045, 0, Math.PI * 2); g.fill();
+  g.shadowBlur = 0;
+  dialTex.needsUpdate = true;
+}
+{
+  const g = new THREE.Group();
+  g.position.set(-3, 3.65, HZ - 0.04); g.rotation.y = Math.PI;
+  const off = n => (n - 512) / 1024 * CLOCK_SIZE;   // from the middle of the picture to a spot in it, in meters
+  const face = new THREE.Mesh(new THREE.CircleGeometry(DIAL.face / 1024 * CLOCK_SIZE, 64), new THREE.MeshBasicMaterial({ color: 0x04050d }));
+  face.position.set(off(DIAL.x), -off(DIAL.y), 0);   // its dark face, behind the glowing picture
+  const dial = new THREE.Mesh(new THREE.PlaneGeometry(CLOCK_SIZE, CLOCK_SIZE), new THREE.MeshBasicMaterial({ map: dialTex,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  dial.position.z = 0.01;
+  g.add(face, dial);
+  scene.add(g);
+}
 
 // ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
 const WALK = 2.6;     // walking speed, meters a second (a big room)
@@ -758,7 +799,7 @@ renderer.setAnimationLoop(() => {
   floorU.uTime.value = t; skyU.uTime.value = t;
   { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
   entrance.update(dt);       // the doors on their springs
-  wallClock.update(); updatePort();
+  updateNeonClock(); updatePort();
   skee.update(dt);           // the balls, the orbs and the signs (and the camera, while you're playing)
   if (intro) playIntro(dt);   // walking in through the door
   else if (skee.playing) fall(dt);

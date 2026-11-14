@@ -3,8 +3,9 @@
 // Holographic Tetris cabinets (holo.jpg), a deep space runway of drifting stars, thick walls along it with the wooden
 // balls (wood.jpg) in a channel along the top of each, under Tetris covers that slide sideways open when a game starts,
 // a metal lipped hump that launches the ball onto the board, and a vortex turning behind the rings.
-// The board: polished metal rings in the middle (10 to 50), a small 150 cup in each top corner, and down both sides 2 to 8
-// bigger pockets (60 low, 75 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
+// The board: polished metal rings in the middle (10 to 50), a small 150 cup in each top corner, and 2 to 4 bigger pockets
+// anywhere round the rings (60 low, 75 high) that sink away and pop up somewhere new after every ball. The back of every
+// ring is a ramp. The Tetris walls flash with lit blocks, and burst with light when a ball drops (a 150 is a jackpot).
 // Click a machine to play: the game fills the screen (the room's panels tuck away; 💬 or Enter brings the chat up, ☰ is the
 // menu), in one full view up the lane from just behind your ball (V: a split screen, the board up top and your end below).
 // The power is a 15 step meter you set whenever you like (scroll wheel, the up and down keys, or drag on it).
@@ -13,7 +14,7 @@
 // kicks off the walls with it). The next ball comes out placed and aimed like the last one; B picks it up to place again.
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
-// VERSION 2
+// VERSION 3
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }
@@ -24,7 +25,7 @@ import { sfx } from '../sounds.js';
 // ---------- The shape of a machine and how a ball moves on it (meters and seconds) ----------
 // u runs across the lane (right is plus), v runs down it from your end, y is up.
 // Every screen runs these same steps from the same start, so everyone sees the same ball end up in the same hole.
-const W = 1.9, HALF = W / 2, R = 0.03;                   // lane width, and a ball's radius
+const W = 1.9, HALF = W / 2, R = 0.04;                   // lane width, and a ball's radius
 const Y0 = 0.80, SLOPE = 0.12, L = 1.6;                  // how high the lane starts, how much it climbs a meter, how long it is
 const HU = 0.30, KICK = 0.75;                            // the hump: how long, and how steep it is at the lip (the launch)
 const HUMP_TOP = Y0 + SLOPE * L + HU * (SLOPE + (KICK - SLOPE) / 2);
@@ -32,24 +33,25 @@ const B0 = L + HU + 0.24, BL = 1.2, B1 = B0 + BL, TILT = 0.55;    // the target 
 const YB = HUMP_TOP - 0.06, TROUGH = HUMP_TOP - 0.34;    // its bottom edge, and the gutter in front of it
 const LIP = 0.045;                                       // how tall the ring lips stand
 // The board: rings in the middle (10 on the outside to 50 in the little one at the top), a small 150 cup in each top
-// corner, and down both sides 2 to 8 pockets that sink away and pop up somewhere new after every ball (60 low, 75 high).
+// corner, and 2 to 4 pockets round them that sink away and pop up somewhere new after every ball (60 low, 75 high).
 // Each ring is [across, down the machine, radius]; each hole [across, down, radius, points].
-const CC = 0.6, TINY = 0.085, TINY_HOLE = 0.048;          // the middle of the rings, and the size of a moving pocket and its hole
-const CUP = 0.06, CUP_HOLE = 0.033, CUP_U = 0.74, CUP_V = 1.05;   // the two little corner cups
+const CC = 0.6, TINY = 0.095, TINY_HOLE = 0.056;          // the middle of the rings, and the size of a moving pocket and its hole
+const CUP = 0.075, CUP_HOLE = 0.045, CUP_U = 0.74, CUP_V = 1.04;   // the two little corner cups
 const CENTER = [[0, CC, 0.36, 10], [0, CC + 0.06, 0.27, 20], [0, CC + 0.12, 0.18, 30], [0, CC + 0.165, 0.12, 40], [0, CC + 0.2, 0.05, 50],
                 [-CUP_U, CUP_V, CUP, 150], [CUP_U, CUP_V, CUP, 150]];
-const CENTER_HOLES = [[0, CC - 0.285, 0.055, 10], [0, CC - 0.135, 0.055, 20], [0, CC - 0.0075, 0.05, 30], [0, CC + 0.0975, 0.045, 40], [0, CC + 0.2, 0.036, 50],
+const CENTER_HOLES = [[0, CC - 0.285, 0.063, 10], [0, CC - 0.135, 0.063, 20], [0, CC - 0.0075, 0.058, 30], [0, CC + 0.0975, 0.052, 40], [0, CC + 0.2, 0.044, 50],
                       [-CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 150], [CUP_U, CUP_V - CUP + CUP_HOLE + 0.004, CUP_HOLE, 150]];
-const SPOTS = [[0.58, 0.17, 60], [0.79, 0.37, 60], [0.6, 0.6, 75], [0.79, 0.77, 75]];   // the moving pockets' spots on each side
-function layoutFor(g, n) {                               // the moving pockets for ball n of game g (the same on every screen)
+function layoutFor(g, n) {   // the moving pockets for ball n of game g: 2 to 4, anywhere round the middle rings (the same on every screen)
   let s = (Math.floor(g / 1000) ^ Math.imul(n + 1, 2654435761)) >>> 0;
   const rnd = () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
-  const count = 2 + Math.floor(rnd() * 7), slots = [0, 1, 2, 3, 4, 5, 6, 7];
-  for (let i = 7; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [slots[i], slots[j]] = [slots[j], slots[i]]; }   // a shuffle
-  const tiny = slots.slice(0, count).map(k => {
-    const [su, sv, pts] = SPOTS[k % 4], side = k < 4 ? -1 : 1;
-    return { u: side * (su + (rnd() - 0.5) * 0.05), v: B0 + sv + (rnd() - 0.5) * 0.05, pts };
-  });
+  const count = 2 + Math.floor(rnd() * 3), tiny = [];
+  for (let tries = 0; tiny.length < count && tries < 300; tries++) {
+    const u = (rnd() * 2 - 1) * (HALF - TINY - 0.05), dv = 0.12 + rnd() * 0.95, v = B0 + dv;
+    if (Math.hypot(u, dv - CC) < 0.36 + TINY + 0.04) continue;                         // clear of the middle rings,
+    if (Math.hypot(Math.abs(u) - CUP_U, dv - CUP_V) < CUP + TINY + 0.04) continue;      // the corner cups
+    if (tiny.some(t => Math.hypot(t.u - u, t.v - v) < TINY * 2 + 0.05)) continue;     // and each other
+    tiny.push({ u, v, pts: dv > 0.6 ? 75 : 60 });                                       // (higher up is worth more)
+  }
   return {
     tiny,
     rings: [...CENTER.map(([u, v, r]) => [u, B0 + v, r]), ...tiny.map(t => [t.u, t.v, TINY])],
@@ -178,13 +180,13 @@ const laneMat = new THREE.ShaderMaterial({
       return s * (0.55 + 0.45 * sin(uTime * tw * (1.0 + h * 3.0) + h * 50.0));
     }
     void main() {
-      vec2 p = vP - vec2(0.0, uTime * 0.03);
+      vec2 p = vP - vec2(0.0, uTime * 0.07);
       float n = noise(p * 1.3) * 0.6 + noise(p * 3.1) * 0.3 + noise(p * 7.0) * 0.1;
       vec3 col = mix(vec3(0.012, 0.01, 0.04), vec3(0.09, 0.03, 0.2), smoothstep(0.35, 0.85, n));
       col += vec3(0.03, 0.12, 0.18) * smoothstep(0.55, 0.95, noise(p * 0.8 + 4.0));
       col += vec3(0.75, 0.8, 1.0) * stars(p, 26.0, 0.9, 1.3);
       col += vec3(1.0, 0.85, 0.95) * stars(p + 7.0, 11.0, 0.95, 0.8) * 1.3;
-      col += vec3(0.7, 0.95, 1.0) * stars(vP - vec2(0.0, uTime * 0.07), 45.0, 0.93, 2.0) * 0.6;
+      col += vec3(0.7, 0.95, 1.0) * stars(vP - vec2(0.0, uTime * 0.14), 45.0, 0.93, 2.0) * 0.6;
       gl_FragColor = vec4(col, 1.0);
       #include <colorspace_fragment>
     }`
@@ -200,9 +202,9 @@ const boardMat = new THREE.ShaderMaterial({
       return mix(mix(h21(i), h21(i + vec2(1, 0)), f.x), mix(h21(i + vec2(0, 1)), h21(i + vec2(1, 1)), f.x), f.y); }
     void main() {
       vec2 d = vP - uCenter; float r = length(d), a = atan(d.y, d.x);
-      float sw = a + 4.0 / (r + 0.25) - uTime * 0.35;                       // the swirl: tighter toward the middle
+      float sw = a + 4.0 / (r + 0.25) - uTime * 0.7;                       // the swirl: tighter toward the middle
       float arms = 0.5 + 0.5 * sin(sw * 3.0 + noise(vec2(sw * 0.8, r * 4.0)) * 2.5);
-      float dust = noise(vec2(sw * 2.0, r * 9.0 - uTime * 0.6));
+      float dust = noise(vec2(sw * 2.0, r * 9.0 - uTime * 1.0));
       vec3 deep = vec3(0.02, 0.01, 0.06), violet = vec3(0.32, 0.08, 0.6), teal = vec3(0.05, 0.55, 0.7);
       vec3 col = mix(deep, mix(violet, teal, smoothstep(0.3, 0.9, dust)), arms * smoothstep(1.3, 0.1, r) * 0.85);
       col += vec3(1.0, 0.8, 1.0) * exp(-r * 9.0) * 1.2 + vec3(0.6, 0.4, 1.0) * exp(-r * 3.5) * 0.35;   // the bright core
@@ -212,6 +214,28 @@ const boardMat = new THREE.ShaderMaterial({
     }`
 });
 const holoMat = new THREE.MeshStandardMaterial({ color: 0x4a3a8a, roughness: 0.35, metalness: 0.3, emissive: 0xffffff, emissiveIntensity: 0 });
+// The Tetris walls come alive: blocks all over them light up and flash in neon colors, a few at a time, and the whole wall
+// bursts with light when a ball drops in a hole (brighter for the big ones)
+const holoU = { uTime: { value: 0 }, uBurst: { value: 0 }, uBurstCol: { value: new THREE.Color(0xffffff) } };
+holoMat.onBeforeCompile = sh => {
+  Object.assign(sh.uniforms, holoU);
+  sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWp;')
+    .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWp = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+    varying vec3 vWp; uniform float uTime, uBurst; uniform vec3 uBurstCol;
+    float hb(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    vec3 neon(float h) { return h < 0.25 ? vec3(1.0, 0.25, 0.66) : h < 0.5 ? vec3(0.16, 0.9, 1.0) : h < 0.75 ? vec3(0.7, 0.42, 1.0) : vec3(1.0, 0.83, 0.42); }`)
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+    {
+      vec2 cell = floor(vec2(vWp.x + vWp.z, vWp.y) / 0.11);            // blocks the size of the Tetris pieces
+      float h = hb(cell), cyc = uTime * (0.25 + h * 0.35) + h * 17.0;
+      float on = step(0.82, hb(cell + floor(cyc))) * pow(max(0.0, sin(fract(cyc) * 3.14159)), 2.0);   // a block lights up, glows, fades
+      vec2 f = fract(vec2(vWp.x + vWp.z, vWp.y) / 0.11);
+      float edge = smoothstep(0.0, 0.12, min(min(f.x, f.y), min(1.0 - f.x, 1.0 - f.y)));
+      totalEmissiveRadiance += neon(hb(cell + 7.0)) * on * (0.6 + 0.4 * edge) * 1.6;
+      totalEmissiveRadiance += uBurstCol * uBurst * (0.35 + 0.65 * step(0.6, hb(cell + floor(uTime * 8.0))));
+    }`);
+};
 const coverMat = new THREE.MeshStandardMaterial({ color: 0x4a3a8a, roughness: 0.3, metalness: 0.4, emissive: 0xffffff, emissiveIntensity: 0 });
 const darkMat = new THREE.MeshStandardMaterial({ color: 0x0a0418, roughness: 0.95 });
 const chromeMat = new THREE.MeshPhysicalMaterial({ color: 0xe8e4ff, metalness: 0.9, roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08,
@@ -337,7 +361,7 @@ function buildMachine(i) {
     const cap = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 12), chromeMat);
     cap.position.set(sd * (HALF - 0.01), HUMP_TOP - 0.01, -(L + HU)); g.add(cap);
   }
-  // the board: the vortex behind, the rings in the middle and their holes, and eight tiny ring pods (2 to 8 show at a time)
+  // the board: the vortex behind, the rings in the middle and their holes, and eight tiny ring pods (2 to 4 show at a time)
   g.add(surface(B0, B1, 14, boardMat));
   CENTER.forEach(([u, v, r, p]) => g.add(ringOnBoard(u, B0 + v, r, p).pod));
   CENTER_HOLES.forEach(([u, v, r, p]) => g.add(holeMesh(u, B0 + v, r, p)));
@@ -380,10 +404,10 @@ function buildMachine(i) {
 }
 
 // ---------- The best scores, up on the back wall over the machines ----------
-const hc = document.createElement('canvas'); hc.width = 1024; hc.height = 640;
+const hc = document.createElement('canvas'); hc.width = 1024; hc.height = 1200;
 const hTex = new THREE.CanvasTexture(hc); hTex.colorSpace = THREE.SRGBColorSpace; hTex.anisotropy = MAX_ANISO;
-const hiBoard = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 1.4), new THREE.MeshBasicMaterial({ map: hTex, toneMapped: false }));
-hiBoard.position.set((MACHINES[0] + MACHINES[1]) / 2, 4.1, -10.94);
+const hiBoard = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 2.625), new THREE.MeshBasicMaterial({ map: hTex, toneMapped: false }));
+hiBoard.position.set((MACHINES[0] + MACHINES[1]) / 2, 3.49, -10.94);   // from up high, down the wall between the machines
 scene.add(hiBoard);
 function neonText(x, text, px, py, size, col, align = 'center', font = '"Trebuchet MS", sans-serif') {
   x.save();
@@ -400,11 +424,11 @@ function frame(x, w, h, col) {   // a dark panel with a double neon border
 let best = [];
 function paintBest() {
   const x = hc.getContext('2d');
-  frame(x, 1024, 640, '#29e6ff');
+  frame(x, 1024, 1200, '#29e6ff');
   neonText(x, 'SKEE·BALL HIGH SCORES', 512, 90, 60, '#ff3fa8');
-  if (!best.length) neonText(x, 'nobody yet · be the first', 512, 340, 44, '#b36bff');
+  if (!best.length) neonText(x, 'nobody yet · be the first', 512, 600, 44, '#b36bff');
   best.forEach((b, k) => {
-    const y = 170 + k * 58, col = k === 0 ? '#ffd36a' : k < 3 ? '#29e6ff' : '#cdb8ff';
+    const y = 175 + k * 62, col = k === 0 ? '#ffd36a' : k < 3 ? '#29e6ff' : '#cdb8ff';
     neonText(x, String(k + 1), 110, y, 42, col, 'center');
     neonText(x, b.name, 170, y, 42, col, 'left');
     neonText(x, String(b.score), 900, y, 46, col, 'right', '"Courier New", monospace');
@@ -412,7 +436,7 @@ function paintBest() {
   hTex.needsUpdate = true;
 }
 paintBest();
-onValue(query(ref(db, 'game/skee/best'), orderByChild('score'), limitToLast(8)), s => {
+onValue(query(ref(db, 'game/skee/best'), orderByChild('score'), limitToLast(16)), s => {
   const list = [];
   s.forEach(c => { const v = c.val(); if (v && typeof v.score === 'number' && typeof v.name === 'string') list.push(v); });
   best = list.sort((a, b) => b.score - a.score || a.t - b.t);
@@ -483,10 +507,10 @@ function stepPops(m, dt) {
     const k = p.t;
     if (p.el) {
       let x = p.x, y, s, o = 1;
-      if (k < 0.45) { const e = 1 - Math.pow(1 - k / 0.45, 3); y = p.y - e * 70; s = 0.3 + e * (p.big ? 1.5 : 1.15); }   // bursting up
-      else if (k < 0.85) { y = p.y - 70; s = (p.big ? 1.8 : 1.45) - 0.08 * Math.sin((k - 0.45) / 0.4 * Math.PI); }   // hanging there
+      if (k < 0.55) { const e = 1 - Math.pow(1 - k / 0.55, 3); y = p.y - e * 70; s = 0.3 + e * (p.big ? 1.5 : 1.15); }   // bursting up
+      else if (k < 1.35) { y = p.y - 70; s = (p.big ? 1.8 : 1.45) - 0.08 * Math.sin((k - 0.55) / 0.8 * Math.PI * 2); }   // hanging there, throbbing
       else {                                                                                                        // flying into the score
-        const e = Math.min(1, (k - 0.85) / 0.45), ee = e * e;
+        const e = Math.min(1, (k - 1.35) / 0.5), ee = e * e;
         x = p.x + (hr.left + hr.width / 2 - p.x) * ee; y = p.y - 70 + (hr.top + hr.height / 2 - p.y + 70) * ee;
         s = (p.big ? 1.8 : 1.45) * (1 - e) + 0.35 * e; o = 1 - Math.max(0, e - 0.75) / 0.25;
         if (e >= 1) p.done = true;
@@ -579,6 +603,50 @@ function launch(m, roll) {   // a ball leaves its channel and rolls (yours or an
   placeTray(m);
   return l;
 }
+// The sound when a ball drops in, and the walls lighting up: the middle rings plink, the moving pockets ring out bigger,
+// and a 150 sets off the jackpot (a fanfare, a flash and sparks all over the screen if it's yours)
+function dropSound(m, pts, k) {
+  if (pts <= 50) { sfx.skeeDrop(pts, k); burst(pts / 120, COL[pts]); return; }
+  if (pts < 150) {
+    sfx.skeeDrop(pts === 75 ? 50 : 40, k);
+    [0, 0.12, 0.24].forEach((d, i) => setTimeout(() => sfx.skeePour(i * 3 + (pts === 75 ? 4 : 0), k), 300 + d * 1000));
+    burst(pts === 75 ? 0.9 : 0.7, COL[pts]);
+    return;
+  }
+  sfx.skeeDrop(100, k);
+  setTimeout(() => sfx.skeeOver(true), 450);
+  for (let i = 0; i < 8; i++) setTimeout(() => sfx.skeePour(i, k), 200 + i * 90);
+  burst(1.6, COL[150]);
+  if (my === m) jackpot();
+}
+function burst(amount, col) { holoU.uBurst.value = Math.max(holoU.uBurst.value, amount); holoU.uBurstCol.value.set(col); }
+const sparkCss = document.createElement('style');
+sparkCss.textContent = '.skeeSpark{position:fixed;z-index:26;pointer-events:none;width:10px;height:10px;border-radius:50%;will-change:transform,opacity}' +
+  '.skeeFlash{position:fixed;inset:0;z-index:26;pointer-events:none;background:radial-gradient(circle,rgba(255,255,255,0.9),rgba(255,77,109,0.5) 45%,rgba(255,77,109,0) 75%);transition:opacity 0.9s}';
+document.head.appendChild(sparkCss);
+let sparks = [];
+function jackpot() {   // a flash of light, then sparks bursting out all over the screen
+  const fl = document.createElement('div');
+  fl.className = 'skeeFlash'; document.body.appendChild(fl);
+  requestAnimationFrame(() => requestAnimationFrame(() => { fl.style.opacity = '0'; }));
+  setTimeout(() => fl.remove(), 1000);
+  const cols = ['#ff4d6d', '#ffd36a', '#29e6ff', '#b36bff', '#9dff4a', '#ffffff'];
+  for (let i = 0; i < 90; i++) {
+    const el = document.createElement('div'), c = cols[i % cols.length], a = Math.random() * Math.PI * 2, sp = 300 + Math.random() * 700;
+    el.className = 'skeeSpark'; el.style.background = c; el.style.boxShadow = `0 0 10px ${c}, 0 0 20px ${c}`;
+    document.body.appendChild(el);
+    sparks.push({ el, x: window.innerWidth / 2, y: window.innerHeight * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 250, t: 0, life: 1.2 + Math.random() * 0.8 });
+  }
+}
+function stepSparks(dt) {
+  for (const s of sparks) {
+    s.t += dt; s.vy += 900 * dt; s.vx *= 1 - dt * 0.8;
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    s.el.style.transform = `translate(${s.x - 5}px,${s.y - 5}px) scale(${1 - s.t / s.life * 0.6})`;
+    s.el.style.opacity = Math.max(0, 1 - s.t / s.life);
+  }
+  sparks = sparks.filter(s => { if (s.t < s.life) return true; s.el.remove(); return false; });
+}
 const ax = new THREE.Vector3(), q = new THREE.Quaternion();
 function updateLive(m, dt) {
   let fastest = 0;
@@ -614,7 +682,7 @@ function updateLive(m, dt) {
     if (dist > 1e-6) { ax.set(-dv, 0, -du).normalize(); q.setFromAxisAngle(ax, dist / R); l.mesh.quaternion.premultiply(q); }
     if (b.on && b.v < B0) fastest = Math.max(fastest, Math.hypot(b.vu, b.vv) / 7);
     if (b.res) {
-      if (b.res.pts) { l.mesh.position.set(b.res.u, H(b.res.v) + R * 0.6, -b.res.v); sfx.skeeDrop(b.res.pts, k); popNumber(m, b.res.pts, b.res.u, b.res.v); }
+      if (b.res.pts) { l.mesh.position.set(b.res.u, H(b.res.v) + R * 0.6, -b.res.v); dropSound(m, b.res.pts, k); popNumber(m, b.res.pts, b.res.u, b.res.v); }
       else sfx.skeeGutter(k);
       if (l.mine && b.res.back) redo(m);
       else if (l.mine) mineDone(m, b.res.pts);
@@ -962,7 +1030,7 @@ function mineDone(m, pts) {   // one of your balls finished: add up the score, a
   const over = m.myLeft <= 0 && m.rolling <= 0;
   if (over) fields.done = true;
   update(ref(db, 'game/skee/m' + m.i), fields).catch(() => {});
-  if (pts >= 75) opts.banner && opts.banner(pts === 150 ? '💥 150!' : '🔥 75!', 2);
+  if (pts >= 60) opts.banner && opts.banner(pts === 150 ? '💥💥 JACKPOT · 150! 💥💥' : pts === 75 ? '🔥 75!' : '✨ 60!', pts === 150 ? 3 : 2);
   if (over) {
     onDisconnect(ref(db, 'game/skee/m' + m.i)).cancel();
     if (m.score > 0) push(ref(db, 'game/skee/best'), { name: S.myName, score: m.score, t: Date.now() }).catch(() => {});
@@ -970,7 +1038,7 @@ function mineDone(m, pts) {   // one of your balls finished: add up the score, a
     sfx.skeeOver(m.score >= (best[0] ? best[0].score : 1));
     const newPb = m.score > pb;
     if (newPb) { pb = m.score; try { localStorage.setItem('skeePB', String(pb)); } catch (e) {} }
-    setTimeout(() => { if (my === m) showOver(m.score, newPb, place < 8 && m.score > 0 ? place + 1 : 0); }, 1500);   // once the last number's landed
+    setTimeout(() => { if (my === m) showOver(m.score, newPb, place < 16 && m.score > 0 ? place + 1 : 0); }, 1500);   // once the last number's landed
   }
 }
 function claim(m) {   // start a game on this machine (if nobody else is playing it)
@@ -1142,17 +1210,21 @@ machines.forEach(m => {
 
 // ---------- Every frame ----------
 let blinkT = 0;
+const PACE = 0.85;   // the balls, the pockets and the big numbers all play out a little slower than real time
 function updateAll(dt) {
   blinkT += dt;
-  spaceU.uTime.value = blinkT; vortexU.uTime.value = blinkT;
+  spaceU.uTime.value = blinkT; vortexU.uTime.value = blinkT; holoU.uTime.value = blinkT;
+  holoU.uBurst.value = Math.max(0, holoU.uBurst.value - dt * 1.4);   // the walls' burst of light fading
+  stepSparks(dt);
+  const sdt = dt * PACE;
   let roll = 0;
   for (const m of machines) {
-    roll = Math.max(roll, updateLive(m, dt));
-    stepPop(m, dt);
+    roll = Math.max(roll, updateLive(m, sdt));
+    stepPop(m, sdt);
     const open = m.data && !stale(m.data) ? 1 : 0;   // the channel covers: slid open while a game's on
     m.cov += (open - m.cov) * Math.min(1, dt * 4);
     for (const c of m.covers) { c.scale.x = Math.max(0.02, 1 - m.cov); c.visible = m.cov < 0.97; }   // (sliding sideways into the outside of the wall)
-    stepPops(m, dt);
+    stepPops(m, sdt);
     // the score on the board counts up as each big number lands in it (points still flying up aren't on it yet)
     const flying = m.pops.reduce((a, p) => a + (p.done ? 0 : p.pts), 0);
     const target = Math.max(0, (m.data && !m.data.done ? m.data.score || 0 : m.data ? m.data.score || 0 : 0) - flying);
