@@ -6,16 +6,16 @@
 // door behind it is the Game Room; their frosted glass windows glow blue. The two doors on the right are still sealed
 // (their windows are dim). No names float over anything: people find their way.
 // The torches and the little floor candles flicker, and the odd ember drifts up from a torch.
-// The skylight and the archway behind the orb show a painted night sky (sky_night.jpg) that slowly drifts, with twinkling
-// stars and now and then a shooting star. By your own clock it fades into morning, day and evening colors and back.
-// (More painted skies for dawn, day and dusk can be added to SKY_PICS later.)
+// The skylight and the archway behind the orb show a painted sky that slowly drifts, picked by your own clock: dawn from
+// 5am, day from 7am, dusk from 5pm and night from 7:30pm (sky_dawn.jpg, sky_day.jpg, sky_dusk.jpg, sky_night.jpg), each
+// fading into the next over half an hour. Stars twinkle over the night and dusk skies, and now and then a star shoots.
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
 // The galaxy in the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 6
+// VERSION 7
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -55,11 +55,20 @@ const GLASS = { leftFront: [48, 735, 154, 706, 0], leftBack: [699, 1059, 75, 315
 const TORCHES = [[128, 1070, 34], [697, 1172, 20], [1812, 1184, 20], [2474, 1088, 34]];
 const CANDLES = [[579, 1435, 14], [612, 1430, 10], [646, 1441, 11], [1983, 1428, 18], [228, 1719, 16], [294, 1726, 18], [2346, 1720, 22]];
 // The sky shows through two cut-outs: the skylight up top and the archway behind the orb. skymask4.png says exactly where
-// (it sits at SKY_AT in the picture). Each cut-out shows its own best part of the painted sky: [x, y, width, height] in the
-// picture's pixels, and the part of the sky picture it shows [left, top, right, bottom] (parts of the sky picture)
+// (it sits at SKY_AT in the picture). Each cut-out is [x, y, width, height] in the picture's pixels.
 const SKY_AT = { x: 1030, y: 0, w: 550, h: 1300 };
-const SKY_VIEWS = [{ at: [1030, 0, 545, 450], from: [0, 0, 1, 0.749], shooting: true },
-                   { at: [1030, 680, 530, 620], from: [0.053, 0.097, 0.904, 1], shooting: false }];
+const SKY_VIEWS = [{ at: [1030, 0, 545, 450], shooting: true }, { at: [1030, 680, 530, 620], shooting: false }];
+// The painted skies. Each shows its own best part in each cut-out: [left, top, right, bottom] as parts of the sky picture
+// (skylight first, then the archway). stars: how strongly the extra stars twinkle over it. color: shown if it hasn't loaded.
+const SKIES = {
+  dawn:  { file: 'sky_dawn.jpg',  from: [[0, 0, 1, 0.82], [0.22, 0.4, 0.78, 1]],          stars: 0.25, color: [150, 140, 190] },
+  day:   { file: 'sky_day.jpg',   from: [[0, 0, 0.62, 0.52], [0.38, 0.42, 0.86, 1]],      stars: 0,    color: [90, 160, 225] },
+  dusk:  { file: 'sky_dusk.jpg',  from: [[0.3, 0.04, 0.86, 0.5], [0.3, 0.4, 0.78, 0.97]], stars: 0.6,  color: [70, 50, 110] },
+  night: { file: 'sky_night.jpg', from: [[0, 0, 1, 0.749], [0.053, 0.097, 0.904, 1]],     stars: 1,    color: [8, 14, 35] }
+};
+// When each sky starts, by your clock (hours); it fades in over FADE hours from there
+const SKY_TIMES = [[5, 'dawn'], [7, 'day'], [17, 'dusk'], [19.5, 'night']];
+const FADE = 0.5;
 // What has to be on screen: from the top of the skylight down to the feet of the doors
 const VIEW_TOP = P(0), VIEW_BOTTOM = P(1520);
 
@@ -113,11 +122,15 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // glass4.png is the shape of each door's frosted glass, used to make the open doors' windows glow and the sealed ones dim.
 const SWIRL = 0.42;   // how much of the orb turns, around the middle of its galaxy (part of the orb's radius)
 const caveImg = new Image(), maskImg = new Image(), glassImg = new Image();
-const SKY_PICS = { night: new Image() };   // painted skies (more can be added later: dawn, day, dusk)
-let caveReady = false, soft = null, swirl = null, cut = null, feathered = null, wings = null, skyReady = false;
+let caveReady = false, soft = null, swirl = null, cut = null, feathered = null, wings = null;
 const glassLit = {}, glassDim = {};   // each window's glass, ready to glow (open doors) or to darken (sealed doors)
 const loaded = img => new Promise(done => { img.onload = () => done(true); img.onerror = () => { console.warn(img.src + ' did not load'); done(false); }; });
-loaded(SKY_PICS.night).then(ok => { skyReady = ok; });
+for (const key in SKIES) {   // each sky is ready once its picture loads
+  const sk = SKIES[key];
+  sk.img = new Image(); sk.ready = false;
+  loaded(sk.img).then(ok => { sk.ready = ok; });
+  sk.img.src = new URL(sk.file, import.meta.url).href;
+}
 Promise.all([loaded(caveImg), loaded(maskImg), loaded(glassImg)]).then(([okCave, okMask, okGlass]) => {
   if (!okCave) return;
   const k = caveImg.width / PIC;   // (in case the picture is ever swapped for a bigger or smaller copy)
@@ -175,7 +188,6 @@ Promise.all([loaded(caveImg), loaded(maskImg), loaded(glassImg)]).then(([okCave,
 caveImg.src = new URL('cave4.jpg', import.meta.url).href;   // the pictures sit next to this file
 maskImg.src = new URL('skymask4.png', import.meta.url).href;
 glassImg.src = new URL('glass4.png', import.meta.url).href;
-SKY_PICS.night.src = new URL('sky_night.jpg', import.meta.url).href;
 
 // ---------- Where the picture sits on screen, worked out again whenever the window changes size ----------
 // A wide screen shows everything from the skylight down to the feet of the doors, the sides filled with a soft blurred
@@ -349,40 +361,39 @@ document.getElementById('nameChange').addEventListener('click', () => {
 window.addEventListener('resize', build);
 
 // ---------- The sky ----------
-// The sky through the day, by your own clock: [hour, color at the top, color at the bottom, how much of the painted night
-// sky shows]. Kept a little muted, so the daylight doesn't fight the Cave's own blue light.
-const SKY = [[0, [5, 8, 28], [16, 24, 64], 1], [4.5, [8, 12, 36], [26, 34, 84], 0.95], [6, [42, 52, 120], [210, 140, 130], 0.3],
-             [7.5, [70, 115, 190], [150, 190, 230], 0], [17, [66, 108, 180], [150, 185, 225], 0], [18.5, [52, 44, 112], [225, 120, 90], 0.2],
-             [20, [16, 18, 54], [52, 42, 104], 0.75], [21.5, [5, 8, 28], [16, 24, 64], 1], [24, [5, 8, 28], [16, 24, 64], 1]];
-const mixRGB = (a, b, k) => a.map((c, i) => Math.round(c + (b[i] - c) * k));
+// Which sky shows right now, by your own clock: the one whose time came last, fading in over the one before it
 function skyNow() {
   const d = new Date(), h = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
-  let i = 0;
-  while (i < SKY.length - 2 && SKY[i + 1][0] <= h) i++;
-  const a = SKY[i], b = SKY[i + 1], k = (h - a[0]) / (b[0] - a[0]);
-  return { top: mixRGB(a[1], b[1], k), bottom: mixRGB(a[2], b[2], k), night: a[3] + (b[3] - a[3]) * k };
+  let i = SKY_TIMES.length - 1;   // (before 5am it's still the night that began yesterday evening)
+  for (let j = 0; j < SKY_TIMES.length; j++) if (h >= SKY_TIMES[j][0]) i = j;
+  const since = (h - SKY_TIMES[i][0] + 24) % 24;
+  const now = SKY_TIMES[i][1], before = SKY_TIMES[(i + SKY_TIMES.length - 1) % SKY_TIMES.length][1];
+  const k = Math.min(1, since / FADE);
+  return { now, before, k, stars: SKIES[before].stars * (1 - k) + SKIES[now].stars * k };
 }
 // Extra stars that twinkle over the painted ones (spots in each view, as parts of its size)
 const TWINKLES = SKY_VIEWS.map((view, n) => { const r = seeded(11 + n), out = []; for (let i = 0; i < 38; i++) out.push({ u: r(), v: r(), s: 0.6 + r() * 1.2, ph: r() * 7, tw: 0.6 + r() * 2.2 }); return out; });
 let shooting = null, nextShot = 6 + Math.random() * 10;   // a shooting star: { x, y, dx, dy, t } in parts of the view
-function drawSky(t, dt) {   // behind the picture: the day's colors, the painted night sky drifting slowly, and twinkles
+function paintSky(key, n, x0, y0, w, h, t, alpha) {   // one painted sky in one cut-out, a touch zoomed in so it can wander
+  const sk = SKIES[key];
+  g.globalAlpha = alpha;
+  if (!sk.ready) { g.fillStyle = `rgb(${sk.color})`; g.fillRect(x0 - 20, y0 - 20, w + 40, h + 40); g.globalAlpha = 1; return; }
+  const img = sk.img, [f0, f1, f2, f3] = sk.from[n], zoom = 0.94;   // very slowly, in a little circle
+  const fw = (f2 - f0) * img.width, fh = (f3 - f1) * img.height, cw = fw * zoom, ch = fh * zoom;
+  const wx = (fw - cw) / 2 * (1 + 0.9 * Math.sin(t * 0.011 + n)), wy = (fh - ch) / 2 * (1 + 0.9 * Math.cos(t * 0.008 + n));
+  g.drawImage(img, f0 * img.width + wx, f1 * img.height + wy, cw, ch, x0 - 20, y0 - 20, w + 40, h + 40);
+  g.globalAlpha = 1;
+}
+function drawSky(t, dt) {   // behind the picture: the painted sky for the time of day, twinkles and shooting stars
   const sky = skyNow(), [px, py] = offset(DRIFT * -0.5);   // far away, so it drifts with the mouse less than the stone does
   SKY_VIEWS.forEach((view, n) => {
     const [ax, ay, aw, ah] = view.at, x0 = sx(P(ax)) + px, y0 = sy(P(ay)) + py, w = P(aw) * D, h = P(ah) * D;
-    const grd = g.createLinearGradient(0, y0, 0, y0 + h);
-    grd.addColorStop(0, `rgb(${sky.top})`); grd.addColorStop(1, `rgb(${sky.bottom})`);
-    g.fillStyle = grd; g.fillRect(x0 - 20, y0 - 20, w + 40, h + 40);
-    if (sky.night < 0.02) return;
-    g.globalAlpha = sky.night;
-    if (skyReady) {   // the painted sky, a touch zoomed in so it can wander very slowly in a little circle
-      const img = SKY_PICS.night, [f0, f1, f2, f3] = view.from, zoom = 0.94;
-      const fw = (f2 - f0) * img.width, fh = (f3 - f1) * img.height, cw = fw * zoom, ch = fh * zoom;
-      const wx = (fw - cw) / 2 * (1 + 0.9 * Math.sin(t * 0.011 + n)), wy = (fh - ch) / 2 * (1 + 0.9 * Math.cos(t * 0.008 + n));
-      g.drawImage(img, f0 * img.width + wx, f1 * img.height + wy, cw, ch, x0 - 20, y0 - 20, w + 40, h + 40);
-    }
+    if (sky.k < 1) paintSky(sky.before, n, x0, y0, w, h, t, 1);   // the sky that's fading out underneath
+    paintSky(sky.now, n, x0, y0, w, h, t, sky.k < 1 ? sky.k : 1);
+    if (sky.stars < 0.02) return;
     g.globalCompositeOperation = 'lighter';
     for (const s of TWINKLES[n]) {
-      const a = sky.night * Math.max(0, Math.sin(t * s.tw + s.ph)) ** 4;
+      const a = sky.stars * Math.max(0, Math.sin(t * s.tw + s.ph)) ** 4;
       if (a < 0.04) continue;
       const X = x0 + s.u * w, Y = y0 + s.v * h, r = s.s * Math.max(1, D / 1600);
       g.fillStyle = `rgba(235,242,255,${a})`;
@@ -392,17 +403,17 @@ function drawSky(t, dt) {   // behind the picture: the day's colors, the painted
     if (view.shooting && shooting) {   // a streak with a fading tail
       const k = shooting.t / 0.9, X = x0 + (shooting.x + shooting.dx * k) * w, Y = y0 + (shooting.y + shooting.dy * k) * h;
       const tail = g.createLinearGradient(X, Y, X - shooting.dx * w * 0.35, Y - shooting.dy * h * 0.35);
-      const a = Math.sin(Math.PI * Math.min(1, k)) * sky.night;
+      const a = Math.sin(Math.PI * Math.min(1, k)) * sky.stars;
       tail.addColorStop(0, `rgba(255,255,255,${a})`); tail.addColorStop(1, 'rgba(180,220,255,0)');
       g.strokeStyle = tail; g.lineWidth = Math.max(1.2, D / 1400); g.lineCap = 'round';
       g.beginPath(); g.moveTo(X, Y); g.lineTo(X - shooting.dx * w * 0.35, Y - shooting.dy * h * 0.35); g.stroke();
     }
     g.globalCompositeOperation = 'source-over';
-    g.globalAlpha = 1;
   });
   if (shooting) { shooting.t += dt; if (shooting.t > 0.9) shooting = null; }
   else if ((nextShot -= dt) <= 0) {
     nextShot = 9 + Math.random() * 16;
+    if (sky.stars < 0.5) return;   // only when it's dark enough to see one
     const right = Math.random() < 0.5;
     shooting = { x: right ? 0.15 + Math.random() * 0.3 : 0.55 + Math.random() * 0.3, y: 0.1 + Math.random() * 0.25,
                  dx: (right ? 1 : -1) * (0.35 + Math.random() * 0.2), dy: 0.18 + Math.random() * 0.12, t: 0 };
