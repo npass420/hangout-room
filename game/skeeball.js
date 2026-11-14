@@ -3,7 +3,7 @@
 // Low Tetris side rails run from your end all the way to the back in one smooth line, capped with glossy black vinyl and
 // thin neon edges, their squares glowing softly (holo.jpg) with a bright wave on every score. The runway between them is a
 // window down into deep space (layers of stars at different depths drifting slowly up it), with star lights inlaid along
-// its edges: on each side a P column (your power) and an S column (your spin), six deep. The balls (white, sectioned like a
+// its edges: on each side a P column of stars (your power) and an S column of swirls (your spin), six deep. The balls (white, sectioned like a
 // globe into pastel blocks, every color) wait in a channel down the middle of each rail. A metal lipped hump launches the
 // ball up onto the board, where a galaxy (vortex.jpg) turns slowly behind the rings, its light climbing the rails and the
 // back wall and flaring when a ball drops in, under a black marquee with SKEE·BALL glowing in it.
@@ -19,7 +19,7 @@
 // and rims the way it spins. Every roll wobbles a touch, like a real ball. Right click (or Esc) is a step back.
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
-// VERSION 7
+// VERSION 8
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }
@@ -225,8 +225,13 @@ function laneMatFor(origin) {   // one for each machine: its own lights
         float r = length(d);
         col *= mix(1.0, 0.25, smoothstep(0.05, 0.043, r));                                   // the little socket it sits in
         col += vec3(0.55, 0.5, 0.8) * smoothstep(0.005, 0.0, abs(r - 0.047)) * 0.55;         // its thin metal rim
-        float shape = smoothstep(0.022, 0.0, r) + exp(-r * 28.0) * 0.5
-          + (exp(-abs(d.x) * 160.0 - abs(d.y) * 19.0) + exp(-abs(d.y) * 160.0 - abs(d.x) * 19.0)) * 0.9;   // a four pointed star
+        float star = smoothstep(0.022, 0.0, r) + exp(-r * 28.0) * 0.5
+          + (exp(-abs(d.x) * 160.0 - abs(d.y) * 19.0) + exp(-abs(d.y) * 160.0 - abs(d.x) * 19.0)) * 0.9;   // P: a four pointed star
+        float sLit = uSpin > -1.5 ? step(0.0, uSpin * side) : 0.0;                    // S: a little swirl, turning the way it spins
+        float turn = uTime * (1.5 + sLit * 5.0) * side;                               // (the left ones and the right ones turn opposite ways)
+        float arms = 0.5 + 0.5 * sin(atan(d.y, d.x) * 2.0 + r * 140.0 - turn);
+        float swirl = smoothstep(0.55, 0.95, arms) * smoothstep(0.042, 0.012, r) * 1.3 + smoothstep(0.012, 0.0, r) + exp(-r * 30.0) * 0.4;
+        float shape = mix(star, swirl, isS);
         float h = h21(vec2(k + isS * 7.0, side));
         float idle = 0.25 + 0.15 * sin(uTime * (1.5 + h * 2.0) + h * 30.0);
         float chase = pow(0.5 + 0.5 * sin(cv * 6.0 - uTime * 4.0), 10.0) * uIdle;
@@ -469,6 +474,10 @@ const marqueeMat = new THREE.MeshBasicMaterial({ transparent: true, toneMapped: 
   x.lineWidth = 3; x.strokeStyle = '#29e6ff'; x.shadowColor = '#29e6ff'; arch(24); x.stroke(); x.restore();
   neonText(x, 'SKEE·BALL', w / 2, h * 0.62, 96, '#ff3fa8');
 }) });
+const labelMat = {};   // the P (power) and S (spin) letters at the foot of the light columns
+for (const [t, c] of [['P', '#ffd36a'], ['S', '#29e6ff']])
+  labelMat[t] = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false,
+    map: canvasTex(128, 128, (x, w, h) => neonText(x, t, w / 2, h / 2 + 4, 96, c)) });
 const SLOT_V = k => 0.12 + k * 0.1;                  // where the balls sit along each channel
 const CH_U = HALF + WALL / 2;                        // the middle of a channel, across
 const slotY = v => H(v) + WALL_H - CH_D + R;         // a ball sitting in a channel (its slot in the vinyl)
@@ -534,6 +543,11 @@ function buildMachine(i) {
   const back = new THREE.Mesh(new THREE.BoxGeometry(2 * OUT, railTop(VB), VB - B1), vinylMat);   // the back of the machine
   back.position.set(0, railTop(VB) / 2, -(B1 + VB) / 2); g.add(back);
   g.add(neonLine([new THREE.Vector3(-OUT, railTop(VB) + 0.002, -B1), new THREE.Vector3(OUT, railTop(VB) + 0.002, -B1)]));
+  for (const sd of [-1, 1]) for (const [lu, lm] of [[P_U, labelMat.P], [S_U, labelMat.S]]) {   // a glowing P and S at the foot of each column
+    const lab = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1), lm);
+    const v = LIGHT_V0 - 0.15;
+    lab.rotation.x = -Math.PI / 2 + Math.atan(SLOPE); lab.position.set(sd * lu, H(v) + 0.004, -v); g.add(lab);
+  }
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(2 * OUT, 2 * OUT * MARQUEE_H / 1024), marqueeMat);   // the marquee over the board
   sign.position.set(0, railTop(VB) + OUT * MARQUEE_H / 1024 - 0.01, -(B1 + 0.01)); g.add(sign);
   // light over the board, so the rims and the balls shine
@@ -974,7 +988,7 @@ function hideOver() { over.style.display = 'none'; }
 const SWEEP = 1.6, SPIN_SWEEP = 1.3;            // how long the power takes from empty to full, and the spin from one side to the other (seconds)
 const P_LOW = 0.27, P_HIGH = 0.72;              // the softest roll (just up onto the board) and the hardest (off the back)
 const WOBBLE_P = 0.015, WOBBLE_S = 0.06, WOBBLE_A = 0.008;   // the wobble on the power, the spin, and the line it rolls
-const U_MAX = HALF - 0.1, PLACE_SWEEP = 1.1;   // how far toward a rail you can set the ball, and how many screen widths of mouse slide it rail to rail
+const U_MAX = HALF - 0.1, PLACE_SWEEP = 0.45;  // how far toward a rail you can set the ball, and how much of the screen's width the mouse slides it rail to rail
 const tri = x => { x = ((x % 2) + 2) % 2; return x < 1 ? x : 2 - x; };   // 0 up to 1 and back down, steadily
 function powerNow(h) { return tri((performance.now() - h.t0) / 1000 / SWEEP); }   // (worked out from the clock, so a click stops it exactly)
 function spinNow(h) { return tri((performance.now() - h.t0) / 1000 / SPIN_SWEEP + 0.5) * 2 - 1; }   // from straight, out to the right, across to the left...
