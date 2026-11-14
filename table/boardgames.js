@@ -5,7 +5,7 @@
 // Click one of your pieces to see where it can go (the squares light up), then click a square to move.
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
 // Checkers is played with poison dart frogs (red and blue) on crimson and black marble, at a table set with flickering rubies.
-// VERSION 2
+// VERSION 3
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';

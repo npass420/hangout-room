@@ -5,7 +5,7 @@
 // Sit in a chair to play that side; everyone else can walk up and watch.
 // The games live in boardgames.js. Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
-// VERSION 2
+// VERSION 3
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
