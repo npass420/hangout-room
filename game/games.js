@@ -278,7 +278,7 @@ const skee = makeSkee({
 
 // ---------- A round window by the door, onto the sky outside (it follows your own clock) ----------
 // It sits to the door's left as you face the door from inside, clear of the frog's padded surround (about 1.9 m out each side).
-const WIN_X = DOOR_X + 3.3;
+const WIN_X = DOOR_X + 3.6, WIN_Y = 2.35, WIN_SIZE = 1.35;   // in the middle of the wall between the pink pillar and the door
 // (Quick ones for now; they'll get their proper look later.)
 const portCanvas = document.createElement('canvas');
 portCanvas.width = portCanvas.height = 256;
@@ -307,7 +307,7 @@ function updatePort() {
 updatePort();
 {
   const g = new THREE.Group();
-  g.position.set(WIN_X, 2.1, HZ - 0.03); g.rotation.y = Math.PI;
+  g.position.set(WIN_X, WIN_Y, HZ - 0.03); g.rotation.y = Math.PI; g.scale.setScalar(WIN_SIZE);
   const glass = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), new THREE.MeshBasicMaterial({ map: portTex, toneMapped: false }));
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.67, 0.08, 18, 64),
     new THREE.MeshPhysicalMaterial({ color: 0xff8da0, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.12, emissive: 0xff3f8a, emissiveIntensity: 0.25 }));

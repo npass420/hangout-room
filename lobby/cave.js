@@ -1,36 +1,67 @@
 // =====================================================================
-// cave.js — the Cave: the front door of the site. The inside of a great snow block igloo (cave2.jpg, from Kindroid images),
-// with a glass orb set into a snow pile in the middle and an old carved stone archway on each side. The orb, the snow bank
-// and the orb's teal light on the snow and the walls are all painted into the picture itself.
-// Pick your name, then touch the orb (the Doodle Gallery), the doorway on the right (the Table Room) or the
-// doorway on the left (the Game Room).
+// cave.js — the Cave: the front door of the site. The inside of a great snow block ice palace (cave4.jpg, from a Kindroid
+// image): a round skylight open to the sky high in the dome, a glass orb holding a teal galaxy on a carved ice pedestal in
+// a pointed archway in the middle (open to the sky behind it), and four carved archways with wooden doors, two on each side.
+// Pick your name, then touch the orb (the Doodle Gallery) or a door. On the left, the front door is the Table Room and the
+// door behind it is the Game Room; their frosted glass windows glow blue. The two doors on the right are still sealed
+// (their windows are dim). No names float over anything: people find their way.
+// The torches and the little floor candles flicker, and the odd ember drifts up from a torch.
+// The skylight and the archway behind the orb show a painted night sky (sky_night.jpg) that slowly drifts, with twinkling
+// stars and now and then a shooting star. By your own clock it fades into morning, day and evening colors and back.
+// (More painted skies for dawn, day and dusk can be added to SKY_PICS later.)
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
-// The galaxy in the middle of the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
-// Up top, the three blocks of the dome's top row over the orb are gone: the sky shows through, following your own clock
-// (night with slowly turning stars, then morning, day and evening).
+// The galaxy in the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 4
+// VERSION 6
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
 inCave();
 const PLACES = {
-  orb:   { name: 'Doodle Gallery', file: '../studio/studio.js' },
-  right: { name: 'Table Room', file: '../table/tables.js' },
-  left:  { name: 'Game Room', file: '../game/games.js' }
+  orb:        { name: 'Doodle Gallery', file: '../studio/studio.js' },
+  leftFront:  { name: 'Table Room', file: '../table/tables.js' },
+  leftBack:   { name: 'Game Room', file: '../game/games.js' },
+  rightBack:  { name: 'A sealed door', file: null },
+  rightFront: { name: 'A sealed door', file: null }
 };
 
-// Where things sit in cave2.jpg, measured in parts of the picture's width (across 0 to 1, down 0 to ASPECT)
-const ASPECT = 0.935;   // the picture's height, as a part of its width
-const GLOBE = { x: 0.4985, y: 0.5069, r: 0.1454, base: 0.615 };   // the orb, and where the snow bank starts covering it
-const CORE = { x: -0.023, y: -0.119 };   // the bright middle of its galaxy (parts of the orb's radius from its middle)
-const ARCHES = {   // each stone arch (for clicks, the glow and the name), and the doorway inside it
-  left:  { x0: 0.032, x1: 0.303, top: 0.297, bottom: 0.640, door: { x0: 0.125, x1: 0.210, top: 0.389, bottom: 0.632 } },
-  right: { x0: 0.732, x1: 0.979, top: 0.328, bottom: 0.640, door: { x0: 0.817, x1: 0.894, top: 0.411, bottom: 0.632 } }
+// Where things sit in cave4.jpg (2600 x 1733 pixels), measured in its own pixels and turned into parts of its width
+const PIC = 2600, P = n => n / PIC;
+const ASPECT = 1733 / 2600;   // the picture's height, as a part of its width
+const GLOBE = { x: P(1284), y: P(1045), r: P(195), base: P(1212) };   // the orb, and where its pedestal starts covering it
+const CORE = { x: -0.067, y: 0.01 };   // the bright middle of its galaxy (parts of the orb's radius from its middle)
+// Each archway: the outline of its carved ring (points around it, top first going clockwise doesn't matter), and the
+// middle of its door (where the light pours from when you go through)
+const pts = list => list.map(([x, y]) => [P(x), P(y)]);
+const ARCHES = {
+  leftFront:  { ring: pts([[40, 1450], [40, 850], [90, 620], [200, 470], [330, 410], [450, 470], [510, 620], [522, 850], [522, 1450]]),
+                door: { x: P(185), y: P(1080) } },
+  leftBack:   { ring: pts([[675, 1385], [675, 1100], [700, 990], [760, 935], [820, 920], [880, 950], [915, 1050], [925, 1200], [925, 1385]]),
+                door: { x: P(760), y: P(1200) } },
+  rightBack:  { ring: pts([[1640, 1385], [1640, 1080], [1670, 990], [1720, 950], [1790, 960], [1830, 1030], [1845, 1150], [1825, 1385]]),
+                door: { x: P(1760), y: P(1200) } },
+  rightFront: { ring: pts([[1945, 1480], [1945, 800], [2000, 600], [2120, 505], [2300, 480], [2450, 530], [2540, 650], [2578, 850], [2582, 1440]]),
+                door: { x: P(2400), y: P(1100) } }
 };
+const SIDES = ['leftBack', 'rightBack', 'leftFront', 'rightFront'];   // (the back doors first: the nearer one wins where they touch)
+// The frosted glass in each door: where its cut-out (glass4.png, the four side by side) sits in the picture, and where it
+// starts in glass4.png: [x, y, width, height, start in glass4.png], in the picture's pixels
+const GLASS = { leftFront: [48, 735, 154, 706, 0], leftBack: [699, 1059, 75, 315, 154],
+                rightBack: [1756, 1056, 71, 296, 229], rightFront: [2371, 784, 149, 652, 300] };
+// The flames: torches on the arches [x, y, size], and the little candles on the floor
+const TORCHES = [[128, 1070, 34], [697, 1172, 20], [1812, 1184, 20], [2474, 1088, 34]];
+const CANDLES = [[579, 1435, 14], [612, 1430, 10], [646, 1441, 11], [1983, 1428, 18], [228, 1719, 16], [294, 1726, 18], [2346, 1720, 22]];
+// The sky shows through two cut-outs: the skylight up top and the archway behind the orb. skymask4.png says exactly where
+// (it sits at SKY_AT in the picture). Each cut-out shows its own best part of the painted sky: [x, y, width, height] in the
+// picture's pixels, and the part of the sky picture it shows [left, top, right, bottom] (parts of the sky picture)
+const SKY_AT = { x: 1030, y: 0, w: 550, h: 1300 };
+const SKY_VIEWS = [{ at: [1030, 0, 545, 450], from: [0, 0, 1, 0.749], shooting: true },
+                   { at: [1030, 680, 530, 620], from: [0.053, 0.097, 0.904, 1], shooting: false }];
+// What has to be on screen: from the top of the skylight down to the feet of the doors
+const VIEW_TOP = P(0), VIEW_BOTTOM = P(1520);
 
 const cv = document.getElementById('cave');
 const g = cv.getContext('2d');
@@ -75,26 +106,60 @@ function seeded(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math
 const lerp = (a, b, k) => a + (b - a) * k;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-// ---------- The picture ----------
-// cave2.jpg is the whole Cave. A tiny copy of it, stretched big, makes a soft blurred backdrop for tall phone screens
-// (where the picture fits the width and leaves room above and below). The middle of the orb's galaxy is cut out once
-// with softly fading edges, so it can turn on its own while everything around it stays still.
-const SWIRL = 0.34;   // how much of the orb turns, around the middle of its galaxy (part of the orb's radius)
-const caveImg = new Image();
-let caveReady = false, soft = null, swirl = null, feathered = null, wings = null;
-caveImg.onload = () => {
-  soft = document.createElement('canvas'); soft.width = soft.height = 48;
-  soft.getContext('2d').drawImage(caveImg, 0, 0, 48, 48);
-  // For very wide screens: a copy of the picture whose very edges fade a little, so it melts into the mirrored sides
-  // (only a thin strip: the arches stay whole)
-  feathered = document.createElement('canvas'); feathered.width = caveImg.width; feathered.height = caveImg.height;
-  const fg = feathered.getContext('2d'), fw = caveImg.width * 0.015;
-  fg.drawImage(caveImg, 0, 0);
+// ---------- The pictures ----------
+// cave4.jpg is the whole Cave. Its painted sky is cut away (skymask4.png says where), so the live sky shows through from
+// behind. A tiny copy of it, stretched big, makes a soft blurred backdrop for tall phone screens. The middle of the orb's
+// galaxy is cut out once with softly fading edges, so it can turn on its own while everything around it stays still.
+// glass4.png is the shape of each door's frosted glass, used to make the open doors' windows glow and the sealed ones dim.
+const SWIRL = 0.42;   // how much of the orb turns, around the middle of its galaxy (part of the orb's radius)
+const caveImg = new Image(), maskImg = new Image(), glassImg = new Image();
+const SKY_PICS = { night: new Image() };   // painted skies (more can be added later: dawn, day, dusk)
+let caveReady = false, soft = null, swirl = null, cut = null, feathered = null, wings = null, skyReady = false;
+const glassLit = {}, glassDim = {};   // each window's glass, ready to glow (open doors) or to darken (sealed doors)
+const loaded = img => new Promise(done => { img.onload = () => done(true); img.onerror = () => { console.warn(img.src + ' did not load'); done(false); }; });
+loaded(SKY_PICS.night).then(ok => { skyReady = ok; });
+Promise.all([loaded(caveImg), loaded(maskImg), loaded(glassImg)]).then(([okCave, okMask, okGlass]) => {
+  if (!okCave) return;
+  const k = caveImg.width / PIC;   // (in case the picture is ever swapped for a bigger or smaller copy)
+  soft = document.createElement('canvas'); soft.width = 48; soft.height = Math.round(48 * ASPECT);
+  soft.getContext('2d').drawImage(caveImg, 0, 0, soft.width, soft.height);
+  // The picture with its painted sky cut away
+  cut = document.createElement('canvas'); cut.width = caveImg.width; cut.height = caveImg.height;
+  const cg = cut.getContext('2d');
+  cg.drawImage(caveImg, 0, 0);
+  if (okMask) {
+    cg.globalCompositeOperation = 'destination-out';
+    cg.drawImage(maskImg, SKY_AT.x * k, SKY_AT.y * k, SKY_AT.w * k, SKY_AT.h * k);
+    cg.globalCompositeOperation = 'source-over';
+  }
+  // For wide screens: a copy whose very edges fade a little, so it melts into the mirrored sides
+  feathered = document.createElement('canvas'); feathered.width = cut.width; feathered.height = cut.height;
+  const fg = feathered.getContext('2d'), fw = cut.width * 0.07;
+  fg.drawImage(cut, 0, 0);
   fg.globalCompositeOperation = 'destination-out';
-  for (const [x0, x1] of [[0, fw], [caveImg.width, caveImg.width - fw]]) {
+  for (const [x0, x1] of [[0, fw], [cut.width, cut.width - fw]]) {
     const grd = fg.createLinearGradient(x0, 0, x1, 0);
     grd.addColorStop(0, 'rgba(0,0,0,1)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
-    fg.fillStyle = grd; fg.fillRect(Math.min(x0, x1), 0, fw, caveImg.height);
+    fg.fillStyle = grd; fg.fillRect(Math.min(x0, x1), 0, fw, cut.height);
+  }
+  // Each window's glass: the picture's own glass (for the glow, so its frost pattern lights up) and a dark copy (to dim it)
+  if (okGlass) {
+    for (const side of SIDES) {
+      const [x, y, w, h, at] = GLASS[side];
+      const lit = document.createElement('canvas'); lit.width = w; lit.height = h;
+      const lg = lit.getContext('2d');
+      lg.drawImage(caveImg, x * k, y * k, w * k, h * k, 0, 0, w, h);
+      lg.fillStyle = 'rgba(60,140,255,0.35)'; lg.fillRect(0, 0, w, h);   // a little extra icy blue
+      lg.globalCompositeOperation = 'destination-in';
+      lg.drawImage(glassImg, at, 0, w, h, 0, 0, w, h);
+      glassLit[side] = lit;
+      const dim = document.createElement('canvas'); dim.width = w; dim.height = h;
+      const dg = dim.getContext('2d');
+      dg.fillStyle = 'rgb(6,10,30)'; dg.fillRect(0, 0, w, h);
+      dg.globalCompositeOperation = 'destination-in';
+      dg.drawImage(glassImg, at, 0, w, h, 0, 0, w, h);
+      glassDim[side] = dim;
+    }
   }
   const S = caveImg.width, r = GLOBE.r * SWIRL * S, n = Math.round(r * 2);
   const cx = (GLOBE.x + CORE.x * GLOBE.r) * S, cy = (GLOBE.y + CORE.y * GLOBE.r) * S;
@@ -106,26 +171,29 @@ caveImg.onload = () => {
   fade.addColorStop(0, '#000'); fade.addColorStop(0.45, '#000'); fade.addColorStop(1, 'rgba(0,0,0,0)');
   sg.fillStyle = fade; sg.fillRect(0, 0, n, n);
   caveReady = true;
-};
-caveImg.onerror = () => console.warn('cave2.jpg did not load');
-caveImg.src = new URL('cave2.jpg', import.meta.url).href;   // the picture sits next to this file
+});
+caveImg.src = new URL('cave4.jpg', import.meta.url).href;   // the pictures sit next to this file
+maskImg.src = new URL('skymask4.png', import.meta.url).href;
+glassImg.src = new URL('glass4.png', import.meta.url).href;
+SKY_PICS.night.src = new URL('sky_night.jpg', import.meta.url).href;
 
 // ---------- Where the picture sits on screen, worked out again whenever the window changes size ----------
-// It fills the screen, but a tall phone screen shows its whole width instead, so both doorways stay in view, and a very
-// wide screen doesn't zoom in past the point where the arches get cut off: the sides get a soft blurred mirror of the edges.
+// A wide screen shows everything from the skylight down to the feet of the doors, the sides filled with a soft blurred
+// mirror of the picture's edges; a tall phone screen shows its whole width instead, with the orb a little above the middle.
 let W = 0, H = 0, DPR = 1, D = 0, ox = 0, oy = 0;   // the picture's width on screen and where its corner sits
 let sparkles = [], snow = [], flakes = [], haze = null;
-const M = 1.05;   // a little bigger than the screen, so it can drift with the mouse without showing an edge
+const M = 1.03;   // a little bigger than it has to be, so it can drift with the mouse without showing an edge
 function build() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
   cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
-  if (W / H >= 1 / ASPECT * 0.9) { D = Math.min(Math.max(W, H / ASPECT), H / ASPECT * 1.7) * M; ox = W / 2 - 0.5 * D; oy = H / 2 - 0.49 * D; }
-  else { D = W / 0.97; ox = W / 2 - 0.507 * D; oy = H * 0.42 - GLOBE.y * D; }
+  const fitTall = H / (VIEW_BOTTOM - VIEW_TOP) * M;   // tall enough to show the skylight and the doors
+  if (W / H >= 0.9) { D = Math.min(W * M, fitTall); ox = W / 2 - 0.5 * D; oy = H / 2 - (VIEW_TOP + VIEW_BOTTOM) / 2 * D; }
+  else { D = W / 0.97; ox = W / 2 - 0.5 * D; oy = H * 0.45 - GLOBE.y * D; }
   const rnd = seeded(7);
   // Glints on the snow floor
   sparkles = [];
-  for (let i = 0; i < (PHONE ? 50 : 110); i++) sparkles.push({ u: rnd(), v: 0.66 + rnd() * 0.27, r: 0.6 + rnd() * 1.6, ph: rnd() * 7, sp: 0.8 + rnd() * 2 });
+  for (let i = 0; i < (PHONE ? 50 : 110); i++) sparkles.push({ u: rnd(), v: P(1440) + rnd() * P(280), r: 0.6 + rnd() * 1.6, ph: rnd() * 7, sp: 0.8 + rnd() * 2 });
   // Falling snow, in three layers for depth
   snow = [];
   const area = W * H / (1600 * 900);
@@ -156,7 +224,7 @@ window.addEventListener('deviceorientation', e => {
   if (e.gamma == null) return;
   lookTo = { x: clamp(e.gamma / 25, -1, 1), y: clamp((e.beta - 45) / 25, -1, 1) };
 });
-function makeWings() {   // the sides of a very wide screen: one blurred, slightly darker copy of the picture, drawn flipped
+function makeWings() {   // the sides of a wide screen: one blurred, darker copy of the picture, drawn flipped
   // against each side every frame (so it drifts with the picture and the seams always line up)
   const n = 640, h = Math.round(n * ASPECT), p = 24;
   const src = document.createElement('canvas'); src.width = n + p * 2; src.height = h + p * 2;
@@ -165,31 +233,35 @@ function makeWings() {   // the sides of a very wide screen: one blurred, slight
   sg.drawImage(caveImg, p, p, n, h);
   wings = document.createElement('canvas'); wings.width = n; wings.height = h;
   const wg = wings.getContext('2d');
-  wg.filter = 'blur(6px)';
+  wg.filter = 'blur(5px)';
   wg.drawImage(src, -p, -p);
   wg.filter = 'none';
-  wg.fillStyle = 'rgba(8,12,36,0.12)'; wg.fillRect(0, 0, n, h);
+  wg.fillStyle = 'rgba(10,20,45,0.22)'; wg.fillRect(0, 0, n, h);
 }
 function sx(u) { return ox + offset(DRIFT)[0] + u * D; }   // a spot in the picture, on screen
 function sy(v) { return oy + offset(DRIFT)[1] + v * D; }
-function archPath(a) {   // an arch: straight sides and a round top
-  const r = (a.x1 - a.x0) / 2, p = new window.Path2D();
-  p.moveTo(sx(a.x0), sy(a.bottom));
-  p.lineTo(sx(a.x0), sy(a.top + r));
-  p.arc(sx(a.x0 + r), sy(a.top + r), r * D, Math.PI, 0);
-  p.lineTo(sx(a.x1), sy(a.bottom));
+function archPath(a) {   // an archway's carved ring, on screen
+  const p = new window.Path2D();
+  a.ring.forEach(([u, v], i) => (i ? p.lineTo(sx(u), sy(v)) : p.moveTo(sx(u), sy(v))));
   p.closePath();
   return p;
 }
-function inArch(a, u, v) {
-  const r = (a.x1 - a.x0) / 2;
-  if (u < a.x0 || u > a.x1 || v > a.bottom || v < a.top) return false;
-  return v >= a.top + r || Math.hypot(u - (a.x0 + r), v - (a.top + r)) <= r;
+function inArch(a, u, v) {   // is this spot inside the ring? (counting how many of its edges a line to the right crosses)
+  let inside = false;
+  for (let i = 0, j = a.ring.length - 1; i < a.ring.length; j = i++) {
+    const [xi, yi] = a.ring[i], [xj, yj] = a.ring[j];
+    if ((yi > v) !== (yj > v) && u < (xj - xi) * (v - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function ringBox(a) {   // the left, right and bottom of an archway's ring
+  const xs = a.ring.map(p => p[0]), ys = a.ring.map(p => p[1]);
+  return { x0: Math.min(...xs), x1: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) };
 }
 function whatIsAt(x, y) {
   const u = (x - sx(0)) / D, v = (y - sy(0)) / D;
-  if (Math.hypot(u - GLOBE.x, v - GLOBE.y) < GLOBE.r * 1.15) return 'orb';
-  for (const side of ['left', 'right']) if (inArch(ARCHES[side], u, v)) return side;
+  if (Math.hypot(u - GLOBE.x, v - GLOBE.y) < GLOBE.r * 1.12) return 'orb';
+  for (const side of SIDES) if (inArch(ARCHES[side], u, v)) return side;
   return null;
 }
 
@@ -233,9 +305,9 @@ cv.addEventListener('click', e => {
   if (going) return;
   const what = whatIsAt(e.clientX, e.clientY);
   if (what && PLACES[what].file) tryEnter(what);
-  else if (what) {
+  else if (what) {   // a sealed door gives a little shiver
     shake = { side: what, t: performance.now() };
-    note = { text: `${PLACES[what].name} is coming soon…`, side: what, t: performance.now() };
+    note = { text: 'This door is sealed… for now', side: what, t: performance.now() };
   }
 });
 
@@ -276,63 +348,104 @@ document.getElementById('nameChange').addEventListener('click', () => {
 }
 window.addEventListener('resize', build);
 
-// ---------- The sky through the top of the dome ----------
-// The opening: the three blocks of the top row over the orb, traced round their grooves (in the picture's own pixels, 2600
-// wide, turned into parts of its width). Only their bottom edge shows on most screens; a taller window shows more.
-const HOLE = [[980, 505], [1150, 512], [1240, 518], [1350, 522], [1430, 516], [1540, 522], [1546, 560], [1544, 608],
-              [1430, 617], [1300, 623], [1150, 621], [980, 613]].map(([x, y]) => [x / 2600, y / 2600]);
-const HOLE_BOX = { u0: Math.min(...HOLE.map(p => p[0])), u1: Math.max(...HOLE.map(p => p[0])),
-                   v0: Math.min(...HOLE.map(p => p[1])), v1: Math.max(...HOLE.map(p => p[1])) };
-// The sky through the day, by your own clock: [hour, color at the top, color at the bottom, how bright the stars are].
-// Kept a little muted, so the daylight doesn't fight the Cave's own blue light.
-const SKY = [[0, [5, 8, 28], [16, 24, 64], 1], [4.5, [8, 12, 36], [26, 34, 84], 0.9], [6, [42, 52, 120], [210, 140, 130], 0.3],
-             [7.5, [70, 115, 190], [150, 190, 230], 0], [17, [66, 108, 180], [150, 185, 225], 0], [18.5, [52, 44, 112], [225, 120, 90], 0.15],
-             [20, [16, 18, 54], [52, 42, 104], 0.7], [21.5, [5, 8, 28], [16, 24, 64], 1], [24, [5, 8, 28], [16, 24, 64], 1]];
-const SKY_STARS = (() => { const r = seeded(11), out = []; for (let i = 0; i < 140; i++) out.push({ u: r(), v: r(), s: 0.5 + r() * 1.3, ph: r() * 7, tw: 0.5 + r() * 2 }); return out; })();
+// ---------- The sky ----------
+// The sky through the day, by your own clock: [hour, color at the top, color at the bottom, how much of the painted night
+// sky shows]. Kept a little muted, so the daylight doesn't fight the Cave's own blue light.
+const SKY = [[0, [5, 8, 28], [16, 24, 64], 1], [4.5, [8, 12, 36], [26, 34, 84], 0.95], [6, [42, 52, 120], [210, 140, 130], 0.3],
+             [7.5, [70, 115, 190], [150, 190, 230], 0], [17, [66, 108, 180], [150, 185, 225], 0], [18.5, [52, 44, 112], [225, 120, 90], 0.2],
+             [20, [16, 18, 54], [52, 42, 104], 0.75], [21.5, [5, 8, 28], [16, 24, 64], 1], [24, [5, 8, 28], [16, 24, 64], 1]];
 const mixRGB = (a, b, k) => a.map((c, i) => Math.round(c + (b[i] - c) * k));
 function skyNow() {
   const d = new Date(), h = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
   let i = 0;
   while (i < SKY.length - 2 && SKY[i + 1][0] <= h) i++;
   const a = SKY[i], b = SKY[i + 1], k = (h - a[0]) / (b[0] - a[0]);
-  return { top: mixRGB(a[1], b[1], k), bottom: mixRGB(a[2], b[2], k), stars: a[3] + (b[3] - a[3]) * k };
+  return { top: mixRGB(a[1], b[1], k), bottom: mixRGB(a[2], b[2], k), night: a[3] + (b[3] - a[3]) * k };
 }
-function drawSky(t) {
-  const path = new window.Path2D();
-  HOLE.forEach(([u, v], i) => (i ? path.lineTo(sx(u), sy(v)) : path.moveTo(sx(u), sy(v))));
-  path.closePath();
-  const sky = skyNow(), x0 = sx(HOLE_BOX.u0), y0 = sy(HOLE_BOX.v0), w = (HOLE_BOX.u1 - HOLE_BOX.u0) * D, h = (HOLE_BOX.v1 - HOLE_BOX.v0) * D;
-  g.save();
-  g.clip(path);
-  const grd = g.createLinearGradient(0, y0, 0, y0 + h);
-  grd.addColorStop(0, `rgb(${sky.top})`); grd.addColorStop(1, `rgb(${sky.bottom})`);
-  g.fillStyle = grd; g.fillRect(x0 - 4, y0 - 4, w + 8, h + 8);
-  if (sky.stars > 0.02) {   // stars, far away (they drift with the mouse less than the stone does) and slowly turning across
-    const [px, py] = offset(DRIFT * -0.6);
-    for (const s of SKY_STARS) {
-      const a = sky.stars * (0.35 + 0.65 * Math.max(0, Math.sin(t * s.tw + s.ph)) ** 2);
-      g.fillStyle = `rgba(235,242,255,${a})`;
-      g.beginPath(); g.arc(x0 + ((s.u + t * 0.0015) % 1) * w + px, y0 + s.v * h + py, s.s * Math.max(1, D / 1800), 0, Math.PI * 2); g.fill();
+// Extra stars that twinkle over the painted ones (spots in each view, as parts of its size)
+const TWINKLES = SKY_VIEWS.map((view, n) => { const r = seeded(11 + n), out = []; for (let i = 0; i < 38; i++) out.push({ u: r(), v: r(), s: 0.6 + r() * 1.2, ph: r() * 7, tw: 0.6 + r() * 2.2 }); return out; });
+let shooting = null, nextShot = 6 + Math.random() * 10;   // a shooting star: { x, y, dx, dy, t } in parts of the view
+function drawSky(t, dt) {   // behind the picture: the day's colors, the painted night sky drifting slowly, and twinkles
+  const sky = skyNow(), [px, py] = offset(DRIFT * -0.5);   // far away, so it drifts with the mouse less than the stone does
+  SKY_VIEWS.forEach((view, n) => {
+    const [ax, ay, aw, ah] = view.at, x0 = sx(P(ax)) + px, y0 = sy(P(ay)) + py, w = P(aw) * D, h = P(ah) * D;
+    const grd = g.createLinearGradient(0, y0, 0, y0 + h);
+    grd.addColorStop(0, `rgb(${sky.top})`); grd.addColorStop(1, `rgb(${sky.bottom})`);
+    g.fillStyle = grd; g.fillRect(x0 - 20, y0 - 20, w + 40, h + 40);
+    if (sky.night < 0.02) return;
+    g.globalAlpha = sky.night;
+    if (skyReady) {   // the painted sky, a touch zoomed in so it can wander very slowly in a little circle
+      const img = SKY_PICS.night, [f0, f1, f2, f3] = view.from, zoom = 0.94;
+      const fw = (f2 - f0) * img.width, fh = (f3 - f1) * img.height, cw = fw * zoom, ch = fh * zoom;
+      const wx = (fw - cw) / 2 * (1 + 0.9 * Math.sin(t * 0.011 + n)), wy = (fh - ch) / 2 * (1 + 0.9 * Math.cos(t * 0.008 + n));
+      g.drawImage(img, f0 * img.width + wx, f1 * img.height + wy, cw, ch, x0 - 20, y0 - 20, w + 40, h + 40);
     }
+    g.globalCompositeOperation = 'lighter';
+    for (const s of TWINKLES[n]) {
+      const a = sky.night * Math.max(0, Math.sin(t * s.tw + s.ph)) ** 4;
+      if (a < 0.04) continue;
+      const X = x0 + s.u * w, Y = y0 + s.v * h, r = s.s * Math.max(1, D / 1600);
+      g.fillStyle = `rgba(235,242,255,${a})`;
+      g.beginPath(); g.arc(X, Y, r, 0, Math.PI * 2); g.fill();
+      if (a > 0.6) { g.fillStyle = `rgba(200,225,255,${(a - 0.6) * 0.5})`; g.fillRect(X - r * 5, Y - r * 0.25, r * 10, r * 0.5); g.fillRect(X - r * 0.25, Y - r * 5, r * 0.5, r * 10); }
+    }
+    if (view.shooting && shooting) {   // a streak with a fading tail
+      const k = shooting.t / 0.9, X = x0 + (shooting.x + shooting.dx * k) * w, Y = y0 + (shooting.y + shooting.dy * k) * h;
+      const tail = g.createLinearGradient(X, Y, X - shooting.dx * w * 0.35, Y - shooting.dy * h * 0.35);
+      const a = Math.sin(Math.PI * Math.min(1, k)) * sky.night;
+      tail.addColorStop(0, `rgba(255,255,255,${a})`); tail.addColorStop(1, 'rgba(180,220,255,0)');
+      g.strokeStyle = tail; g.lineWidth = Math.max(1.2, D / 1400); g.lineCap = 'round';
+      g.beginPath(); g.moveTo(X, Y); g.lineTo(X - shooting.dx * w * 0.35, Y - shooting.dy * h * 0.35); g.stroke();
+    }
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+  });
+  if (shooting) { shooting.t += dt; if (shooting.t > 0.9) shooting = null; }
+  else if ((nextShot -= dt) <= 0) {
+    nextShot = 9 + Math.random() * 16;
+    const right = Math.random() < 0.5;
+    shooting = { x: right ? 0.15 + Math.random() * 0.3 : 0.55 + Math.random() * 0.3, y: 0.1 + Math.random() * 0.25,
+                 dx: (right ? 1 : -1) * (0.35 + Math.random() * 0.2), dy: 0.18 + Math.random() * 0.12, t: 0 };
   }
-  g.restore();
-  g.strokeStyle = 'rgba(16,24,64,0.5)'; g.lineWidth = Math.max(1.5, D * 0.0012); g.lineJoin = 'round';   // the cut edge of the stone
-  g.stroke(path);
+}
+
+// ---------- The flames: torches and floor candles flicker, and embers drift up from the torches ----------
+const FLAMES = [...TORCHES.map(f => ({ x: P(f[0]), y: P(f[1]), s: P(f[2]), torch: true })),
+                ...CANDLES.map(f => ({ x: P(f[0]), y: P(f[1]), s: P(f[2]), torch: false }))];
+FLAMES.forEach((f, i) => { f.ph = i * 1.7; f.ph2 = i * 2.9 + 1; });
+let embers = [];
+function flicker(f, t) {   // a few wobbles layered together, so it never looks like a steady beat
+  return 0.72 + 0.16 * Math.sin(t * 8.3 + f.ph) + 0.08 * Math.sin(t * 21.7 + f.ph2) + 0.07 * Math.sin(t * 3.1 + f.ph * 0.5);
+}
+function drawFlames(t, dt) {
+  g.globalCompositeOperation = 'lighter';
+  for (const f of FLAMES) {
+    const k = flicker(f, t), X = sx(f.x) + Math.sin(t * 6 + f.ph) * f.s * D * 0.04, Y = sy(f.y), R = f.s * D;
+    const wall = g.createRadialGradient(X, Y, 0, X, Y, R * (f.torch ? 4.2 : 3.2));   // warm light on the snow and stone
+    wall.addColorStop(0, `rgba(255,150,70,${0.16 * k})`); wall.addColorStop(0.4, `rgba(255,120,50,${0.06 * k})`); wall.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = wall; g.fillRect(X - R * 4.2, Y - R * 4.2, R * 8.4, R * 8.4);
+    const core = g.createRadialGradient(X, Y - R * 0.15, 0, X, Y - R * 0.15, R * 0.8);   // the bright heart of the flame
+    core.addColorStop(0, `rgba(255,235,180,${0.38 * k})`); core.addColorStop(0.5, `rgba(255,170,80,${0.15 * k})`); core.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = core; g.fillRect(X - R, Y - R * 1.2, R * 2, R * 2);
+    if (f.torch && Math.random() < dt * 1.4) embers.push({ x: f.x, y: f.y - f.s * 0.3, vx: (Math.random() - 0.5) * 0.004, vy: -(0.01 + Math.random() * 0.012), life: 0, max: 1.2 + Math.random() * 1.4, r: 0.6 + Math.random() });
+  }
+  embers = embers.filter(e => (e.life += dt) < e.max);
+  for (const e of embers) {
+    e.x += (e.vx + Math.sin(e.life * 5 + e.max * 9) * 0.002) * dt; e.y += e.vy * dt;
+    const a = Math.sin(Math.PI * e.life / e.max);
+    g.fillStyle = `rgba(255,${170 + Math.round(60 * (1 - e.life / e.max))},90,${a * 0.9})`;
+    g.beginPath(); g.arc(sx(e.x), sy(e.y), e.r * Math.max(1, D / 1800), 0, Math.PI * 2); g.fill();
+  }
+  g.globalCompositeOperation = 'source-over';
 }
 
 // ---------- Drawing every frame ----------
-function label(text, x, y, size, glowColor, lit) {   // a name floating in the air, glowing softly
-  g.font = `italic ${size}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'bottom';
-  g.shadowColor = glowColor; g.shadowBlur = 12;
-  g.fillStyle = lit ? '#ffffff' : 'rgba(240,246,255,0.92)';
-  g.fillText(text, x, y);
-  g.shadowBlur = 0;
-}
-let raf = 0;
+let raf = 0, last = performance.now();
 const t0 = performance.now();
 function frame(now) {
   raf = window.requestAnimationFrame(frame);
-  const t = (now - t0) / 1000;
+  const t = (now - t0) / 1000, dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
   look.x = lerp(look.x, lookTo.x, 0.05); look.y = lerp(look.y, lookTo.y, 0.05);
   if (!going && mouse.x >= 0 && !PHONE) {
     hover = whatIsAt(mouse.x, mouse.y);
@@ -358,12 +471,13 @@ function frame(now) {
   if (caveReady) {
     const wide = D < W;
     if (D * ASPECT < H) {
-      const B = Math.max(W, H) * 1.1;
-      g.drawImage(soft, (W - B) / 2, (H - B) / 2, B, B);
+      const B = Math.max(W, H / ASPECT) * 1.1;
+      g.drawImage(soft, (W - B) / 2, (H - B * ASPECT) / 2, B, B * ASPECT);
       g.fillStyle = 'rgba(8,12,36,0.35)'; g.fillRect(0, 0, W, H);
     }
     if (wide) {   // the flipped blurred copies, butting up against each side of the picture and drifting with it
       if (!wings) makeWings();
+      g.drawImage(wings, sx(0), sy(0), D, D * ASPECT);   // under the picture too, so its faded edges melt into the blur
       for (const side of [-1, 1]) {
         g.save();
         g.translate(side < 0 ? sx(0) : sx(0) + 2 * D, 0);
@@ -372,29 +486,57 @@ function frame(now) {
         g.restore();
       }
     }
-    g.drawImage(wide ? feathered : caveImg, sx(0), sy(0), D, D * ASPECT);
-    // A door you touched gives a little shiver
-    for (const side of ['left', 'right']) {
+    g.save();   // the sky, showing through the skylight and behind the orb (kept inside the picture)
+    g.beginPath(); g.rect(sx(0), sy(0), D, D * ASPECT); g.clip();
+    drawSky(t, dt);
+    g.restore();
+    g.drawImage(wide ? feathered : cut, sx(0), sy(0), D, D * ASPECT);
+    // A sealed door you touched gives a little shiver
+    for (const side of SIDES) {
       if (shake.side !== side) continue;
       const sh = Math.max(0, 1 - (now - shake.t) / 500);
       if (!sh) continue;
-      const a = ARCHES[side], S = caveImg.width;   // (the picture's spots are measured in parts of its width)
-      g.save(); g.clip(archPath(a));
-      g.drawImage(caveImg, a.x0 * S, a.top * S, (a.x1 - a.x0) * S, (a.bottom - a.top) * S,
-        sx(a.x0) + Math.sin(now * 0.08) * sh * 4, sy(a.top), (a.x1 - a.x0) * D, (a.bottom - a.top) * D);
+      const b = ringBox(ARCHES[side]), S = caveImg.width;   // (the picture's spots are measured in parts of its width)
+      g.save(); g.clip(archPath(ARCHES[side]));
+      g.drawImage(caveImg, b.x0 * S, b.top * S, (b.x1 - b.x0) * S, (b.bottom - b.top) * S,
+        sx(b.x0) + Math.sin(now * 0.08) * sh * 4, sy(b.top), (b.x1 - b.x0) * D, (b.bottom - b.top) * D);
       g.restore();
     }
-    drawSky(t);   // the opening at the top of the dome
+
+    // The frosted glass windows: the open doors' glow icy blue and breathe, the sealed doors' stay dim
+    for (const side of SIDES) {
+      const [x, y, w, h] = GLASS[side], open = !!PLACES[side].file, lit = hover === side || going === side;
+      const X = sx(P(x)), Y = sy(P(y)), gw = P(w) * D, gh = P(h) * D;
+      if (open && glassLit[side]) {
+        const b = 0.32 + 0.14 * Math.sin(t * 1.3 + x * 0.01) + (lit ? 0.3 : 0) + (going === side ? k * 0.8 : 0);
+        g.globalCompositeOperation = 'lighter';
+        g.globalAlpha = Math.min(1, b);
+        g.drawImage(glassLit[side], X, Y, gw, gh);
+        g.globalAlpha = 1;
+        const cx = X + gw / 2, cy = Y + gh * 0.45, rr = Math.max(gw, gh) * 0.75;   // the soft blue light spilling out
+        const glow = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
+        glow.addColorStop(0, `rgba(90,170,255,${b * 0.22})`); glow.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = glow; g.fillRect(cx - rr, cy - rr, rr * 2, rr * 2);
+        g.globalCompositeOperation = 'source-over';
+      } else if (!open && glassDim[side]) {
+        g.globalAlpha = 0.5;
+        g.drawImage(glassDim[side], X, Y, gw, gh);
+        g.globalAlpha = 1;
+      }
+    }
   }
 
-  // The arches: a soft glow over the one you point at (or the one you touched)
+  // The torches and candles
+  if (caveReady) drawFlames(t, dt);
+
+  // The archways: a soft glow over the one you point at (or the one you touched)
   g.globalCompositeOperation = 'lighter';
-  for (const side of ['left', 'right']) {
-    const a = ARCHES[side], d = a.door, open = !!PLACES[side].file, lit = hover === side || going === side;
+  for (const side of SIDES) {
+    const a = ARCHES[side], d = a.door, b = ringBox(a), open = !!PLACES[side].file, lit = hover === side || going === side;
     if (!lit && !(shake.side === side && now - shake.t < 500)) continue;
-    const cx = sx((d.x0 + d.x1) / 2), cy = sy((a.top + a.bottom) / 2), rr = (a.x1 - a.x0) * D * 0.7;
+    const cx = sx(d.x), cy = sy(d.y), rr = (b.x1 - b.x0) * D * 0.9;
     const shine = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
-    shine.addColorStop(0, open ? `rgba(255,200,150,${0.12 + pulse * 0.06 + (going === side ? k * 0.5 : 0)})` : `rgba(150,215,255,${0.12 + pulse * 0.05})`);
+    shine.addColorStop(0, open ? `rgba(255,200,150,${0.12 + pulse * 0.06 + (going === side ? k * 0.5 : 0)})` : `rgba(150,215,255,${0.1 + pulse * 0.05})`);
     shine.addColorStop(1, 'rgba(0,0,0,0)');
     g.fillStyle = shine; g.fillRect(cx - rr, cy - rr, rr * 2, rr * 2);
   }
@@ -418,7 +560,7 @@ function frame(now) {
   }
   g.save();
   g.beginPath(); g.arc(X, Y, R * 0.95, 0, Math.PI * 2); g.clip();
-  g.beginPath(); g.rect(X - R, Y - R, R * 2, sy(GLOBE.base) - (Y - R)); g.clip();   // the glass only, above the snow
+  g.beginPath(); g.rect(X - R, Y - R, R * 2, sy(GLOBE.base) - (Y - R)); g.clip();   // the glass only, above the pedestal
   g.globalCompositeOperation = 'lighter';
   const core = g.createRadialGradient(CX, CY, 0, CX, CY, R * 0.45);
   core.addColorStop(0, `rgba(150,255,255,${(0.03 + pulse * 0.06) * glowUp + (going === 'orb' ? k * 0.6 : 0)})`); core.addColorStop(1, 'rgba(0,0,0,0)');
@@ -443,15 +585,6 @@ function frame(now) {
   }
   g.globalCompositeOperation = 'source-over';
 
-  // The names
-  const fs = clamp(D * 0.016, 13, 30);
-  label(PLACES.orb.name, X, sy(GLOBE.y - GLOBE.r) - fs * 0.5, fs, 'rgba(190,140,255,0.95)', hover === 'orb');
-  for (const side of ['left', 'right']) {
-    const a = ARCHES[side];
-    label(PLACES[side].name, clamp(sx((a.x0 + a.x1) / 2), fs * 3.5, W - fs * 3.5), sy(a.top) - fs * 0.3, fs * 0.9,
-      PLACES[side].file ? 'rgba(255,170,80,0.9)' : 'rgba(120,220,255,0.9)', hover === side);
-  }
-
   // Falling snow and the soft shade at the edges
   for (const s of snow) {
     s.y += s.v / 60; s.x += Math.sin(t * 0.7 + s.ph) * s.sw / 120;
@@ -467,11 +600,11 @@ function frame(now) {
     const age = (now - note.t) / 1000;
     if (age > 2.6) note = null;
     else {
-      const a = ARCHES[note.side];
+      const b = ringBox(ARCHES[note.side]);
       g.globalAlpha = Math.min(1, age * 4, (2.6 - age) * 2);
       g.font = `${clamp(D * 0.011, 12, 18)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'top';
       g.fillStyle = '#e6f7ff'; g.shadowColor = '#000'; g.shadowBlur = 6;
-      g.fillText(note.text, clamp(sx((a.x0 + a.x1) / 2), 150, W - 150), sy(a.bottom) + 8);
+      g.fillText(note.text, clamp(sx((b.x0 + b.x1) / 2), 150, W - 150), Math.min(H - 30, sy(b.bottom) + 8));
       g.shadowBlur = 0; g.globalAlpha = 1;
     }
   }
@@ -480,7 +613,7 @@ function frame(now) {
   if (going) {
     let fx0, fy0, col;
     if (going === 'orb') { fx0 = X; fy0 = Y; col = '255,255,255'; }
-    else { const d = ARCHES[going].door; fx0 = sx((d.x0 + d.x1) / 2); fy0 = sy((d.top + d.bottom) / 2); col = '255,214,150'; }
+    else { const d = ARCHES[going].door; fx0 = sx(d.x); fy0 = sy(d.y); col = '255,214,150'; }
     const e = k * k * (3 - 2 * k), far = Math.hypot(W, H);
     g.globalCompositeOperation = 'lighter';           // light pouring out of the center, growing to fill everything
     const fl = g.createRadialGradient(fx0, fy0, 0, fx0, fy0, R * 0.4 + far * 1.2 * e);
