@@ -1,18 +1,16 @@
 // =====================================================================
-// cave.js — the Cave: the front door of the site. The inside of a great snow block igloo (cave.jpg, a Kindroid image),
-// dim and quiet, with a glass orb (globe.png) floating over a snow mound in the middle, a neon clock on the wall
-// (clock.jpg, with hands that show your own time) and an old carved stone archway on each side.
-// Light falls in through the top of the dome and follows the real time of day where you are: golden sun by day, warm
-// orange at sunrise and sunset, cool silver moonlight at night, with dust drifting in the beam.
+// cave.js — the Cave: the front door of the site. The inside of a great snow block igloo (cave2.jpg, from Kindroid images),
+// with a glass orb set into a snow pile in the middle and an old carved stone archway on each side. The orb, the snow bank
+// and the orb's teal light on the snow and the walls are all painted into the picture itself.
 // Pick your name, then touch the orb (the Doodle Gallery), the doorway on the right (the Table Room) or the
 // doorway on the left (the Game Room).
 // The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
-// The galaxy in the middle of the orb turns slowly, stars twinkle inside the glass, and the orb bobs gently.
+// The galaxy in the middle of the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 2
+// VERSION 3
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -23,11 +21,10 @@ const PLACES = {
   left:  { name: 'Game Room', file: '../game/games.js' }
 };
 
-// Where things sit in cave.jpg, measured in parts of the picture's width (across 0 to 1, down 0 to ASPECT)
+// Where things sit in cave2.jpg, measured in parts of the picture's width (across 0 to 1, down 0 to ASPECT)
 const ASPECT = 0.935;   // the picture's height, as a part of its width
-const GLOBE = { x: 0.499, y: 0.475, r: 0.155 };   // the floating orb (big enough to cover the old glass ball painted in the picture)
-const CORE = { x: -0.023, y: -0.119, r: 0.34 };   // the bright middle of its galaxy, and how much of it turns (parts of the orb's radius)
-const CLOCK = { x: 0.693, y: 0.318, r: 0.046 };   // the neon clock on the wall: its middle and its outer ring
+const GLOBE = { x: 0.4985, y: 0.5069, r: 0.1454, base: 0.615 };   // the orb, and where the snow bank starts covering it
+const CORE = { x: -0.023, y: -0.119 };   // the bright middle of its galaxy (parts of the orb's radius from its middle)
 const ARCHES = {   // each stone arch (for clicks, the glow and the name), and the doorway inside it
   left:  { x0: 0.032, x1: 0.303, top: 0.297, bottom: 0.640, door: { x0: 0.125, x1: 0.210, top: 0.389, bottom: 0.632 } },
   right: { x0: 0.732, x1: 0.979, top: 0.328, bottom: 0.640, door: { x0: 0.817, x1: 0.894, top: 0.411, bottom: 0.632 } }
@@ -77,11 +74,12 @@ const lerp = (a, b, k) => a + (b - a) * k;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // ---------- The picture ----------
-// cave.jpg is the whole Cave. A tiny copy of it, stretched big, makes a soft blurred backdrop for tall phone screens
+// cave2.jpg is the whole Cave. A tiny copy of it, stretched big, makes a soft blurred backdrop for tall phone screens
 // (where the picture fits the width and leaves room above and below). The middle of the orb's galaxy is cut out once
-// with softly fading edges, so it can turn on its own while the rest of the orb stays still.
-const caveImg = new Image(), orbImg = new Image(), clockImg = new Image();
-let caveReady = false, orbReady = false, clockReady = false, soft = null, swirl = null, feathered = null, wings = null, wingsFor = '';
+// with softly fading edges, so it can turn on its own while everything around it stays still.
+const SWIRL = 0.34;   // how much of the orb turns, around the middle of its galaxy (part of the orb's radius)
+const caveImg = new Image();
+let caveReady = false, soft = null, swirl = null, feathered = null, wings = null, wingsFor = '';
 caveImg.onload = () => {
   soft = document.createElement('canvas'); soft.width = soft.height = 48;
   soft.getContext('2d').drawImage(caveImg, 0, 0, 48, 48);
@@ -96,34 +94,25 @@ caveImg.onload = () => {
     grd.addColorStop(0, 'rgba(0,0,0,1)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
     fg.fillStyle = grd; fg.fillRect(Math.min(x0, x1), 0, fw, caveImg.height);
   }
-  caveReady = true;
-};
-caveImg.onerror = () => console.warn('cave.jpg did not load');
-caveImg.src = new URL('cave.jpg', import.meta.url).href;   // the pictures sit next to this file
-orbImg.onload = () => {   // the middle of the galaxy, cut out round with a soft edge, to turn on its own
-  const half = orbImg.width / 2, r = CORE.r * half, n = Math.round(r * 2);
+  const S = caveImg.width, r = GLOBE.r * SWIRL * S, n = Math.round(r * 2);
+  const cx = (GLOBE.x + CORE.x * GLOBE.r) * S, cy = (GLOBE.y + CORE.y * GLOBE.r) * S;
   swirl = document.createElement('canvas'); swirl.width = swirl.height = n;
   const sg = swirl.getContext('2d');
-  sg.drawImage(orbImg, half + CORE.x * half - r, half + CORE.y * half - r, n, n, 0, 0, n, n);
-  sg.globalCompositeOperation = 'destination-in';
+  sg.drawImage(caveImg, cx - r, cy - r, n, n, 0, 0, n, n);
+  sg.globalCompositeOperation = 'destination-in';   // keep the middle, fading out toward the edge
   const fade = sg.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
   fade.addColorStop(0, '#000'); fade.addColorStop(0.45, '#000'); fade.addColorStop(1, 'rgba(0,0,0,0)');
   sg.fillStyle = fade; sg.fillRect(0, 0, n, n);
-  orbReady = true;
+  caveReady = true;
 };
-orbImg.onerror = () => console.warn('globe.png did not load');
-orbImg.src = new URL('globe.png', import.meta.url).href;
-clockImg.onload = () => { clockReady = true; };
-clockImg.onerror = () => console.warn('clock.jpg did not load');
-clockImg.src = new URL('clock.jpg', import.meta.url).href;
-// Where things sit in clock.jpg (in its pixels): the middle of the dial, its outer neon ring and the edge of its dark face
-const DIAL = { x: 507, y: 510, ring: 445, face: 402 };
+caveImg.onerror = () => console.warn('cave2.jpg did not load');
+caveImg.src = new URL('cave2.jpg', import.meta.url).href;   // the picture sits next to this file
 
 // ---------- Where the picture sits on screen, worked out again whenever the window changes size ----------
 // It fills the screen, but a tall phone screen shows its whole width instead, so both doorways stay in view, and a very
 // wide screen doesn't zoom in past the point where the arches get cut off: the sides get a soft blurred mirror of the edges.
 let W = 0, H = 0, DPR = 1, D = 0, ox = 0, oy = 0;   // the picture's width on screen and where its corner sits
-let sparkles = [], snow = [], stars = [], dust = [], haze = null;
+let sparkles = [], snow = [], flakes = [], haze = null;
 const M = 1.05;   // a little bigger than the screen, so it can drift with the mouse without showing an edge
 function build() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -144,16 +133,12 @@ function build() {
         v: speed * (0.75 + rnd() * 0.5), ph: rnd() * 7, sw: 6 + rnd() * 16, depth });
     }
   }
-  // Stars twinkling inside the orb, slowly circling its galaxy (as parts of the orb's size)
-  stars = [];
-  for (let i = 0; i < 46; i++) stars.push({ a: rnd() * 7, d: 0.12 + Math.sqrt(rnd()) * 0.8, r: 0.004 + rnd() * 0.009, sp: 0.03 + rnd() * 0.08, ph: rnd() * 7, tw: 1 + rnd() * 3 });
-  // Dust drifting in the beam of light (along the beam 0 to 1, and across it -1 to 1)
-  dust = [];
-  for (let i = 0; i < (PHONE ? 40 : 80); i++) dust.push({ al: rnd(), ac: rnd() * 2 - 1, r: 0.6 + rnd() * 1.6, v: 0.004 + rnd() * 0.012, ph: rnd() * 7 });
+  // Stars twinkling in the orb, slowly circling its galaxy (as parts of the orb's size)
+  flakes = [];
+  for (let i = 0; i < 46; i++) flakes.push({ a: rnd() * 7, d: 0.12 + Math.sqrt(rnd()) * 0.8, r: 0.004 + rnd() * 0.009, sp: 0.03 + rnd() * 0.08, ph: rnd() * 7, tw: 1 + rnd() * 3 });
   // The soft blue shade toward the edges
   haze = g.createRadialGradient(W / 2, H * 0.5, Math.min(W, H) * 0.3, W / 2, H * 0.5, Math.hypot(W, H) * 0.62);
-  haze.addColorStop(0, 'rgba(10,14,40,0)'); haze.addColorStop(1, 'rgba(4,6,20,0.45)');
-  beamFor = '';   // the beam of light gets drawn again for the new size
+  haze.addColorStop(0, 'rgba(20,30,80,0)'); haze.addColorStop(1, 'rgba(10,16,48,0.35)');
 }
 
 // ---------- Looking around a little: the picture drifts with the mouse (or tilting a phone) ----------
@@ -186,53 +171,6 @@ function makeWings() {   // the sides of a very wide screen: the picture's edges
   }
   wg.filter = 'none';
   wg.fillStyle = 'rgba(8,12,36,0.12)'; wg.fillRect(0, 0, W, H);
-}
-// ---------- The light falling in from the top of the dome: the sun by day and the moon by night, on your own clock ----------
-// Through the day: [the hour, the light's color, how bright the beam is, how dark the Cave is]
-const SKY = [
-  [0, [140, 170, 255], 0.55, 0.64], [5, [140, 170, 255], 0.5, 0.64], [6.5, [255, 150, 120], 0.65, 0.56],
-  [8, [255, 215, 160], 0.8, 0.5], [12, [255, 240, 215], 0.95, 0.46], [16, [255, 220, 165], 0.85, 0.5],
-  [18, [255, 135, 90], 0.75, 0.55], [19.5, [180, 130, 230], 0.5, 0.62], [21, [140, 170, 255], 0.55, 0.64], [24, [140, 170, 255], 0.55, 0.64]];
-function skyNow() {
-  const d = new Date(), h = d.getHours() + d.getMinutes() / 60 + d.getSeconds() / 3600;
-  let i = 0;
-  while (h >= SKY[i + 1][0]) i++;
-  const [h0, c0, b0, k0] = SKY[i], [h1, c1, b1, k1] = SKY[i + 1], f = (h - h0) / (h1 - h0);
-  // how far across the sky the sun (6:30 in the morning to 7 at night) or the moon (the rest) has gone, 0 to 1
-  const p = h >= 6.5 && h < 19 ? (h - 6.5) / 12.5 : ((h + 5) % 24) / 11.5;
-  return { col: c0.map((c, j) => Math.round(lerp(c, c1[j], f))), bright: lerp(b0, b1, f), dark: lerp(k0, k1, f), p,
-           key: Math.floor(h * 12) };   // (the beam's drawn again every five minutes, as the sun or the moon moves)
-}
-// The beam: in through the top of the dome, slanting across as the sun (or the moon) goes over, onto the snow floor.
-// Drawn once into its own picture (soft and blurred), then laid over the Cave every frame.
-let beam = null, beamFor = '';
-function beamShape(sky) {   // where the beam starts and lands, in the picture's spots, and how wide it is at each end
-  return { ut: 0.5 - (0.5 - sky.p) * 0.25, uf: 0.88 - sky.p * 0.76, vt: -0.03, vf: 0.72, wt: 0.05, wf: 0.14 };
-}
-function makeBeam(sky) {
-  beam = beam || document.createElement('canvas');
-  beam.width = Math.round(W / 2); beam.height = Math.round(H / 2);
-  const b = beam.getContext('2d');
-  b.setTransform(0.5, 0, 0, 0.5, 0, 0);
-  const px = u => ox + u * D, py = v => oy + v * D;   // (without the drift with the mouse: that's added as it's drawn)
-  const c = sky.col.join(','), a = sky.bright, { ut, uf, vt, vf } = beamShape(sky);
-  b.filter = `blur(${Math.max(4, D * 0.012)}px)`;
-  for (const [wt, wf, k] of [[0.09, 0.22, 0.35], [0.055, 0.14, 0.55], [0.025, 0.065, 0.8]]) {   // soft and wide outside, brighter in the middle
-    const gr = b.createLinearGradient(px(ut), py(vt), px(uf), py(vf));
-    gr.addColorStop(0, `rgba(${c},${a * k})`); gr.addColorStop(0.6, `rgba(${c},${a * k * 0.6})`); gr.addColorStop(1, `rgba(${c},${a * k * 0.3})`);
-    b.fillStyle = gr;
-    b.beginPath(); b.moveTo(px(ut - wt), py(vt)); b.lineTo(px(ut + wt), py(vt)); b.lineTo(px(uf + wf), py(vf)); b.lineTo(px(uf - wf), py(vf));
-    b.closePath(); b.fill();
-  }
-  b.filter = 'none';
-  b.save(); b.translate(px(uf), py(vf)); b.scale(1, 0.28);   // the pool of light where it lands on the snow
-  const pool = b.createRadialGradient(0, 0, 0, 0, 0, 0.24 * D);
-  pool.addColorStop(0, `rgba(${c},${a * 0.8})`); pool.addColorStop(1, 'rgba(0,0,0,0)');
-  b.fillStyle = pool; b.fillRect(-0.24 * D, -0.24 * D, 0.48 * D, 0.48 * D);
-  b.restore();
-  const top = b.createRadialGradient(px(ut), py(0), 0, px(ut), py(0), 0.14 * D);   // the bright gap up in the dome
-  top.addColorStop(0, `rgba(${c},${a * 0.6})`); top.addColorStop(1, 'rgba(0,0,0,0)');
-  b.fillStyle = top; b.fillRect(px(ut) - 0.14 * D, py(0) - 0.14 * D, 0.28 * D, 0.28 * D);
 }
 function sx(u) { return ox + offset(DRIFT)[0] + u * D; }   // a spot in the picture, on screen
 function sy(v) { return oy + offset(DRIFT)[1] + v * D; }
@@ -400,111 +338,51 @@ function frame(now) {
     }
   }
 
-  // The Cave in the dark
-  const sky = skyNow();
-  g.fillStyle = `rgba(4,6,22,${sky.dark})`; g.fillRect(0, 0, W, H);
-
-  // The doors: soft violet light breathing out of each doorway, and a glow over the arch you point at
+  // The arches: a soft glow over the one you point at (or the one you touched)
   g.globalCompositeOperation = 'lighter';
   for (const side of ['left', 'right']) {
-    const a = ARCHES[side], d = a.door, open = !!PLACES[side].file, lit = hover === side;
-    const cx = sx((d.x0 + d.x1) / 2), cy = sy(d.bottom - (d.bottom - d.top) * 0.4), rr = (d.x1 - d.x0) * D * 1.4;
-    const a0 = (0.1 + pulse * 0.05) * (lit ? 1.8 : 1) + (going === side ? k : 0);
-    const warm = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
-    warm.addColorStop(0, `rgba(210,140,255,${a0})`); warm.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = warm; g.fillRect(cx - rr, cy - rr, rr * 2, rr * 2);
-    if (lit || (shake.side === side && now - shake.t < 500)) {
-      const r2 = (a.x1 - a.x0) * D * 0.7, ay = sy((a.top + a.bottom) / 2);
-      const shine = g.createRadialGradient(cx, ay, 0, cx, ay, r2);
-      shine.addColorStop(0, open ? `rgba(255,200,150,${0.12 + pulse * 0.06})` : `rgba(150,215,255,${0.12 + pulse * 0.05})`);
-      shine.addColorStop(1, 'rgba(0,0,0,0)');
-      g.fillStyle = shine; g.fillRect(cx - r2, ay - r2, r2 * 2, r2 * 2);
-    }
+    const a = ARCHES[side], d = a.door, open = !!PLACES[side].file, lit = hover === side || going === side;
+    if (!lit && !(shake.side === side && now - shake.t < 500)) continue;
+    const cx = sx((d.x0 + d.x1) / 2), cy = sy((a.top + a.bottom) / 2), rr = (a.x1 - a.x0) * D * 0.7;
+    const shine = g.createRadialGradient(cx, cy, 0, cx, cy, rr);
+    shine.addColorStop(0, open ? `rgba(255,200,150,${0.12 + pulse * 0.06 + (going === side ? k * 0.5 : 0)})` : `rgba(150,215,255,${0.12 + pulse * 0.05})`);
+    shine.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = shine; g.fillRect(cx - rr, cy - rr, rr * 2, rr * 2);
   }
   g.globalCompositeOperation = 'source-over';
 
-  // The light falling in from the top of the dome (the sun or the moon, on your own clock), with dust drifting in it
-  // (behind the orb: at midday it shines round the orb's edges)
-  if (caveReady) {
-    const key = W + 'x' + H + ':' + sky.key;
-    if (beamFor !== key) { makeBeam(sky); beamFor = key; }
-    const [bx, by] = offset(DRIFT);
-    g.globalCompositeOperation = 'screen';
-    g.globalAlpha = 0.93 + 0.07 * Math.sin(t * 0.7) * Math.sin(t * 1.9);   // the light shimmers a little
-    g.drawImage(beam, bx, by, W, H);
-    g.globalAlpha = 1;
-    g.globalCompositeOperation = 'lighter';   // dust drifting down through it
-    const { ut, uf, vt, vf, wt, wf } = beamShape(sky), c = sky.col.join(',');
-    for (const d of dust) {
-      const al = (d.al + t * d.v) % 1, u = lerp(ut, uf, al) + d.ac * lerp(wt, wf, al) * 0.8 + Math.sin(t * 0.5 + d.ph) * 0.004;
-      const a = sky.bright * 0.7 * Math.sin(Math.PI * al) * (0.4 + 0.6 * Math.max(0, Math.sin(t * 1.3 + d.ph)));
-      if (a < 0.03) continue;
-      g.fillStyle = `rgba(${c},${a})`;
-      g.beginPath(); g.arc(sx(u), sy(lerp(vt, vf, al)), d.r, 0, Math.PI * 2); g.fill();
-    }
-    g.globalCompositeOperation = 'source-over';
-  }
-
-  // The orb: floating over the mound with its light on the snow under it, the galaxy in its middle slowly turning,
-  // and stars twinkling in the glass
-  const glowUp = (hover === 'orb' ? 1.4 : 1) + (going === 'orb' ? k * 1.5 : 0), bob = Math.sin(t * 0.9) * 0.012;
-  const X = sx(GLOBE.x), Y = sy(GLOBE.y + bob * GLOBE.r), R = GLOBE.r * D;
+  // The orb: its glow gently breathing, the galaxy in its middle slowly turning, and stars twinkling in the glass
+  const glowUp = (hover === 'orb' ? 1.4 : 1) + (going === 'orb' ? k * 1.5 : 0);
+  const X = sx(GLOBE.x), Y = sy(GLOBE.y), R = GLOBE.r * D;
+  const CX = X + CORE.x * R, CY = Y + CORE.y * R;   // the middle of the galaxy
   g.globalCompositeOperation = 'lighter';
-  g.save(); g.translate(X, sy(GLOBE.y + GLOBE.r * 1.04)); g.scale(1, 0.25);
-  const pool = g.createRadialGradient(0, 0, 0, 0, 0, R * 1.3);
-  pool.addColorStop(0, `rgba(90,220,255,${(0.26 + pulse * 0.08 - bob * 4) * glowUp})`); pool.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = pool; g.fillRect(-R * 1.3, -R * 1.3, R * 2.6, R * 2.6);
-  g.restore();
-  const halo = g.createRadialGradient(X, Y, R * 0.9, X, Y, R * 1.9);   // around the glass, not on it
-  halo.addColorStop(0, `rgba(80,200,255,${(0.14 + pulse * 0.07) * glowUp})`); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  const halo = g.createRadialGradient(X, Y, R * 0.95, X, Y, R * 1.8);   // around the glass, not on it
+  halo.addColorStop(0, `rgba(80,200,255,${(0.05 + pulse * 0.06) * glowUp})`); halo.addColorStop(1, 'rgba(0,0,0,0)');
   g.fillStyle = halo; g.fillRect(X - R * 2, Y - R * 2, R * 4, R * 4);
   g.globalCompositeOperation = 'source-over';
-  if (orbReady) {
-    g.drawImage(orbImg, X - R, Y - R, R * 2, R * 2);
-    const cx = X + CORE.x * R, cy = Y + CORE.y * R, sr = CORE.r * R;
-    g.save();   // the galaxy turns (faster and faster as you go through)
-    g.translate(cx, cy); g.rotate(-(t * 0.15 + (going === 'orb' ? k * k * 3 : 0)));
+  if (swirl) {   // the galaxy turns (faster and faster as you go through)
+    const sr = R * SWIRL;
+    g.save();
+    g.translate(CX, CY); g.rotate(-(t * 0.15 + (going === 'orb' ? k * k * 3 : 0)));
     g.drawImage(swirl, -sr, -sr, sr * 2, sr * 2);
     g.restore();
-    g.save();
-    g.beginPath(); g.arc(X, Y, R * 0.96, 0, Math.PI * 2); g.clip();
-    g.globalCompositeOperation = 'lighter';
-    const core = g.createRadialGradient(cx, cy, 0, cx, cy, R * 0.45);
-    core.addColorStop(0, `rgba(150,255,255,${(0.05 + pulse * 0.07) * glowUp + (going === 'orb' ? k * 0.6 : 0)})`); core.addColorStop(1, 'rgba(0,0,0,0)');
-    g.fillStyle = core; g.fillRect(cx - R * 0.45, cy - R * 0.45, R * 0.9, R * 0.9);
-    for (const st of stars) {   // stars slowly circling the middle, twinkling
-      const a = Math.max(0, Math.sin(t * st.tw + st.ph)) ** 3;
-      if (a < 0.05) continue;
-      const ang = st.a + t * st.sp;
-      g.fillStyle = `rgba(220,255,255,${a * 0.9})`;
-      g.beginPath(); g.arc(cx + Math.cos(ang) * st.d * R, cy + Math.sin(ang) * st.d * R * 0.85, st.r * R, 0, Math.PI * 2); g.fill();
-    }
-    g.restore();
   }
-
-  // The neon clock on the wall, showing your own time
-  if (clockReady) {
-    const cx = sx(CLOCK.x), cy = sy(CLOCK.y), s = CLOCK.r * D / DIAL.ring, fr = DIAL.face * s;
-    g.fillStyle = 'rgba(4,5,20,0.94)';   // its dark face
-    g.beginPath(); g.arc(cx, cy, fr, 0, Math.PI * 2); g.fill();
-    g.globalCompositeOperation = 'screen';   // the picture's black melts away, leaving the glowing rings and marks
-    g.drawImage(clockImg, cx - DIAL.x * s, cy - DIAL.y * s, clockImg.width * s, clockImg.height * s);
-    g.globalCompositeOperation = 'lighter';
-    const d = new Date(), sec = d.getSeconds() + d.getMilliseconds() / 1000, min = d.getMinutes() + sec / 60, hr = d.getHours() % 12 + min / 60;
-    const hand = (turn, len, tail, w, col, alpha) => {
-      const a = turn * Math.PI * 2 - Math.PI / 2, c = Math.cos(a), sn = Math.sin(a);
-      g.strokeStyle = col; g.globalAlpha = alpha; g.lineWidth = Math.max(1, w * fr); g.lineCap = 'round';
-      g.shadowColor = col; g.shadowBlur = Math.max(4, fr * 0.12);
-      g.beginPath(); g.moveTo(cx - c * tail * fr, cy - sn * tail * fr); g.lineTo(cx + c * len * fr, cy + sn * len * fr); g.stroke();
-    };
-    hand(hr / 12, 0.5, 0.08, 0.06, '#ff5fd0', 1);
-    hand(min / 60, 0.76, 0.1, 0.034, '#4fb8ff', 1);
-    hand(sec / 60, 0.84, 0.16, 0.012, '#e8dcff', 0.75);
-    g.globalAlpha = 1; g.shadowBlur = Math.max(4, fr * 0.1); g.shadowColor = '#c9a8ff';
-    g.fillStyle = '#f2eaff'; g.beginPath(); g.arc(cx, cy, fr * 0.045, 0, Math.PI * 2); g.fill();
-    g.shadowBlur = 0;
-    g.globalCompositeOperation = 'source-over';
+  g.save();
+  g.beginPath(); g.arc(X, Y, R * 0.95, 0, Math.PI * 2); g.clip();
+  g.beginPath(); g.rect(X - R, Y - R, R * 2, sy(GLOBE.base) - (Y - R)); g.clip();   // the glass only, above the snow
+  g.globalCompositeOperation = 'lighter';
+  const core = g.createRadialGradient(CX, CY, 0, CX, CY, R * 0.45);
+  core.addColorStop(0, `rgba(150,255,255,${(0.03 + pulse * 0.06) * glowUp + (going === 'orb' ? k * 0.6 : 0)})`); core.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = core; g.fillRect(CX - R * 0.45, CY - R * 0.45, R * 0.9, R * 0.9);
+  for (const f of flakes) {   // stars slowly circling the middle, twinkling
+    const a = Math.max(0, Math.sin(t * f.tw + f.ph)) ** 3;
+    if (a < 0.05) continue;
+    const ang = f.a + t * f.sp;
+    g.fillStyle = `rgba(220,255,255,${a * 0.9})`;
+    g.beginPath(); g.arc(CX + Math.cos(ang) * f.d * R, CY + Math.sin(ang) * f.d * R * 0.85, f.r * R, 0, Math.PI * 2); g.fill();
   }
+  g.restore();
+  g.globalCompositeOperation = 'source-over';
 
   // Glints on the snow floor
   g.globalCompositeOperation = 'lighter';
