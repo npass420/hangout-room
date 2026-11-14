@@ -12,6 +12,7 @@
 // it off the walls), then stop the spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
+// VERSION 1
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }

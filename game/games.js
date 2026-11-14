@@ -5,6 +5,7 @@
 // stand on the right (skeeball.js); bowling down the left side and pool in the middle come next, their spots marked out on the floor.
 // You walk in through the frog's doors (gdoor.jpg, a Kindroid picture). Clicking them twice whooshes you back to the Cave.
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
+// VERSION 1
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -815,5 +816,5 @@ camera.position.copy(OUTSIDE); camera.rotation.set(0.04, 0, 0);
   renderer.compile(scene, camera);
   renderer.render(scene, camera);
   await frames(3);
-  window.dispatchEvent(new Event('room-show') && new Event('room-ready'));
+  window.dispatchEvent(new Event('room-ready'));
 })();

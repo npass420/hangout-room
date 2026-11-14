@@ -7,6 +7,9 @@
 // snowflake turns while it does. Then the room fades in and you walk in through its door.
 // The swirl in the middle of the globe turns slowly, and snow drifts down inside the glass.
 // Coming back through a room's portal, the Cave fades in from black.
+// Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
+// has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
+// VERSION 1
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -43,6 +46,26 @@ try {
     setTimeout(() => veil.remove(), 1500);
   }
 } catch (e) {}
+
+// ---------- Versions: which copy of each room's files your browser has, popping up briefly on every load ----------
+const VERSIONED = [['Cave', import.meta.url], ['Game Room', new URL('../game/games.js', import.meta.url).href],
+                   ['Skee-ball', new URL('../game/skeeball.js', import.meta.url).href]];
+(async () => {
+  const found = await Promise.all(VERSIONED.map(async ([name, url]) => {
+    try {   // read the top of the file the same way the room would load it (from the browser's copy if it has one)
+      const text = (await (await fetch(url)).text()).slice(0, 3000);
+      const m = text.match(/^\/\/ VERSION (\d+)/m);
+      return `${name} v${m ? m[1] : '?'}`;
+    } catch (e) { return `${name} v?`; }
+  }));
+  const tag = document.createElement('div');
+  tag.textContent = found.join('   ·   ');
+  tag.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:90;pointer-events:none;white-space:nowrap;' +
+    'padding:7px 16px;border-radius:14px;background:rgba(8,14,30,0.82);border:1px solid rgba(160,210,255,0.6);color:#e6f3ff;' +
+    'font:bold 14px "Trebuchet MS",sans-serif;box-shadow:0 0 14px rgba(120,190,255,0.45);transition:opacity 0.8s';
+  document.body.appendChild(tag);
+  setTimeout(() => { tag.style.opacity = '0'; setTimeout(() => tag.remove(), 900); }, 5000);
+})();
 
 function seeded(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const lerp = (a, b, k) => a + (b - a) * k;
