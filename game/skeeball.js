@@ -349,6 +349,7 @@ function buildMachine(i) {
     const inX = sd > 0 ? HALF : -HALF - side, outX = sd > 0 ? HALF + side + CH : -OUT;
     g.add(panel(VF, L + 0.04, laneTop, inX, side), panel(VF, L + 0.04, laneTop, outX, side));
     const chMid = sd * CH_U;
+    g.add(panel(VF, L + 0.04, v => laneTop(v) - CH_D - 0.006, chMid - CH / 2, CH));   // solid under the channel, so the wall's ends are closed
     g.add(surface(VF, L + 0.04, 30, darkMat, chMid - CH / 2, chMid + CH / 2, WALL_H - CH_D));   // the channel's floor
     for (const v of [VF + 0.02, L + 0.02]) {   // closing off both ends of the channel
       const cap = new THREE.Mesh(new THREE.BoxGeometry(CH, CH_D, 0.04), holoMat);
@@ -428,7 +429,10 @@ const hudScore = document.createElement('div');
 hudScore.style.cssText = 'font:bold 64px "Courier New",monospace;line-height:1;color:#dffbff;text-shadow:0 0 10px #29e6ff,0 0 26px #29e6ff';
 const hudBalls = document.createElement('div');
 hudBalls.style.cssText = 'font-weight:bold;font-size:18px;margin-top:4px;color:#ffd36a;text-shadow:0 0 10px #ffd36a';
-hud.append(hudScore, hudBalls);
+const hudKeys = document.createElement('div');
+hudKeys.style.cssText = 'font-size:13px;margin-top:6px;opacity:0.75';
+hudKeys.textContent = 'V · switch view   ·   Enter · chat';
+hud.append(hudScore, hudBalls, hudKeys);
 document.body.appendChild(hud);
 let hudKey = '';
 function paintHud(m) {
@@ -450,8 +454,8 @@ const sv = new THREE.Vector3();
 function popNumber(m, pts, u, v) {
   const col = COL[pts] || '#ffffff', from = new THREE.Vector3(u, H(v) + 0.05, -v);
   if (my === m && view && view.t >= 1) {   // yours: on the screen, big
-    sv.copy(from).applyMatrix4(m.g.matrixWorld).project(goalCam);
-    const top = window.innerHeight * (1 - STRIP);
+    sv.copy(from).applyMatrix4(m.g.matrixWorld).project(mode === 'deep' ? deepCam : goalCam);
+    const top = window.innerHeight * (mode === 'deep' ? 1 : 1 - STRIP);
     const el = document.createElement('div');
     el.className = 'skeePop'; el.textContent = '+' + pts;
     el.style.color = '#ffffff';
@@ -647,6 +651,37 @@ function showUi() {
   else uiText.textContent = rolling(my) ? 'Rolling…' : my.tray ? 'Get ready…' : 'Last ball rolling…';
 }
 
+// ---------- While you play, the chat and the people list are tucked away: the 💬 button or Enter brings them up ----------
+const chatCss = document.createElement('style');
+chatCss.textContent = 'body.skeePlay #who, body.skeePlay #worldBox, body.skeePlay #chat, body.skeePlay #phoneBar { display: none !important; }' +
+  'body.skeePlay.skeeChat #who, body.skeePlay.skeeChat #worldBox, body.skeePlay.skeeChat #chat { display: block !important; }';
+document.head.appendChild(chatCss);
+const chatBtn = document.createElement('button');
+chatBtn.textContent = '💬';
+chatBtn.title = 'Chat (Enter)';
+chatBtn.style.cssText = 'position:fixed;right:16px;top:14px;z-index:27;display:none;width:52px;height:52px;border-radius:50%;font-size:24px;cursor:pointer;' +
+  'background:rgba(10,4,24,0.75);color:#fff;border:2px solid rgba(179,107,255,0.8);box-shadow:0 0 14px rgba(179,107,255,0.5)';
+const chatDot = document.createElement('span');
+chatDot.style.cssText = 'display:none;position:absolute;top:4px;right:4px;width:12px;height:12px;border-radius:50%;background:#ff3b2f;box-shadow:0 0 8px #ff3b2f';
+chatBtn.appendChild(chatDot);
+document.body.appendChild(chatBtn);
+const chatOpen = () => document.body.classList.contains('skeeChat');
+function showChat(on) {
+  document.body.classList.toggle('skeeChat', on);
+  const input = document.getElementById('chatInput');
+  if (on) { chatDot.style.display = 'none'; const msgs = document.getElementById('msgs'); if (msgs) msgs.scrollTop = msgs.scrollHeight; if (input) input.focus(); }
+  else if (input && document.activeElement === input) input.blur();
+}
+chatBtn.addEventListener('click', () => showChat(!chatOpen()));
+{ const msgs = document.getElementById('msgs');   // someone wrote something while the chat's tucked away: a red dot on 💬
+  if (msgs) new MutationObserver(() => { if (my && !chatOpen()) chatDot.style.display = 'block'; }).observe(msgs, { childList: true }); }
+function playMode(on) {   // tuck the room's panels away while you play, and bring them back after
+  document.body.classList.toggle('skeePlay', on);
+  if (!on) showChat(false);
+  chatBtn.style.display = on ? 'block' : 'none';
+  chatDot.style.display = 'none';
+}
+
 // ---------- A roll: aim (an arrow that follows you), then spin (a timing bar) and it goes. The power is a meter you set ----------
 // whenever you like (scroll wheel or the up and down keys, or drag on the meter itself), and it stays where you leave it.
 const gauge = document.createElement('canvas');
@@ -719,9 +754,12 @@ window.addEventListener('wheel', e => {
 }, { passive: true });
 window.addEventListener('keydown', e => {
   if (!my) return;
+  const k = e.key.toLowerCase();
+  if (k === 'escape' && chatOpen()) { showChat(false); return; }   // Esc tucks the chat away first
   const a = document.activeElement;
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
-  const k = e.key.toLowerCase();
+  if (k === 'enter') { showChat(true); e.preventDefault(); return; }
+  if (k === 'v') { setMode(mode === 'split' ? 'deep' : 'split'); return; }
   if (k === 'escape') { const h = my.hand; if (h && h.stage === 'spin') back(h); else leave(); return; }
   if (!canSet()) return;
   if (k === 'arrowup' || k === 'w') { setPower(power + 1); e.preventDefault(); }
@@ -765,7 +803,7 @@ function showAim(h) {
   aimMat.color.setHSL(0.33 - p * 0.33, 1, h.stage === 'aim' ? 0.55 : 0.7);
 }
 function ballX(m) {   // where your ball is on the screen (pixels across, in the bottom strip)
-  const p = new THREE.Vector3(0, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(view && view.t >= 1 ? nearCam : camera);
+  const p = new THREE.Vector3(0, H(0.08), -0.08).applyMatrix4(m.g.matrixWorld).project(view && view.t >= 1 ? (mode === 'deep' ? deepCam : nearCam) : camera);
   return (p.x + 1) / 2 * window.innerWidth;
 }
 function readyBall(m) {   // your turn and nothing rolling: the next ball comes out of a channel onto the lane, ready to aim
@@ -864,22 +902,37 @@ const GOAL_BOX = [];
 for (const sd of [-1, 1]) GOAL_BOX.push(new THREE.Vector3(sd * 0.3, H(L + 0.2), -(L + 0.2)), new THREE.Vector3(sd * (HALF + 0.04), YB, -B0),
   new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
 let goalPts = [];
+// The other view (V switches): one deep view up the whole lane from just behind your end, your ball at the bottom and
+// the board at the top, like standing at a real machine.
+const DEEP_EYE = new THREE.Vector3(0, 1.42, 0.5), DEEP_LOOK = new THREE.Vector3(0, YB - 0.1, -(B0 - 0.6));
+const DEEP_BOX = [];
+for (const sd of [-1, 1]) DEEP_BOX.push(new THREE.Vector3(sd * 0.25, H(-0.02), 0.02), new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
+let deepPts = [];
+let mode = 'split';
+try { if (localStorage.getItem('skeeView') === 'deep') mode = 'deep'; } catch (e) {}
+function setMode(md) {
+  mode = md;
+  try { localStorage.setItem('skeeView', md); } catch (e) {}
+  for (const mm of machines) for (const p of mm.pops) if (p.el) p.done = true;
+}
 const nearCam = new THREE.PerspectiveCamera(30, 1, 0.05, 40), goalCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
+const deepCam = new THREE.PerspectiveCamera(50, 1, 0.05, 40);
 const STRIP = 0.3;   // how much of the screen's height the bottom strip takes
 function placeCams(m) {
   m.g.updateMatrixWorld();
-  for (const [cam, eye, look] of [[nearCam, NEAR_EYE, NEAR_LOOK], [goalCam, GOAL_EYE, GOAL_LOOK]]) {
+  for (const [cam, eye, look] of [[nearCam, NEAR_EYE, NEAR_LOOK], [goalCam, GOAL_EYE, GOAL_LOOK], [deepCam, DEEP_EYE, DEEP_LOOK]]) {
     cam.position.copy(m.g.localToWorld(eye.clone()));
     cam.lookAt(m.g.localToWorld(look.clone()));
   }
   goalPts = GOAL_BOX.map(p => m.g.localToWorld(p.clone()));
+  deepPts = DEEP_BOX.map(p => m.g.localToWorld(p.clone()));
 }
 const cp = new THREE.Vector3();
 function pageBits() { return [document.querySelector('#ui h1'), document.getElementById('hint')].filter(Boolean); }
-function frameGoal(cam, aspect) {   // the top view: from where it stands, just big enough to hold everything in GOAL_BOX
+function frameGoal(cam, aspect, pts = goalPts) {   // a view that, from where it stands, is just big enough to hold all these points
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   cam.updateMatrixWorld();
-  for (const p of goalPts) {
+  for (const p of pts) {
     cp.copy(p).applyMatrix4(cam.matrixWorldInverse);
     const x = cp.x / -cp.z, y = cp.y / -cp.z;
     x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
@@ -901,6 +954,15 @@ function fit(cam, aspect, wide, tall) {   // a field of view that shows at least
 function renderSplit() {   // draws the two views; false when you're not playing (so the room draws as usual)
   if (!my || !view || view.t < 1) return false;
   const w = window.innerWidth, h = window.innerHeight, hb = Math.round(h * STRIP), gap = 3;
+  for (const el of pageBits()) el.style.visibility = 'hidden';   // the room's name and walking tips aren't needed while you play
+  hud.style.display = 'block';
+  if (mode === 'deep') {   // the one deep view
+    frameGoal(deepCam, w / h, deepPts);
+    renderer.render(scene, deepCam);
+    ui.style.bottom = ''; ui.style.top = '14px';   // the bar of words goes up top, clear of your ball
+    return true;
+  }
+  ui.style.top = '';
   frameGoal(goalCam, w / (h - hb - gap));
   fit(nearCam, w / hb, 82, 18);
   renderer.setScissorTest(true);
@@ -911,12 +973,11 @@ function renderSplit() {   // draws the two views; false when you're not playing
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, w, h);
   ui.style.bottom = (hb - 22) + 'px';   // the bar of words sits on the line between the two views, out of the way
-  for (const el of pageBits()) el.style.visibility = 'hidden';   // and the room's name and walking tips aren't needed while you play
-  hud.style.display = 'block';
   return true;
 }
 function enter(m) {
   my = m;
+  playMode(true);
   placeCams(m);
   const to = nearCam.position.clone(), toQ = nearCam.quaternion.clone();   // glide down to your end, then the screen splits
   view = { t: 0, fromP: camera.position.clone(), fromQ: camera.quaternion.clone(), to, toQ, fromF: camera.fov };
@@ -932,7 +993,8 @@ function leave() {
     onDisconnect(ref(db, 'game/skee/m' + m.i)).cancel();
   }
   my = null; view = null;
-  drawGauge(null); ui.style.bottom = '18px';
+  drawGauge(null); ui.style.bottom = '18px'; ui.style.top = '';
+  playMode(false);
   for (const el of pageBits()) el.style.visibility = '';
   hud.style.display = 'none';
   for (const mm of machines) for (const p of mm.pops) if (p.el) p.done = true;   // (big numbers still on the screen go)
@@ -989,7 +1051,7 @@ function updateAll(dt) {
     stepPop(m, dt);
     const open = m.data && !stale(m.data) ? 1 : 0;   // the channel covers: slid open while a game's on
     m.cov += (open - m.cov) * Math.min(1, dt * 4);
-    for (const c of m.covers) c.scale.x = Math.max(0.02, 1 - m.cov);   // (they slide sideways into the outside of the wall)
+    for (const c of m.covers) { c.scale.x = Math.max(0.02, 1 - m.cov); c.visible = m.cov < 0.97; }   // (sliding sideways into the outside of the wall)
     stepPops(m, dt);
     // the score on the board counts up as each big number lands in it (points still flying up aren't on it yet)
     const flying = m.pops.reduce((a, p) => a + (p.done ? 0 : p.pts), 0);
