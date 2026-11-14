@@ -653,6 +653,7 @@ window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   if (e.key === 'Escape') { if (S.atSketch) leaveSketch(); return; }
   const k = e.key.toLowerCase();
+  if (k === 'r' && !S.atSketch && !S.galleryOpen && !anim && !intro) { setFov(BASE_FOV); pitch = -0.05; return; }   // R: look straight ahead again, zoomed back out
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
     keys.add(k);
     if (k.startsWith('arrow')) e.preventDefault();   // don't scroll the page

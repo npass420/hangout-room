@@ -783,9 +783,15 @@ let panelKey = null, nearCheck = 0;
 // ---------- Keys ----------
 const keys = new Set();
 function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
+function resetView() {   // R: look straight ahead again and zoom back out (in a chair: back to the view of the board)
+  setFov(BASE_FOV);
+  if (S.seat) { seatLook.yaw = seatLook.pitch = 0; return; }
+  pitch = -0.12;
+}
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   if (e.key === 'Escape') { if (S.seat) standUp(); return; }
+  if (e.key.toLowerCase() === 'r' && !anim && !intro) { resetView(); return; }
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
     keys.add(k);

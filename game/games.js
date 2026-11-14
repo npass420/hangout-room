@@ -683,6 +683,7 @@ function typing() { const a = document.activeElement; return !!(a && (a.tagName 
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   const k = e.key.toLowerCase();
+  if (k === 'r' && !skee.playing && !intro) { setFov(BASE_FOV); pitch = -0.08; return; }   // R: look straight ahead again, zoomed back out
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift'].includes(k)) {
     keys.add(k);
     if (k.startsWith('arrow') || k === ' ') e.preventDefault();   // don't scroll the page
@@ -748,7 +749,7 @@ canvas.addEventListener('pointerdown', e => {
 function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
 window.addEventListener('pointercancel', e => { down = null; endTouch(e); });
 window.addEventListener('pointermove', e => {
-  if (skee.playing) { skee.move(e); return; }
+  if (skee.playing) { canvas.style.cursor = 'none'; skee.move(e); return; }   // no mouse pointer over the game while you play
   if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2 && pinchDist > 0) {
     const d = pinchSpread();

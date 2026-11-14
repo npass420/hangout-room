@@ -14,7 +14,7 @@ import { sfx } from '../sounds.js';
 function sound(name, ...args) { try { if (typeof sfx[name] === 'function') sfx[name](...args); } catch (e) {} }
 
 export const TABLE_Y = 0.76;                 // the table top
-const CELL = 0.07, HALF = CELL * 4;          // one square, and half the board
+const CELL = 0.085, HALF = CELL * 4;         // one square, and half the board (bigger boards: 8.5 cm squares)
 const SCALE = CELL / 0.1;                    // the piece shapes were made for 10 cm squares
 const TOP = TABLE_Y + 0.022;                 // the board's playing surface
 const rc = sq => [Math.floor(sq / 8), sq % 8];
