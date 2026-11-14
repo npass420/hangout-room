@@ -6,13 +6,14 @@
 // The board: polished metal rings in the middle (10 to 50), a small 150 cup in each top corner, and down both sides 2 to 8
 // bigger pockets (60 low, 75 high) that sink away and pop up in a new pattern after every ball. The back of every ring is a ramp.
 // Click a machine to play: the game fills the screen (the room's panels tuck away; 💬 or Enter brings the chat up, ☰ is the
-// menu), split into the hump and the board big across the top with depth and your end along the bottom (V: one deep view).
+// menu), in one full view up the lane from just behind your ball (V: a split screen, the board up top and your end below).
 // The power is a 15 step meter you set whenever you like (scroll wheel, the up and down keys, or drag on it).
 // A roll is three clicks: place the ball across your end, lock your aim (the arrow follows your mouse; swing it wide to whip
-// it off the walls), then stop the spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one kicks off the walls with it).
+// it off the walls), then stop the spin bar and it goes (a slow roll curls with the spin in slight slow motion; a hard one
+// kicks off the walls with it). The next ball comes out placed and aimed like the last one; B picks it up to place again.
 // Points burst up big and fly into your score in the corner. Everyone in the room sees every roll
 // (each ball's path is worked out the same way on every screen), and the best scores go up on the board on the back wall.
-// VERSION 1
+// VERSION 2
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, update, onValue, onDisconnect, push, query, orderByChild, limitToLast, runTransaction }
@@ -24,7 +25,7 @@ import { sfx } from '../sounds.js';
 // u runs across the lane (right is plus), v runs down it from your end, y is up.
 // Every screen runs these same steps from the same start, so everyone sees the same ball end up in the same hole.
 const W = 1.9, HALF = W / 2, R = 0.03;                   // lane width, and a ball's radius
-const Y0 = 0.80, SLOPE = 0.12, L = 2.2;                  // how high the lane starts, how much it climbs a meter, how long it is
+const Y0 = 0.80, SLOPE = 0.12, L = 1.6;                  // how high the lane starts, how much it climbs a meter, how long it is
 const HU = 0.30, KICK = 0.75;                            // the hump: how long, and how steep it is at the lip (the launch)
 const HUMP_TOP = Y0 + SLOPE * L + HU * (SLOPE + (KICK - SLOPE) / 2);
 const B0 = L + HU + 0.24, BL = 1.2, B1 = B0 + BL, TILT = 0.55;    // the target board: where it starts, how long, how steep
@@ -130,7 +131,7 @@ function stepBall(b, hit) {                              // one tiny step of a b
   if (b.on && b.v > L + HU && b.v < B0 && b.onT > 0.25) { b.res = { pts: 0, gutter: true }; return; }
   if (b.on && b.v < 0.5 && b.vv < 0) { b.res = { pts: 0, back: true }; return; }
   b.still = b.on && Math.hypot(b.vu, b.vv) < 0.05 ? (b.still || 0) + h : 0;
-  if (b.t > 14 || b.still > 1) b.res = { pts: 0, gutter: true };   // stuck somewhere (it never should be): it's out
+  if (b.t > 6 || b.still > 1) b.res = { pts: 0, gutter: true };   // still wandering round after six seconds, or stuck: it's out
 }
 
 // ---------- Where the machines stand: side by side, their backs against the back wall ----------
@@ -588,7 +589,8 @@ function updateLive(m, dt) {
       l.mesh.scale.setScalar(Math.max(0, 1 - l.sink * 2.5));
       if (l.sink > 0.4 && !l.gone) {
         l.mesh.visible = false; l.gone = true;
-        if (l.n + 1 < BALLS && m.data && m.data.g === l.g) showLayout(m, l.g, l.n + 1, true);   // new tiny rings for the next ball
+        if (l.b.res.back) { m.tray++; placeTray(m); }   // a ball that rolled back down the runway goes back in the channel: a redo
+        else if (l.n + 1 < BALLS && m.data && m.data.g === l.g) showLayout(m, l.g, l.n + 1, true);   // new tiny rings for the next ball
       }
       continue;
     }
@@ -614,7 +616,8 @@ function updateLive(m, dt) {
     if (b.res) {
       if (b.res.pts) { l.mesh.position.set(b.res.u, H(b.res.v) + R * 0.6, -b.res.v); sfx.skeeDrop(b.res.pts, k); popNumber(m, b.res.pts, b.res.u, b.res.v); }
       else sfx.skeeGutter(k);
-      if (l.mine) mineDone(m, b.res.pts);
+      if (l.mine && b.res.back) redo(m);
+      else if (l.mine) mineDone(m, b.res.pts);
     }
   }
   m.live = m.live.filter(l => !(l.gone && l.sink > 0.4));
@@ -683,7 +686,7 @@ const titleBig = document.createElement('div');
 titleBig.textContent = 'SKEE·BALL';
 titleBig.style.cssText = 'font-weight:bold;font-size:min(16vw,150px);letter-spacing:0.06em;color:#fff;text-shadow:0 0 18px #ff3fa8,0 0 50px #ff3fa8,0 0 90px #b36bff';
 const titleSmall = document.createElement('div');
-titleSmall.textContent = 'scroll: power   ·   click: place   ·   click: aim   ·   click: spin';
+titleSmall.textContent = 'scroll: power   ·   click: place   ·   click: aim   ·   click: spin   ·   B: pick the ball up';
 titleSmall.style.cssText = 'margin-top:14px;font-size:min(4vw,26px);color:#dffbff;text-shadow:0 0 12px #29e6ff;letter-spacing:0.12em';
 title.append(titleBig, titleSmall);
 document.body.appendChild(title);
@@ -752,7 +755,7 @@ gauge.width = 440; gauge.height = 250;
 gauge.style.cssText = 'position:fixed;left:14px;bottom:14px;width:330px;height:188px;z-index:25;display:none;touch-action:none;cursor:pointer';
 document.body.appendChild(gauge);
 const SPIN_TIME = 3.2, SEGS = 15, AIM_MAX = 0.5;   // the spin bar's trip across and back (seconds), the meter's segments, the widest aim (radians)
-const P_LOW = 0.2, P_HIGH = 0.75;                  // the meter's softest roll (just makes it onto the board) and its hardest
+const P_LOW = 0.19, P_HIGH = 0.66;                 // the meter's softest roll (just makes it onto the board) and its hardest
 const TACH_X = 220, TACH_Y = 236, TACH_R0 = 110, TACH_R1 = 168;   // the meter's middle and its inside and outside edges (on the gauge)
 let power = 7;                                     // the power you've set, in segments (1 to 15); it stays put between rolls
 const powerP = () => P_LOW + (power - 1) / (SEGS - 1) * (P_HIGH - P_LOW);
@@ -825,6 +828,7 @@ window.addEventListener('keydown', e => {
   if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
   if (k === 'enter') { showChat(true); e.preventDefault(); return; }
   if (k === 'v') { setMode(mode === 'split' ? 'deep' : 'split'); return; }
+  if (k === 'b') { const h = my.hand; if (h && h.stage !== 'place') { pickUp(h); sfx.skeeThump(0.3); } return; }
   if (k === 'escape') { const h = my.hand; if (h && h.stage !== 'place') back(h); else leave(); return; }
   if (!canSet()) return;
   if (k === 'arrowup' || k === 'w') { setPower(power + 1); e.preventDefault(); }
@@ -873,11 +877,14 @@ function laneX(m, u) {   // where a spot across your end of the lane is on the s
   return (p.x + 1) / 2 * window.innerWidth;
 }
 const U_MAX = HALF - 0.08;   // how far toward a wall you can place the ball
+let keep = null;             // where you placed your last ball and how you aimed it: the next ball comes out the same way
+let mouseX = 0;              // where the pointer is across the screen
 function readyBall(m) {   // your turn and nothing rolling: the next ball comes out of a channel onto the lane, ready to aim
   if (m.hand || m.tray <= 0 || rolling(m) || !mine(m) || (view && view.t < 1)) return;
   const mesh = freeBall(m);
   if (!mesh) return;
-  m.hand = { mesh, stage: 'place', t: 0, u: 0, aim: 0, spin: 0 };
+  m.hand = keep ? { mesh, stage: 'aim', t: 0, u: keep.u, aim: keep.aim, spin: 0, still: mouseX }   // placed and aimed like last time
+                : { mesh, stage: 'place', t: 0, u: 0, aim: 0, spin: 0 };
   m.tray--; placeTray(m);
   mesh.visible = true; placeHand(m.hand);
   m.g.add(aim);
@@ -885,10 +892,13 @@ function readyBall(m) {   // your turn and nothing rolling: the next ball comes 
 }
 function steer(h, e) {   // the pointer moving over the game slides the ball across, then swings the aim (until each is locked)
   if (h.stage === 'place') {
-    const x0 = laneX(my, -HALF), x1 = laneX(my, HALF);
-    h.u = Math.max(-U_MAX, Math.min(U_MAX, -HALF + (e.clientX - x0) / (x1 - x0) * W));
+    h.u = Math.max(-U_MAX, Math.min(U_MAX, (e.clientX / window.innerWidth - 0.5) * 2.4 * U_MAX));   // across the screen: wall to wall
     placeHand(h);
-  } else if (h.stage === 'aim') h.aim = Math.max(-1, Math.min(1, (e.clientX - laneX(my, h.u)) / (window.innerWidth * 0.32))) * AIM_MAX;
+  } else if (h.stage === 'aim') {
+    if (h.still != null && Math.abs(e.clientX - h.still) < 12) return;   // the aim stays as it was until you really move the mouse
+    h.still = null;
+    h.aim = Math.max(-1, Math.min(1, (e.clientX - laneX(my, h.u)) / (window.innerWidth * 0.32))) * AIM_MAX;
+  }
 }
 function next(h) {   // click one places the ball, click two locks the aim and starts the spin bar, click three stops it and it goes
   if (h.stage === 'place') { h.stage = 'aim'; sfx.skeeThump(0.4); }
@@ -897,9 +907,10 @@ function next(h) {   // click one places the ball, click two locks the aim and s
 }
 function back(h) {   // a step back: from the spin to the aim, or from the aim to placing the ball
   if (h.stage === 'spin') { h.stage = 'aim'; h.t = 0; h.spin = 0; }
-  else if (h.stage === 'aim') h.stage = 'place';
+  else if (h.stage === 'aim') pickUp(h);
   sfx.skeeWall(0.3);
 }
+function pickUp(h) { h.stage = 'place'; h.still = null; h.t = 0; h.spin = 0; }   // B (or a step back from aiming): pick the ball up to place it again
 function down(e) {
   const h = my && my.hand;
   if (!h || !mine(my)) return;
@@ -909,6 +920,7 @@ function down(e) {
   next(h);
 }
 function move(e) {
+  mouseX = e.clientX;
   const h = my && my.hand;
   if (!h || meterDrag || e.target !== renderer.domElement || (e.pointerType === 'touch' && !h.dragging)) return;
   steer(h, e);
@@ -922,6 +934,7 @@ function up(e) {
 function roll(m, h) {
   const d = m.data, n = BALLS - d.left;
   // everyone uses exactly the numbers that are sent, so their ball rolls the same as yours
+  keep = { u: h.u, aim: h.aim };
   const r = { n, g: d.g, by: myId, u: +h.u.toFixed(4), p: +powerP().toFixed(4), a: +h.aim.toFixed(4), s: +h.spin.toFixed(4), t: Date.now() };
   const l = launch(m, r);
   if (!l) return;
@@ -930,8 +943,15 @@ function roll(m, h) {
   m.rolling = (m.rolling || 0) + 1;
   update(ref(db, 'game/skee/m' + m.i), { left: m.myLeft, t: serverNow() }).catch(() => {});
   set(ref(db, 'game/skee/r' + m.i), r).catch(() => {});
-  m.seen = d.g + ':' + n;
+  m.seen = r.t;
   showAim(null);
+}
+function redo(m) {   // your ball rolled all the way back down the runway: it doesn't count, you get it back
+  m.rolling--;
+  m.myLeft++;
+  const d = m.data;
+  if (d && d.id === myId) update(ref(db, 'game/skee/m' + m.i), { left: m.myLeft, t: serverNow() }).catch(() => {});
+  opts.banner && opts.banner('↩ It came back! Roll it again', 2);
 }
 function mineDone(m, pts) {   // one of your balls finished: add up the score, and end the game after the last one
   m.score += pts;
@@ -961,7 +981,7 @@ function claim(m) {   // start a game on this machine (if nobody else is playing
     return { id: myId, name: S.myName, score: 0, left: BALLS, g: Date.now(), t: serverNow() };
   }).then(res => {
     if (!res.committed) { opts.banner && opts.banner(`${(res.snapshot.val() || {}).name || 'Someone'} is playing that one`, 3); if (!my) goFull(false); return; }
-    hideOver();
+    hideOver(); showTitle();   // the controls flash up once at the start of every game
     m.score = 0; m.rolling = 0; m.myLeft = BALLS;
     onDisconnect(r).update({ done: true });
     if (my !== m) enter(m);
@@ -977,14 +997,18 @@ const GOAL_BOX = [];
 for (const sd of [-1, 1]) GOAL_BOX.push(new THREE.Vector3(sd * 0.3, H(L + 0.2), -(L + 0.2)), new THREE.Vector3(sd * (HALF + 0.04), YB, -B0),
   new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
 let goalPts = [];
-// The other view (V switches): one deep view up the whole lane from just behind your end, your ball at the bottom and
-// the board at the top, like standing at a real machine.
-const DEEP_EYE = new THREE.Vector3(0, 1.42, 0.5), DEEP_LOOK = new THREE.Vector3(0, YB - 0.1, -(B0 - 0.6));
-const DEEP_BOX = [];
-for (const sd of [-1, 1]) DEEP_BOX.push(new THREE.Vector3(sd * 0.25, H(-0.02), 0.02), new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
-let deepPts = [];
-let mode = 'split';
-try { if (localStorage.getItem('skeeView') === 'deep') mode = 'deep'; } catch (e) {}
+// The full view (V switches to the split screen): one view up the whole lane from a few steps behind your ball, low down,
+// so the runway runs away from you and the board stands up big at the far end. It's fitted so the board reaches right
+// across the screen, from your ball at the bottom to the top of the board.
+const DEEP_EYE = new THREE.Vector3(0, 1.3, 2.6), DEEP_LOOK = new THREE.Vector3(0, YB, -(B0 - 0.3));
+const DEEP_BOX = [], DEEP_WIDE = [];
+for (const sd of [-1, 1]) {
+  DEEP_BOX.push(new THREE.Vector3(sd * 0.25, H(-0.02), 0.04), new THREE.Vector3(sd * (HALF + 0.04), H(B1) + BACK_H * 0.5, -B1));
+  DEEP_WIDE.push(new THREE.Vector3(sd * (HALF + 0.04), YB, -B0));
+}
+let deepPts = [], deepWide = [];
+let mode = 'deep';   // the full view up the lane, unless you've switched to the split screen
+try { if (localStorage.getItem('skeeView') === 'split') mode = 'split'; } catch (e) {}
 function setMode(md) {
   mode = md;
   try { localStorage.setItem('skeeView', md); } catch (e) {}
@@ -1001,20 +1025,28 @@ function placeCams(m) {
   }
   goalPts = GOAL_BOX.map(p => m.g.localToWorld(p.clone()));
   deepPts = DEEP_BOX.map(p => m.g.localToWorld(p.clone()));
+  deepWide = DEEP_WIDE.map(p => m.g.localToWorld(p.clone()));
 }
 const cp = new THREE.Vector3();
 function pageBits() { return [document.querySelector('#ui h1'), document.getElementById('hint')].filter(Boolean); }
-function frameGoal(cam, aspect, pts = goalPts) {   // a view that, from where it stands, is just big enough to hold all these points
+function spread(cam, pts) {   // how far across and up these points reach, as seen from the camera
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-  cam.updateMatrixWorld();
   for (const p of pts) {
     cp.copy(p).applyMatrix4(cam.matrixWorldInverse);
     const x = cp.x / -cp.z, y = cp.y / -cp.z;
     x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
   }
-  const pad = 0.015, mx = (x0 + x1) / 2, my2 = (y0 + y1) / 2;
-  let hw = (x1 - x0) / 2 + pad, hh = (y1 - y0) / 2 + pad;
+  return { x0, x1, y0, y1 };
+}
+function frameGoal(cam, aspect, pts = goalPts, wide = null) {   // a view, from where the camera stands, that holds all these points
+  cam.updateMatrixWorld();
+  const { x0, x1, y0, y1 } = spread(cam, pts), pad = 0.015;
+  let mx = (x0 + x1) / 2, my2 = (y0 + y1) / 2, hw = (x1 - x0) / 2 + pad, hh = (y1 - y0) / 2 + pad;
   if (hw / hh < aspect) hw = hh * aspect; else hh = hw / aspect;   // the screen's leftover room goes to the sides (or top and bottom)
+  if (wide) {   // better: just as wide as these, edge to edge, if everything still fits top to bottom (the near walls run off the sides)
+    const w = spread(cam, wide), fw = (w.x1 - w.x0) / 2, fh = fw / aspect;
+    if (2 * fh >= (y1 - y0) + 2 * pad) { mx = (w.x0 + w.x1) / 2; hw = fw; hh = fh; my2 = y1 + pad - fh; }
+  }
   const n = cam.near;
   cam.aspect = aspect;
   cam.projectionMatrix.makePerspective((mx - hw) * n, (mx + hw) * n, (my2 + hh) * n, (my2 - hh) * n, n, cam.far);
@@ -1032,7 +1064,7 @@ function renderSplit() {   // draws the two views; false when you're not playing
   for (const el of pageBits()) el.style.visibility = 'hidden';   // the room's name and walking tips aren't needed while you play
   hud.style.display = 'block';
   if (mode === 'deep') {   // the one deep view
-    frameGoal(deepCam, w / h, deepPts);
+    frameGoal(deepCam, w / h, deepPts, deepWide);
     renderer.render(scene, deepCam);
     return true;
   }
@@ -1050,7 +1082,6 @@ function renderSplit() {   // draws the two views; false when you're not playing
 function enter(m) {
   my = m;
   playMode(true);
-  showTitle();
   placeCams(m);
   const to = nearCam.position.clone(), toQ = nearCam.quaternion.clone();   // glide down to your end, then the screen splits
   view = { t: 0, fromP: camera.position.clone(), fromQ: camera.quaternion.clone(), to, toQ, fromF: camera.fov };
@@ -1091,7 +1122,6 @@ machines.forEach(m => {
       m.tray = m.data.left;
       const n = BALLS - m.data.left;
       showLayout(m, m.data.g, n, !!m.lay);
-      m.seen = m.data.g + ':' + (n - 1);
       if (m.data.left === BALLS) sfx.skeePour(0, near(m));
     }
     if (!playing && !m.live.length && !m.hand) m.tray = BALLS;   // between games the channels sit full under their covers
@@ -1102,9 +1132,8 @@ machines.forEach(m => {
     const r = s.val();
     if (first) { first = false; return; }   // an old roll from before you came in
     if (!r || r.by === myId || !m.data || r.g !== m.data.g) return;
-    const key = r.g + ':' + r.n;
-    if (key === m.seen) return;
-    m.seen = key;
+    if (r.t === m.seen) return;   // (each roll is known by when it was rolled: a redo is the same ball number again)
+    m.seen = r.t;
     const num = (x, lo, hi) => Math.max(lo, Math.min(hi, +x || 0));
     launch(m, { n: Math.round(num(r.n, 0, BALLS - 1)), g: r.g, u: num(r.u, -HALF + R, HALF - R), p: num(r.p, 0, 1),
                 a: num(r.a, -AIM_MAX, AIM_MAX), s: num(r.s, -1, 1) });
