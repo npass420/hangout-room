@@ -1,9 +1,11 @@
 // =====================================================================
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, three tables
-// (Checkers, Chess, Othello) each under its own small warm ring light, a window and a big red dot-matrix clock.
+// (Checkers, Chess, Othello) each under its own small ring light (warm gold, and a gentle crimson over checkers), a window and
+// a big red dot-matrix clock.
 // Sit in a chair to play that side; everyone else can walk up and watch.
 // The games live in boardgames.js. Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
+// VERSION 2
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -364,12 +366,16 @@ function chain(from, to) {   // a gold chain between two points: links end to en
   }
   return links;
 }
-const glowMats = [[1, 1.0, 0xfff0c8], [2.2, 0.42, 0xffc860], [4.5, 0.16, 0xffc860], [9, 0.06, 0xffc860]]   // [size, opacity, color]
+// Each table's light has its own color: warm gold, and a gentle crimson over the checkers table (to go with its rubies)
+const RING_COLORS = { checkers: { core: 0xffb4bc, halo: 0xd8142e, lamp: 0xff9aa0 } };
+const RING_GOLD = { core: 0xfff0c8, halo: 0xffc860, lamp: 0xffc977 };
+const glowSet = ({ core, halo }) => [[1, 1.0, core], [2.2, 0.42, halo], [4.5, 0.16, halo], [9, 0.06, halo]]   // [size, opacity, color]
   .map(([k, op, col]) => [k, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: op, depthWrite: false,
     blending: THREE.AdditiveBlending, toneMapped: false })]);
 const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
 const rimMat = std(0xc9a227, 0.3, { metalness: 0.9, envMap, envMapIntensity: 0.8, side: THREE.DoubleSide });   // gold, seen from both sides
-for (const [tx, tz] of Object.values(TABLES)) {
+for (const [key, [tx, tz]] of Object.entries(TABLES)) {
+  const tint = RING_COLORS[key] || RING_GOLD;
   const ring = new THREE.Group();
   ring.position.set(tx, RING_Y, tz);
   scene.add(ring);
@@ -382,7 +388,7 @@ for (const [tx, tz] of Object.values(TABLES)) {
     rim.position.y = 0.012;
     ring.add(rim);
   }
-  for (const [k, mat] of glowMats) {
+  for (const [k, mat] of glowSet(tint)) {
     const m = new THREE.Mesh(new THREE.TorusGeometry(RING_R, 0.008 * k, 12, 96), mat);
     m.rotation.x = Math.PI / 2;
     ring.add(m);
@@ -401,7 +407,7 @@ for (const [tx, tz] of Object.values(TABLES)) {
     clip.position.set(rx, RING_Y + 0.045, rz);
     scene.add(clip);
   }
-  const lamp = new THREE.SpotLight(0xffc977, 15, 6, 0.55, 0.7, 1.2);   // the light it throws down onto the table
+  const lamp = new THREE.SpotLight(tint.lamp, 15, 6, 0.55, 0.7, 1.2);   // the light it throws down onto the table
   lamp.position.set(tx, RING_Y - 0.02, tz);
   lamp.target.position.set(tx, TABLE_Y, tz);
   if (!PHONE) { lamp.castShadow = true; lamp.shadow.mapSize.set(1024, 1024); lamp.shadow.bias = -0.0005; }

@@ -4,6 +4,8 @@
 // Alone at a table? "Play alone" lets you play both sides; someone who sits across from you can "Join game" and take one.
 // Click one of your pieces to see where it can go (the squares light up), then click a square to move.
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
+// Checkers is played with poison dart frogs (red and blue) on crimson and black marble, at a table set with flickering rubies.
+// VERSION 2
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -259,8 +261,6 @@ const knightHead = (() => {   // a horse's head, cut out and given some thicknes
   return g;
 })();
 
-const ckGeo = new THREE.CylinderGeometry(0.038, 0.04, 0.014, 40);
-const ckRidge = new THREE.TorusGeometry(0.03, 0.0025, 8, 40);
 const DISC_R = CELL * 0.42, DISC_H = 0.006;          // a disc fits inside its square, with a little gap to the next one
 const discGeo = new THREE.CylinderGeometry(DISC_R, DISC_R, DISC_H, 40);
 
@@ -271,11 +271,149 @@ export function setRoomEnv(tex) { for (const m of shiny) { m.envMap = tex; m.nee
 export function addShiny(m) { shiny.push(m); return m; }
 
 // =====================================================================
+// The checkers: poison dart frog figurines, glossy black enamel with the team's color painted on (round blue spots, or
+// red patches with red toe tips), big shiny black eyes, sitting on a glossy black base with a thin rim in the team's color.
+// A king wears a little gold crown. Each frog's shape is many rounded parts merged into one, so they're light to draw.
+// =====================================================================
+
+// ---- merging simple shapes into one geometry, with a tag per part (0 body, 1 toe tip, 2 leg) ----
+function mergeParts(parts) {
+  let nv = 0, ni = 0;
+  for (const { g } of parts) { nv += g.attributes.position.count; ni += g.index ? g.index.count : g.attributes.position.count; }
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), tag = new Float32Array(nv), idx = new Uint32Array(ni);
+  let vo = 0, io = 0;
+  for (const { g, t } of parts) {
+    const p = g.attributes.position.array, n = g.attributes.normal.array, c = g.attributes.position.count;
+    pos.set(p, vo * 3); nor.set(n, vo * 3); tag.fill(t, vo, vo + c);
+    if (g.index) { const ix = g.index.array; for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + vo; io += ix.length; }
+    else { for (let i = 0; i < c; i++) idx[io + i] = vo + i; io += c; }
+    vo += c;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('tag', new THREE.BufferAttribute(tag, 1));
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  return out;
+}
+const FM4 = new THREE.Matrix4(), FQ = new THREE.Quaternion(), FE = new THREE.Euler(), FS = new THREE.Vector3(), FP = new THREE.Vector3();
+function ell(rx, ry, rz, x, y, z, ax = 0, ay = 0, az = 0, seg = 28) {   // a squashed sphere, turned and placed
+  const g = new THREE.SphereGeometry(1, seg, Math.round(seg * 0.7));
+  g.applyMatrix4(FM4.compose(FP.set(x, y, z), FQ.setFromEuler(FE.set(ax, ay, az)), FS.set(rx, ry, rz)));
+  return g;
+}
+function limb(a, b, r) {   // a rounded rod from point a to point b
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A), len = d.length();
+  const g = new THREE.CapsuleGeometry(r, len, 6, 14);
+  g.applyMatrix4(FM4.compose(A.clone().add(B).multiplyScalar(0.5), FQ.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()), FS.set(1, 1, 1)));
+  return g;
+}
+
+// ---- the frog's shape (made for 10 cm squares, facing -z, sitting on its base top at y = 0.012) ----
+const BASE_TOP = 0.012;
+function frogBody() {
+  const parts = [], add = (g, t = 0) => parts.push({ g, t });
+  add(ell(0.0195, 0.0155, 0.027, 0, 0.031, 0.004, 0.35));               // the body, front raised
+  add(ell(0.0175, 0.0118, 0.016, 0, 0.0405, -0.019, 0.12));             // the head
+  add(ell(0.0118, 0.0078, 0.011, 0, 0.0372, -0.031, 0.1));              // the snout
+  for (const sd of [-1, 1]) {
+    add(ell(0.0078, 0.0078, 0.0078, sd * 0.0105, 0.0462, -0.0215));      // the bulge round each eye
+    add(ell(0.0102, 0.0112, 0.0172, sd * 0.0168, 0.0225, 0.012, 0, sd * 0.25), 2);   // the folded thigh
+    add(ell(0.0058, 0.0058, 0.0155, sd * 0.0222, 0.0158, 0.0005, -0.15, sd * 0.35), 2);   // the shin
+    add(ell(0.0052, 0.0028, 0.0115, sd * 0.0245, BASE_TOP + 0.0018, -0.0115, 0, sd * 0.25), 2);   // the hind foot
+    for (const k of [-1, 0, 1])                                           // its long toes, splayed
+      add(ell(0.0028, 0.0022, 0.0028, sd * (0.0245 + k * 0.0042) + sd * 0.002, BASE_TOP + 0.0021, -0.022 - Math.abs(k) * -0.002), 1);
+    add(limb([sd * 0.011, 0.0285, -0.02], [sd * 0.0162, BASE_TOP + 0.0035, -0.032], 0.0039), 2);   // the front leg
+    for (const k of [-1.5, -0.5, 0.5, 1.5]) {                             // its fingers, fanned out
+      const a = k * 0.45 - sd * 0.15, x = sd * 0.0162 + Math.sin(a) * 0.0075, z = -0.032 - Math.cos(a) * 0.0075;
+      add(limb([sd * 0.0162, BASE_TOP + 0.0025, -0.033], [x, BASE_TOP + 0.002, z], 0.0016), 2);
+      add(ell(0.0024, 0.0019, 0.0024, x, BASE_TOP + 0.0021, z), 1);
+    }
+  }
+  return mergeParts(parts);
+}
+function eyesGeo() {
+  return mergeParts([-1, 1].map(sd => ({ g: ell(0.0068, 0.0068, 0.0068, sd * 0.0118, 0.0472, -0.0232, 0, 0, 0, 24), t: 0 })));
+}
+function crownGeo() {   // a little gold crown, five points round a band
+  const parts = [{ g: new THREE.CylinderGeometry(0.0085, 0.0078, 0.0045, 28, 1, true).translate(0, 0.0545, -0.016), t: 0 }];
+  parts.push({ g: new THREE.TorusGeometry(0.0082, 0.0011, 8, 28).rotateX(Math.PI / 2).translate(0, 0.0525, -0.016), t: 0 });
+  for (let i = 0; i < 5; i++) {
+    const a = i / 5 * Math.PI * 2;
+    parts.push({ g: new THREE.ConeGeometry(0.0022, 0.0062, 10).translate(Math.cos(a) * 0.0078, 0.0598, -0.016 + Math.sin(a) * 0.0078), t: 0 });
+    parts.push({ g: new THREE.SphereGeometry(0.0013, 10, 8).translate(Math.cos(a) * 0.0078, 0.0632, -0.016 + Math.sin(a) * 0.0078), t: 0 });
+  }
+  return mergeParts(parts);
+}
+const FROG = frogBody(), EYES = eyesGeo(), CROWN = crownGeo();
+const FROG_BASE = new THREE.CylinderGeometry(0.0355, 0.0365, BASE_TOP, 48).translate(0, BASE_TOP / 2, 0);
+const FROG_RIM = new THREE.TorusGeometry(0.0366, 0.0014, 10, 48).rotateX(Math.PI / 2).translate(0, 0.0045, 0);
+
+// ---- the glossy enamel skin: black, with the team's color painted on in spots (blue) or patches (red) ----
+const SKIN = `
+  float fh(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  vec3 fh3(vec3 p) { return fract(sin(vec3(dot(p, vec3(127.1, 311.7, 74.7)), dot(p, vec3(269.5, 183.3, 246.1)), dot(p, vec3(113.5, 271.9, 124.6)))) * 43758.5453); }
+  float fn(vec3 p) { vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(fh(i), fh(i + vec3(1,0,0)), f.x), mix(fh(i + vec3(0,1,0)), fh(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(fh(i + vec3(0,0,1)), fh(i + vec3(1,0,1)), f.x), mix(fh(i + vec3(0,1,1)), fh(i + vec3(1,1,1)), f.x), f.y), f.z); }
+  float spots(vec3 p) {   // round spots: the nearest of a scatter of points, each spot its own size
+    vec3 i = floor(p), f = fract(p); float m = 1.0;
+    for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) for (int z = -1; z <= 1; z++) {
+      vec3 o = vec3(x, y, z), r = fh3(i + o);
+      m = min(m, length(o + r - f) / (0.28 + 0.2 * fh(i + o + 3.1)));
+    }
+    return 1.0 - smoothstep(0.92, 1.0, m);
+  }`;
+function skinMat(team, seed) {
+  const m = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.04 });
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uSeed = { value: seed };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float tag; varying float vTag; varying vec3 vObj;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTag = tag; vObj = position;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uSeed; varying float vTag; varying vec3 vObj;' + SKIN)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec3 q = vObj * 100.0 + uSeed * 7.3;
+        float k;
+        ${team === 'blue'
+          ? `k = spots(q * 0.9);
+             k = max(k, step(1.5, vTag) * smoothstep(0.35, 0.6, fn(q * 0.55)));          // the legs mostly blue, mottled black
+             k = max(k, smoothstep(0.026, 0.02, vObj.y) * step(vTag, 0.5) * smoothstep(0.3, 0.55, fn(q * 0.4)));   // and the belly
+             vec3 col = vec3(0.01, 0.16, 1.0);`
+          : `float n = fn(q * 0.35) * 0.65 + fn(q * 0.9) * 0.35;
+             k = smoothstep(0.56, 0.6, n + (vObj.y - 0.03) * 4.0);                      // red patches, more on the top
+             k = max(k, step(0.5, vTag) * step(vTag, 1.5));                              // and red tips on every toe
+             vec3 col = vec3(0.62, 0.01, 0.025);`}
+        float speck = 0.85 + 0.15 * fh(floor(vObj * 2500.0));                           // a fine speckle in the enamel
+        diffuseColor.rgb = mix(vec3(0.012, 0.012, 0.016), col * speck, k);
+      }`);
+  };
+  m.customProgramCacheKey = () => 'frog' + team;
+  return m;
+}
+const eyeMat = new THREE.MeshPhysicalMaterial({ color: 0x050506, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.02 });
+const baseMat = new THREE.MeshPhysicalMaterial({ color: 0x0a0a0c, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.05 });
+const crownGold = new THREE.MeshStandardMaterial({ color: 0xe8b84a, metalness: 1, roughness: 0.22 });
+const frogRim = { blue: new THREE.MeshStandardMaterial({ color: 0x1e6bff, roughness: 0.3, emissive: 0x0a2a80, emissiveIntensity: 0.4 }),
+                 red: new THREE.MeshStandardMaterial({ color: 0xd8141e, roughness: 0.3, emissive: 0x500006, emissiveIntensity: 0.4 }) };
+const skins = { blue: [0, 1, 2, 3].map(i => skinMat('blue', i * 1.7 + 0.3)), red: [0, 1, 2, 3].map(i => skinMat('red', i * 2.3 + 0.9)) };
+
+function makeFrog(team, n = 0, king = false) {
+  const g = new THREE.Group();
+  const add = (geo, mat) => { const o = new THREE.Mesh(geo, mat); o.castShadow = true; g.add(o); return o; };
+  add(FROG_BASE, baseMat); add(FROG_RIM, frogRim[team]);
+  add(FROG, skins[team][n % 4]); add(EYES, eyeMat);
+  if (king) add(CROWN, crownGold);
+  return g;
+}
+for (const m of [eyeMat, baseMat, crownGold, frogRim.blue, frogRim.red, ...skins.blue, ...skins.red]) { m.envMapIntensity = 1; shiny.push(m); }   // (they take the room's reflection too)
+
+// =====================================================================
 // The three games
 // =====================================================================
 const DEFS = {
   checkers: {
-    title: 'Checkers', sides: { 1: 'Red', 2: 'Black' }, squares: ['#9e1620', '#0f0f12'],
+    title: 'Checkers', sides: { 1: 'Red', 2: 'Blue' }, squares: ['#9e1620', '#0f0f12'],
     owner: ckOwner, allMoves: ckMoves, movesFrom: (st, sq) => ckMoves(st, st.turn).filter(m => m.f === sq), play: ckPlay,
     fresh: () => ({ board: CK_START, chain: -1 }),
     mats: () => [null, gloss(0xa3121c, 0.2), gloss(0x131316, 0.16)]
@@ -311,6 +449,100 @@ function boardTexture(d) {
   return t;
 }
 
+// ---------- The checkers table: a round slab of polished black marble, its red veins softly glowing, with the squares
+// set into it in crimson and black marble (every square cut from a different part of the stone), and a ring of rubies
+// set into the wood round the table's edge, each flickering gently like a candle inside it ----------
+const SLAB_R = 0.5, SLAB_H = 0.02;                      // the marble slab (the table top is 0.62 round)
+const RUBY_R = 0.565, RUBIES = 24;                      // the ring of rubies, between the slab and the table's edge
+function loadImage(file) {
+  return new Promise(done => { const im = new Image(); im.onload = () => done(im); im.onerror = () => done(null); im.src = new URL(file, import.meta.url).href; });
+}
+function veinGlow(c) {   // keep only the bright red veins of a marble picture (everything else goes dark): what glows
+  const g = c.getContext('2d'), img = g.getImageData(0, 0, c.width, c.height), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], k = Math.max(0, Math.min(1, (r - Math.max(d[i + 1], d[i + 2]) * 1.6 - 40) / 120));
+    d[i] = r * k; d[i + 1] = d[i + 1] * k * 0.6; d[i + 2] = d[i + 2] * k * 0.6;
+  }
+  g.putImageData(img, 0, 0);
+}
+function canvasPair(size) {
+  const make = () => { const c = document.createElement('canvas'); c.width = c.height = size; return c; };
+  return [make(), make()];
+}
+function texOf(c) { const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t; }
+function marbleTable(G, goldMat) {
+  const slabTop = gloss(0x111114, 0.12, { emissive: 0xffffff, emissiveIntensity: 0 });
+  const slabSide = gloss(0x050506, 0.15);
+  const slab = new THREE.Mesh(new THREE.CylinderGeometry(SLAB_R, SLAB_R, SLAB_H, 128), [slabSide, slabTop, slabSide]);
+  slab.position.y = TABLE_Y + SLAB_H / 2; slab.castShadow = true; slab.receiveShadow = true;
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(SLAB_R, 0.0028, 10, 160), goldMat);   // a thin gold rim round the slab
+  rim.rotation.x = Math.PI / 2; rim.position.y = TABLE_Y + SLAB_H;
+  G.group.add(slab, rim);
+  G.veins = [slabTop, G.board.material];
+  // the marble, once both pictures are in
+  Promise.all([loadImage('redmarble.jpg'), loadImage('blackmarble.jpg')]).then(([red, black]) => {
+    if (!red || !black) return;
+    const [tc, te] = canvasPair(1024);   // the slab: one big piece of the black marble
+    tc.getContext('2d').drawImage(black, (black.width - black.height) / 2, 0, black.height, black.height, 0, 0, 1024, 1024);
+    te.getContext('2d').drawImage(tc, 0, 0); veinGlow(te);
+    Object.assign(slabTop, { map: texOf(tc), emissiveMap: texOf(te), color: new THREE.Color(0xffffff), emissiveIntensity: 0.45 });
+    slabTop.needsUpdate = true;
+    const [bc, be] = canvasPair(2048), s = 256, g = bc.getContext('2d');   // the squares: a different piece of stone in each
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) {
+      const im = (r + k) % 2 ? black : red, cs = Math.min(im.width, im.height) * (0.24 + rnd() * 0.1);
+      g.drawImage(im, rnd() * (im.width - cs), rnd() * (im.height - cs), cs, cs, k * s, r * s, s, s);
+    }
+    const ge = be.getContext('2d');
+    ge.drawImage(bc, 0, 0); veinGlow(be);
+    ge.fillStyle = '#000';   // (only the black squares' veins glow)
+    for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) if ((r + k) % 2 === 0) ge.fillRect(k * s, r * s, s, s);
+    const m = G.board.material;
+    Object.assign(m, { color: new THREE.Color(0xd8d0d0), map: texOf(bc), emissive: new THREE.Color(0xffffff), emissiveMap: texOf(be), emissiveIntensity: 0.45, roughness: 0.08 });
+    m.needsUpdate = true;
+  });
+  // the rubies: faceted domes set into the wood in little gold settings, each with a soft red glow round it
+  const gemGeo = new THREE.SphereGeometry(0.0105, 8, 3, 0, Math.PI * 2, 0, Math.PI / 2); gemGeo.scale(1, 0.62, 1);
+  const glowTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(220,10,30,1)'); grd.addColorStop(0.3, 'rgba(150,0,18,0.5)'); grd.addColorStop(1, 'rgba(90,0,10,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  })();
+  const glowGeo = new THREE.PlaneGeometry(0.075, 0.075); glowGeo.rotateX(-Math.PI / 2);
+  const bezels = new THREE.InstancedMesh(new THREE.TorusGeometry(0.0112, 0.0016, 6, 24).rotateX(Math.PI / 2), goldMat, RUBIES);
+  G.rubies = [];
+  const mtx = new THREE.Matrix4();
+  for (let i = 0; i < RUBIES; i++) {
+    const a = (i + 0.5) / RUBIES * Math.PI * 2, x = Math.cos(a) * RUBY_R, z = Math.sin(a) * RUBY_R;
+    const mat = new THREE.MeshPhysicalMaterial({ color: 0x5a000c, emissive: 0xc0001c, emissiveIntensity: 0.6, roughness: 0.06,
+      clearcoat: 1, clearcoatRoughness: 0.02, flatShading: true, envMapIntensity: 1.2 });
+    shiny.push(mat);
+    const gem = new THREE.Mesh(gemGeo, mat);
+    gem.position.set(x, TABLE_Y + 0.0004, z); gem.rotation.y = a * 3;
+    const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false, opacity: 0.5 }));
+    glow.position.set(x, TABLE_Y + 0.0012, z);
+    bezels.setMatrixAt(i, mtx.makeTranslation(x, TABLE_Y + 0.0006, z));
+    G.group.add(gem, glow);
+    G.rubies.push({ mat, glow: glow.material, p1: Math.random() * 6.3, p2: Math.random() * 6.3, s1: 0.7 + Math.random() * 0.6, s2: 2.1 + Math.random() * 1.4, f: 0.5 });
+  }
+  G.group.add(bezels);
+}
+function updateMarble(G, dt) {   // the rubies flickering, each on its own, and the marble's veins breathing slowly
+  G.time = (G.time || 0) + dt;
+  const t = G.time;
+  for (const r of G.rubies) {
+    r.f += (Math.random() - 0.5) * dt * 3; r.f = Math.max(0.2, Math.min(0.8, r.f));   // a candle's little random wander
+    const k = Math.max(0, Math.min(1.2, 0.35 + 0.18 * Math.sin(t * r.s1 + r.p1) + 0.08 * Math.sin(t * r.s2 + r.p2) + r.f * 0.45));
+    r.mat.emissiveIntensity = 0.25 + k * 0.9;
+    r.glow.opacity = 0.1 + k * 0.4;
+  }
+  const v = 0.4 + 0.08 * Math.sin(t * 0.5);
+  for (const m of G.veins) if (m.emissiveMap) m.emissiveIntensity = v;
+}
 function makeGame(key, x, z, frameMat, goldMat) {
   const d = DEFS[key];
   const G = { key, ...d, st: null, sel: -1, targets: [], pendingPromo: null, anim: null, prevTurnMine: false, flips: [],
@@ -319,16 +551,20 @@ function makeGame(key, x, z, frameMat, goldMat) {
   G.group.position.set(x, 0, z);
   scene.add(G.group);
   G.pieceMats = d.mats();
-  // The board: a dark wood frame, a thin gold edge, and the polished squares
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.05, 0.02, HALF * 2 + 0.05), frameMat);
-  frame.position.y = TABLE_Y + 0.01; frame.castShadow = true;
+  // The board: a dark wood frame (checkers: a round slab of black marble), a thin gold edge, and the polished squares
   const edge = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.01, HALF * 2 + 0.01), goldMat);
   edge.rotation.x = -Math.PI / 2; edge.position.y = TOP - 0.0006;
   const board = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xffffff, 0.1, { map: boardTexture(d) }));
   board.rotation.x = -Math.PI / 2; board.position.y = TOP;
   board.userData.game = key;
   G.board = board;
-  G.group.add(frame, edge, board, G.pieceLayer);
+  if (key === 'checkers') marbleTable(G, goldMat);
+  else {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.05, 0.02, HALF * 2 + 0.05), frameMat);
+    frame.position.y = TABLE_Y + 0.01; frame.castShadow = true;
+    G.group.add(frame);
+  }
+  G.group.add(edge, board, G.pieceLayer);
   // Highlights: the last move, your selected piece, a king in check, and dots where you can go
   const flat = (color, opacity) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
@@ -406,12 +642,10 @@ export function stand(key, side) {
 function makePiece(G, ch, sq) {
   const who = G.owner(ch), mat = G.pieceMats[who], g = new THREE.Group();
   const add = (geo, m, y = 0) => { const o = new THREE.Mesh(geo, m); o.position.y = y; o.castShadow = true; g.add(o); return o; };
-  if (G.key === 'checkers') {
-    const king = ch === 'R' || ch === 'W';
-    for (let i = 0; i < (king ? 2 : 1); i++) {
-      add(ckGeo, mat, 0.007 + i * 0.0145);
-      const ridge = add(ckRidge, who === 2 ? ridgeMat : mat, 0.0142 + i * 0.0145); ridge.rotation.x = Math.PI / 2; ridge.castShadow = false;
-    }
+  if (G.key === 'checkers') {   // a frog, facing the other player (red sits on the + side, so it faces -z)
+    const f = makeFrog(who === 1 ? 'red' : 'blue', 0, ch === 'R' || ch === 'W');
+    f.rotation.y = who === 1 ? 0 : Math.PI;
+    g.add(f);
   } else {
     const up = ch.toUpperCase();
     if (up === 'N') {
@@ -427,7 +661,6 @@ function makePiece(G, ch, sq) {
   g.traverse(o => { if (o.isMesh) { o.userData.game = G.key; o.userData.sq = sq; } });
   return g;
 }
-const ridgeMat = std(0x8d8d96, 0.25, { metalness: 0.6 });   // a silvery ring so black checkers show on black squares
 function rebuildPieces(G) {
   if (G.key === 'othello') return;
   G.pieceLayer.clear();
@@ -456,6 +689,12 @@ function rebuildPieces(G) {
       const p = makePiece(G, ch, 0);
       p.traverse(o => { if (o.isMesh) { delete o.userData.sq; delete o.userData.game; } });
       const side = who === 1 ? 1 : -1, col = Math.floor(i / 8), row = i % 8;
+      if (G.key === 'checkers') {   // taken frogs sit in a row on the marble, in front of the player who lost them
+        p.scale.setScalar(SCALE * 0.55);
+        p.position.set(side * (i - 5.5) * 0.034, TABLE_Y + SLAB_H, side * (HALF + 0.055));
+        G.pieceLayer.add(p);
+        return;
+      }
       p.scale.setScalar(SCALE * 0.6);
       p.position.set(side * (HALF + 0.07 + col * 0.045), TABLE_Y, side * (HALF - 0.035 - row * 0.07));
       G.pieceLayer.add(p);
@@ -748,6 +987,7 @@ export function gameAt(key) { return GAMES[key]; }
 // ---------- Every frame: pieces sliding and discs flipping ----------
 export function updateGames(dt) {
   for (const G of Object.values(GAMES)) {
+    if (G.rubies) updateMarble(G, dt);
     const a = G.anim;
     if (a && a.obj) {
       a.t += dt;
