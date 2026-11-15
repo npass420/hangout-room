@@ -1,4 +1,4 @@
-// >>>>> START OF FILE 1 of 1: table/boardgames.js (1222 lines) <<<<<
+// >>>>> START OF FILE 1 of 1: table/boardgames.js (1264 lines) <<<<<
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
@@ -7,8 +7,9 @@
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
 // Checkers is played with poison dart frogs (red and blue) on crimson and black marble, at a table set with flickering rubies.
 // The Othello table is one round slab of black marble with glowing gold veins, ringed with glowing amber stones in gold,
-// and its board is 64 crystal tiles, milky white and clear icy crystal, in a raised frame of polished onyx.
-// VERSION 5
+// and its board is 64 crystal tiles, milky white and clear icy crystal, in a raised frame of polished onyx. Its pieces are
+// black enamel discs trimmed in gold with a glowing jewel in the middle: yellow for one player, red for the other.
+// VERSION 6
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -197,9 +198,9 @@ function chPlay(st, m) {
 const SQNAME = sq => 'abcdefgh'[rc(sq)[1]] + (8 - rc(sq)[0]);
 
 // =====================================================================
-// Othello rules: Black moves first; place a disc so it traps a line of the other color and they all flip.
+// Othello rules: Yellow moves first; place a disc so it traps a line of the other color and they all turn your color.
 // No move? You pass. Nobody can move? Most discs wins.
-// Board: 64 letters, '.' empty, 'b' black, 'w' white
+// Board: 64 letters, '.' empty, 'b' yellow, 'w' red (the letters are from when the discs were black and white)
 // =====================================================================
 const OT_START = (() => { const b = Array(64).fill('.'); b[27] = 'w'; b[36] = 'w'; b[28] = 'b'; b[35] = 'b'; return b.join(''); })();
 function otOwner(ch) { return ch === 'b' ? 1 : ch === 'w' ? 2 : 0; }
@@ -264,8 +265,28 @@ const knightHead = (() => {   // a horse's head, cut out and given some thicknes
   return g;
 })();
 
-const DISC_R = CELL * 0.42, DISC_H = 0.006;          // a disc fits inside its square, with a little gap to the next one
-const discGeo = new THREE.CylinderGeometry(DISC_R, DISC_R, DISC_H, 40);
+// ---- the Othello discs: chunky black enamel with rounded edges, a gold band round the side, a thin gold ring inlaid on
+// top, and a dished middle holding a glowing jewel dome in a gold bezel. The jewel is yellow or red for the two players. ----
+const DISC_R = CELL * 0.42, DISC_H = 0.009;          // a disc fits inside its square, with a little gap to the next one
+const DISC_Y = TOP + 0.0003;                         // where a disc sits (its underside, just on the tiles)
+const discBodyGeo = lathe([[0, 0], [DISC_R * 0.94, 0], [DISC_R, 0.0012], [DISC_R, 0.0068], [DISC_R * 0.97, 0.0084], [DISC_R * 0.9, DISC_H],
+  [DISC_R * 0.62, DISC_H], [DISC_R * 0.57, 0.0082], [0, 0.0082]]);
+const discGoldGeo = mergeParts([
+  { g: new THREE.TorusGeometry(DISC_R + 0.0002, 0.0009, 8, 48).rotateX(Math.PI / 2).translate(0, 0.0034, 0), t: 0 },   // the band round the side
+  { g: new THREE.TorusGeometry(DISC_R * 0.76, 0.0006, 8, 48).rotateX(Math.PI / 2).translate(0, DISC_H, 0), t: 0 },     // the ring on top
+  { g: new THREE.TorusGeometry(DISC_R * 0.42, 0.0012, 8, 40).rotateX(Math.PI / 2).translate(0, 0.0084, 0), t: 0 }      // the jewel's bezel
+]);
+const jewelGeo = new THREE.SphereGeometry(DISC_R * 0.4, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.65, 1).translate(0, 0.0082, 0);
+const JEWEL = { 1: { color: new THREE.Color(0x8a5a00), glow: new THREE.Color(0xffb300) },    // yellow
+                2: { color: new THREE.Color(0x6a0010), glow: new THREE.Color(0xff1830) } };  // red
+const haloTex = (() => {   // the soft glow a jewel throws onto the crystal round its disc
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.35, 'rgba(255,255,255,0.55)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+})();
+const haloGeo = new THREE.PlaneGeometry(CELL * 1.25, CELL * 1.25).rotateX(-Math.PI / 2);
 
 // Everything glossy here takes the room's reflection (tables.js hands it over with setRoomEnv)
 const shiny = [];
@@ -428,10 +449,10 @@ const DEFS = {
     mats: () => [null, gloss(0xf1ece2, 0.18), gloss(0x131316, 0.15)]
   },
   othello: {
-    title: 'Othello', sides: { 1: 'Black', 2: 'White' }, squares: null,
+    title: 'Othello', sides: { 1: 'Yellow', 2: 'Red' }, squares: null,
     owner: otOwner, allMoves: otMoves, movesFrom: (st, sq) => otMoves(st, st.turn).filter(m => m.t === sq), play: otPlay,
     fresh: () => ({ board: OT_START, pass: 0 }),
-    mats: () => [null, gloss(0x121214, 0.18), gloss(0xf2efe6, 0.2)]
+    mats: () => []   // (Othello's discs make their own, below)
   }
 };
 const GAMES = {};
@@ -786,20 +807,28 @@ function makeGame(key, x, z, frameMat, goldMat) {
     for (const m of [dot, ring]) { m.rotation.x = -Math.PI / 2; m.position.copy(cellPos(i, TOP + 0.0015)); m.visible = false; G.group.add(m); }
     G.dots.push({ dot, ring });
   }
-  // Othello keeps 64 discs that flip over, instead of rebuilding pieces
+  // Othello keeps 64 discs, one on each square, shown or hidden; a captured disc changes its jewel's color
   if (key === 'othello') {
     G.discs = [];
+    const enamel = new THREE.MeshPhysicalMaterial({ color: 0x0b0b0d, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1 });
+    shiny.push(enamel);
     for (let i = 0; i < 64; i++) {
       const g = new THREE.Group();
-      const b = new THREE.Mesh(discGeo, G.pieceMats[1]); b.position.y = DISC_H / 2;
-      const w = new THREE.Mesh(discGeo, G.pieceMats[2]); w.position.y = -DISC_H / 2;
-      b.castShadow = w.castShadow = true;
-      g.add(b, w);
-      g.position.copy(cellPos(i, TOP + DISC_H + 0.0005));
+      const jewel = new THREE.MeshPhysicalMaterial({ color: 0x8a5a00, emissive: 0xffb300, emissiveIntensity: 0.9, roughness: 0.05,
+        clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.2 });
+      shiny.push(jewel);
+      const body = new THREE.Mesh(discBodyGeo, enamel), trim = new THREE.Mesh(discGoldGeo, goldMat), gem = new THREE.Mesh(jewelGeo, jewel);
+      body.castShadow = true;
+      g.add(body, trim, gem);
+      g.position.copy(cellPos(i, DISC_Y));
       g.visible = false;
       g.traverse(o => { if (o.isMesh) { o.userData.game = key; o.userData.sq = i; } });
-      G.group.add(g);
-      G.discs.push({ g, rot: 0, to: 0, t: 1, delay: 0, color: 0 });
+      const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ map: haloTex, color: 0xffb300, transparent: true, opacity: 0.35,
+        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+      halo.position.copy(cellPos(i, TOP + 0.0002));
+      halo.visible = false;
+      G.group.add(g, halo);
+      G.discs.push({ g, jewel, halo: halo.material, haloMesh: halo, from: 1, to: 1, t: 1, delay: 0, color: 0, ph: Math.random() * 6.3 });
     }
   }
   GAMES[key] = G;
@@ -906,23 +935,30 @@ function rebuildPieces(G) {
     });
   }
 }
-function showDiscs(G, prev) {   // Othello: new discs drop in, flipped ones turn over one after another
+function showDiscs(G, prev) {   // Othello: a new disc drops in, and captured ones change color one after another
   const b = G.st.board;
   const placed = G.st.last && G.st.last.t >= 0 ? G.st.last.t : -1;
   let n = 0;
   for (let i = 0; i < 64; i++) {
     const d = G.discs[i], who = otOwner(b[i]);
-    if (!who) { d.g.visible = false; d.color = 0; continue; }
-    const target = who === 1 ? 0 : Math.PI;
-    if (!prev || !d.color) {   // a new disc: show it the right way up
-      d.g.visible = true; d.rot = d.to = target; d.t = 1; d.g.rotation.x = target;
-      if (prev && i === placed) { d.drop = 0; }
-    } else if (d.color !== who) {   // flip it
-      d.to = target; d.from = d.rot; d.t = 0; d.delay = 0.12 + n * 0.06; n++;
+    if (!who) { d.g.visible = d.haloMesh.visible = false; d.color = 0; delete d.drop; continue; }
+    if (!prev || !d.color) {   // a new disc: shown in its color straight away
+      d.g.visible = d.haloMesh.visible = true; d.from = d.to = who; d.t = 1; d.delay = 0;
+      if (prev && i === placed) d.drop = 0;
+    } else if (d.color !== who) {   // captured: a little hop, its jewel pulsing bright as it changes color
+      d.from = d.color; d.to = who; d.t = 0; d.delay = 0.12 + n * 0.07; n++;
       sound('flip', d.delay);
     }
     d.color = who;
   }
+}
+function paintDisc(d, k, pulse) {   // the jewel (and its glow on the crystal) part way from the old color (k = 0) to the new (k = 1)
+  const a = JEWEL[d.from], z = JEWEL[d.to];
+  d.jewel.color.copy(a.color).lerp(z.color, k);
+  d.jewel.emissive.copy(a.glow).lerp(z.glow, k);
+  d.jewel.emissiveIntensity = 0.9 + pulse * 1.6;
+  d.halo.color.copy(d.jewel.emissive);
+  d.halo.opacity = 0.32 + pulse * 0.45;
 }
 function refreshMarks(G) {
   const st = G.st;
@@ -1202,21 +1238,27 @@ export function updateGames(dt) {
       if (p >= 1) { a.obj.position.copy(a.to); G.anim = null; }
     }
     if (G.discs) {
+      const t = G.time || 0;
       for (const d of G.discs) {
+        if (!d.g.visible) continue;
+        let lift = 0, pulse = 0.06 * Math.sin(t * 1.3 + d.ph);   // every jewel breathes gently on its own
         if (d.drop !== undefined) {   // a newly placed disc drops in
           d.drop = Math.min(1, d.drop + dt / 0.25);
-          d.g.position.y = TOP + DISC_H + 0.0005 + (1 - easeInOut(d.drop)) * 0.06;
+          lift += (1 - easeInOut(d.drop)) * 0.06;
           if (d.drop >= 1) delete d.drop;
         }
-        if (d.t >= 1) continue;
-        if (d.delay > 0) { d.delay -= dt; continue; }
-        d.t = Math.min(1, d.t + dt / 0.35);
-        const e = easeInOut(d.t);
-        d.rot = d.from + (d.to - d.from) * e;
-        d.g.rotation.x = d.rot;
-        d.g.position.y = TOP + DISC_H + 0.0005 + Math.sin(d.t * Math.PI) * 0.03;
+        if (d.t < 1) {   // a captured disc: waits its turn in the ripple, then hops and changes color
+          if (d.delay > 0) d.delay -= dt;
+          else {
+            d.t = Math.min(1, d.t + dt / 0.5);
+            lift += Math.sin(d.t * Math.PI) * 0.012;
+            pulse += Math.sin(d.t * Math.PI);
+          }
+        }
+        d.g.position.y = DISC_Y + lift;
+        paintDisc(d, d.t >= 1 ? 1 : easeInOut(d.t), pulse);
       }
     }
   }
 }
-// >>>>> END OF FILE 1 of 1: table/boardgames.js (1222 lines) <<<<<
+// >>>>> END OF FILE 1 of 1: table/boardgames.js (1264 lines) <<<<<
