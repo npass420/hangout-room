@@ -1,4 +1,4 @@
-// >>>>> START OF FILE 1 of 1: table/boardgames.js (1381 lines) <<<<<
+// >>>>> START OF FILE 1 of 1: table/boardgames.js (1393 lines) <<<<<
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
@@ -12,7 +12,8 @@
 // A captured disc shimmers (a glint sweeps round it and its jewel flashes into the new color); a new one blooms in with a
 // ring of light across the crystal, and little twinkles drift up from the jewels now and then. The squares you can play
 // show a soft disc shadow ringed with a slowly pulsing glow in your color.
-// VERSION 7
+// Hints (showing where you can move) can be turned on or off for every game with the Hints button; your choice is remembered.
+// VERSION 8
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -1112,7 +1113,7 @@ function refreshMarks(G) {
   if (mine && G.key === 'othello') { G.targets = G.allMoves(st, st.turn); G.hintRim.color.copy(JEWEL[st.turn].glow); }
   G.selMark.visible = G.sel >= 0;
   if (G.sel >= 0) G.selMark.position.copy(cellPos(G.sel, TOP + 0.0012));
-  const tset = new Map(G.targets.map(m => [m.t, m]));
+  const tset = new Map(hintsOn ? G.targets.map(m => [m.t, m]) : []);   // (hints off: no dots or shadows)
   G.dots.forEach((d, i) => {
     const m = tset.get(i);
     const cap = !!m && G.key !== 'othello' && (m.cap !== undefined || m.ep || st.board[i] !== '.');
@@ -1137,11 +1138,12 @@ document.head.appendChild(css);
 const panel = document.createElement('div');
 panel.id = 'tablePanel'; panel.className = 'panel';
 panel.innerHTML = `<div class="tpTitle"></div><div class="tpStatus"></div><div class="tpPlayers"></div><div class="tpPromo"></div>
-  <div class="tpBtns"><button class="tpSolo">Play alone</button><button class="tpJoin">Join game</button><button class="tpNew">New game</button><button class="tpAccept">🤝 Accept draw</button><button class="tpDraw">Offer draw</button><button class="tpResign">Resign</button><button class="tpStand">Stand up</button></div>`;
+  <div class="tpBtns"><button class="tpSolo">Play alone</button><button class="tpJoin">Join game</button><button class="tpNew">New game</button><button class="tpAccept">🤝 Accept draw</button><button class="tpDraw">Offer draw</button><button class="tpResign">Resign</button><button class="tpHints"></button><button class="tpStand">Stand up</button></div>`;
 document.body.appendChild(panel);
 const q = s => panel.querySelector(s);
 const el = { title: q('.tpTitle'), status: q('.tpStatus'), players: q('.tpPlayers'), promo: q('.tpPromo'), newG: q('.tpNew'),
-             accept: q('.tpAccept'), draw: q('.tpDraw'), resign: q('.tpResign'), stand: q('.tpStand'), solo: q('.tpSolo'), join: q('.tpJoin') };
+             accept: q('.tpAccept'), draw: q('.tpDraw'), resign: q('.tpResign'), stand: q('.tpStand'), solo: q('.tpSolo'), join: q('.tpJoin'),
+             hints: q('.tpHints') };
 let shown = null;   // the game the panel is showing
 export function showPanel(key) { shown = key ? GAMES[key] : null; refreshPanel(); }
 for (const [p, label] of [['Q', '♛ Queen'], ['R', '♜ Rook'], ['B', '♝ Bishop'], ['N', '♞ Knight']]) {
@@ -1171,6 +1173,14 @@ el.accept.addEventListener('click', () => { if (shown) answerDraw(shown); });
 el.stand.addEventListener('click', () => { if (hooks.standUp) hooks.standUp(); });
 el.solo.addEventListener('click', () => { if (shown) playAlone(shown); });
 el.join.addEventListener('click', () => { if (shown) joinGame(shown); });
+// Hints: show where you can move (on unless you've turned them off; remembered on this browser)
+let hintsOn = true;
+try { hintsOn = localStorage.getItem('tableHints') !== 'off'; } catch (e) {}
+el.hints.addEventListener('click', () => {
+  hintsOn = !hintsOn;
+  try { localStorage.setItem('tableHints', hintsOn ? 'on' : 'off'); } catch (e) {}
+  refreshGames();
+});
 
 function resultText(G) {
   const st = G.st, n = c => `${playerName(G, c) || G.sides[c]} (${G.sides[c]})`;
@@ -1216,6 +1226,8 @@ function refreshPanel() {
   el.draw.style.display = playing && !alone && G.key !== 'othello' && !st.draw ? '' : 'none';
   el.resign.style.display = playing && !alone ? '' : 'none';
   el.stand.style.display = side ? '' : 'none';
+  el.hints.style.display = side ? '' : 'none';
+  el.hints.textContent = hintsOn ? '💡 Hints: on' : '💡 Hints: off';
   el.promo.style.display = G.pendingPromo && myTurn(G) ? '' : 'none';
   if (G.pendingPromo && !myTurn(G)) G.pendingPromo = null;
 }
@@ -1378,4 +1390,4 @@ export function updateGames(dt) {
     if (G.discs) updateDiscs(G, dt);
   }
 }
-// >>>>> END OF FILE 1 of 1: table/boardgames.js (1381 lines) <<<<<
+// >>>>> END OF FILE 1 of 1: table/boardgames.js (1393 lines) <<<<<
