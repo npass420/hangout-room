@@ -1,4 +1,4 @@
-// >>>>> START OF FILE 1 of 1: table/boardgames.js (1104 lines) <<<<<
+// >>>>> START OF FILE 1 of 1: table/boardgames.js (1222 lines) <<<<<
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
@@ -6,8 +6,9 @@
 // Click one of your pieces to see where it can go (the squares light up), then click a square to move.
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
 // Checkers is played with poison dart frogs (red and blue) on crimson and black marble, at a table set with flickering rubies.
-// The Othello table is one round slab of black marble with glowing gold veins, ringed with glowing amber stones in gold.
-// VERSION 4
+// The Othello table is one round slab of black marble with glowing gold veins, ringed with glowing amber stones in gold,
+// and its board is 64 crystal tiles, milky white and clear icy crystal, in a raised frame of polished onyx.
+// VERSION 5
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -437,16 +438,8 @@ const GAMES = {};
 
 function boardTexture(d) {
   const c = document.createElement('canvas'); c.width = c.height = 1024;
-  const g = c.getContext('2d'), s = 128;
-  if (d.squares) {
-    for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) { g.fillStyle = d.squares[(r + k) % 2]; g.fillRect(k * s, r * s, s, s); }
-  } else {   // Othello: polished black with gold lines and four gold dots
-    g.fillStyle = '#0c0c0f'; g.fillRect(0, 0, 1024, 1024);
-    g.strokeStyle = '#c9a227'; g.lineWidth = 5;
-    for (let i = 0; i <= 8; i++) { g.beginPath(); g.moveTo(i * s, 0); g.lineTo(i * s, 1024); g.stroke(); g.beginPath(); g.moveTo(0, i * s); g.lineTo(1024, i * s); g.stroke(); }
-    g.fillStyle = '#c9a227';
-    for (const [x, y] of [[2, 2], [2, 6], [6, 2], [6, 6]]) { g.beginPath(); g.arc(x * s, y * s, 10, 0, Math.PI * 2); g.fill(); }
-  }
+  const g = c.getContext('2d'), s = 128;   // (Othello has its own crystal board, below)
+  for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) { g.fillStyle = d.squares[(r + k) % 2]; g.fillRect(k * s, r * s, s, s); }
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   return t;
 }
@@ -560,7 +553,7 @@ function goldTable(G, goldMat) {
     rim.rotation.x = Math.PI / 2; rim.position.y = y;
     G.group.add(rim);
   }
-  for (const r of [0.535, 0.613]) {   // two thin gold lines inlaid in the marble, either side of the stones
+  for (const r of [0.545, 0.613]) {   // two thin gold lines inlaid in the marble, either side of the stones
     const line = new THREE.Mesh(new THREE.RingGeometry(r - 0.0016, r + 0.0016, 180), goldMat);
     line.rotation.x = -Math.PI / 2; line.position.y = GT_TOP + 0.0003;
     G.group.add(line);
@@ -617,6 +610,127 @@ function goldTable(G, goldMat) {
   }
   G.group.add(bezels, goldBeads, smallBeads);
 }
+// ---------- The Othello board: 64 crystal tiles, every other one milky white and the rest a clearer, icy crystal, each one
+// cut from a different part of crystal.jpg (a Kindroid picture), with softly rounded edges and a thin pale seam between
+// them, set into a raised frame of polished onyx (cut from the clean edges of crystalboard.jpg, another Kindroid picture),
+// with a thin gold line showing between the tiles and the frame ----------
+const TILE_GAP = 0.0024;                                // the seam between tiles
+const FRAME_W = 0.034, FRAME_UP = 0.005;                // the onyx frame's width, and how far it stands above the tiles
+function mergeGeos(geos) {   // many shapes (with their uvs) into one, so the whole board is a single thing to draw
+  const parts = geos.map(g => (g.index ? g.toNonIndexed() : g));
+  let n = 0;
+  for (const g of parts) n += g.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+  let o = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array, o * 3); nor.set(g.attributes.normal.array, o * 3); uv.set(g.attributes.uv.array, o * 2);
+    o += g.attributes.position.count;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return out;
+}
+function bevelSlab(shape, height, bevel) {   // a flat shape given thickness and softly rounded edges, lying flat with its top at y = 0
+  const g = new THREE.ExtrudeGeometry(shape, { depth: Math.max(0.0001, height - bevel * 2), bevelEnabled: true,
+    bevelThickness: bevel, bevelSize: bevel, bevelSegments: 3, curveSegments: 4 });
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, -(height - bevel), 0);
+  return g;
+}
+function planarUV(g, fn) {   // the picture laid straight down onto the shape from above
+  const p = g.attributes.position, uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) { const [u, v] = fn(p.getX(i), p.getZ(i)); uv[i * 2] = u; uv[i * 2 + 1] = v; }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return g;
+}
+function squareShape(h, hole) {   // a square of half-size h (with a square hole of half-size "hole", if given)
+  const s = new THREE.Shape();
+  s.moveTo(-h, -h); s.lineTo(h, -h); s.lineTo(h, h); s.lineTo(-h, h); s.closePath();
+  if (hole) {
+    const p = new THREE.Path();
+    p.moveTo(-hole, -hole); p.lineTo(-hole, hole); p.lineTo(hole, hole); p.lineTo(hole, -hole); p.closePath();
+    s.holes.push(p);
+  }
+  return s;
+}
+function crystalBoard(G, goldMat) {
+  // the gold line under everything, and the pale seams between the tiles
+  const gold = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.008, HALF * 2 + 0.008), goldMat);
+  gold.rotation.x = -Math.PI / 2; gold.position.y = GT_TOP + 0.0003;
+  const seam = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xe6edf3, 0.35));
+  seam.rotation.x = -Math.PI / 2; seam.position.y = GT_TOP + 0.0006;
+  seam.userData.game = G.key; seam.receiveShadow = true;
+  G.pickMeshes.push(seam);   // (a click on a seam still counts as the square it's nearest)
+  // the tiles: one shape, 64 rounded tiles, each showing its own part of the crystal picture
+  const tileH = TOP - (GT_TOP + 0.0004), bev = 0.0007, half = (CELL - TILE_GAP) / 2 - bev;
+  const tiles = [];
+  for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) {
+    const g = bevelSlab(squareShape(half), tileH, bev);
+    planarUV(g, (x, z) => [(k + 0.5 + x / CELL) / 8, 1 - (r + 0.5 + z / CELL) / 8]);
+    const c = cellPos(r * 8 + k, TOP);
+    g.translate(c.x, c.y, c.z);
+    tiles.push(g);
+  }
+  const crystal = new THREE.MeshPhysicalMaterial({ color: 0xdfe6ee, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03,
+    emissive: 0xffffff, emissiveIntensity: 0.12, envMapIntensity: 1 });
+  shiny.push(crystal);
+  const board = new THREE.Mesh(mergeGeos(tiles), crystal);
+  board.receiveShadow = true; board.userData.game = G.key;
+  G.board = board;
+  loadImage('crystal.jpg').then(im => {
+    if (!im) return;
+    const c = document.createElement('canvas'); c.width = c.height = 2048;
+    const g = c.getContext('2d'), s = 256;
+    let seed = 11;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) {
+      const cs = Math.min(im.width, im.height) * (0.2 + rnd() * 0.12), sx = rnd() * (im.width - cs), sy = rnd() * (im.height - cs);
+      if ((r + k) % 2 === 0) g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s);   // milky white crystal
+      else {   // clear, icy crystal: mostly see-through, its clouds faint in the depths
+        g.fillStyle = '#7d93a6'; g.fillRect(k * s, r * s, s, s);
+        g.globalAlpha = 0.4; g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s); g.globalAlpha = 1;
+      }
+    }
+    const t = texOf(c);
+    Object.assign(crystal, { map: t, emissiveMap: t, color: new THREE.Color(0xffffff) });
+    crystal.needsUpdate = true;
+  });
+  // the onyx frame: raised a little above the tiles, with softly rounded edges
+  const IN = HALF + 0.004, OUT = IN + FRAME_W, fb = 0.0018;
+  const fg = bevelSlab(squareShape(OUT - fb, IN + fb), TOP + FRAME_UP - GT_TOP, fb);
+  planarUV(fg, (x, z) => [(x + OUT) / (2 * OUT), 1 - (z + OUT) / (2 * OUT)]);
+  fg.translate(0, TOP + FRAME_UP, 0);
+  const onyx = new THREE.MeshPhysicalMaterial({ color: 0x15161a, roughness: 0.1, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1 });
+  shiny.push(onyx);
+  const frame = new THREE.Mesh(fg, onyx);
+  frame.castShadow = true; frame.receiveShadow = true;
+  loadImage('crystalboard.jpg').then(im => {
+    if (!im) return;
+    const S2 = 2048, band = Math.ceil(FRAME_W / (2 * OUT) * S2) + 24, W = im.width, H = im.height;
+    const c = document.createElement('canvas'); c.width = c.height = S2;
+    const g = c.getContext('2d');
+    const top = [W * 0.09, H * 0.06, W * 0.63, H * 0.08];     // a clean strip of the picture's frame, along its top
+    const side = [W * 0.868, H * 0.2, W * 0.075, H * 0.72];   // and one down its right side
+    const piece = (turn, pts, src, dx, dy, dw, dh) => {      // one side of the frame, cut on the diagonal at the corners
+      g.save();
+      if (turn) { g.translate(S2, S2); g.rotate(Math.PI); }
+      g.beginPath(); g.moveTo(...pts[0]); for (const p of pts.slice(1)) g.lineTo(...p); g.closePath(); g.clip();
+      g.drawImage(im, ...src, dx, dy, dw, dh);
+      g.restore();
+    };
+    const topCut = [[0, 0], [S2, 0], [S2 - band, band], [band, band]];
+    const rightCut = [[S2, 0], [S2, S2], [S2 - band, S2 - band], [S2 - band, band]];
+    piece(false, topCut, top, 0, 0, S2, band);              // the far side
+    piece(true, topCut, top, 0, 0, S2, band);               // the near side (the same stone, turned round)
+    piece(false, rightCut, side, S2 - band, 0, band, S2);   // the right side
+    piece(true, rightCut, side, S2 - band, 0, band, S2);    // the left side
+    Object.assign(onyx, { map: texOf(c), color: new THREE.Color(0xffffff) });
+    onyx.needsUpdate = true;
+  });
+  G.group.add(gold, seam, board, frame);
+}
 function updateMarble(G, dt) {   // the gems (rubies or amber) flickering, each on its own, and the marble's veins breathing slowly
   G.time = (G.time || 0) + dt;
   const t = G.time;
@@ -637,21 +751,25 @@ function makeGame(key, x, z, frameMat, goldMat) {
   G.group.position.set(x, 0, z);
   scene.add(G.group);
   G.pieceMats = d.mats();
-  // The board: a dark wood frame (checkers and Othello: a round slab of marble instead), a thin gold edge, and the polished squares
-  const edge = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.01, HALF * 2 + 0.01), goldMat);
-  edge.rotation.x = -Math.PI / 2; edge.position.y = TOP - 0.0006;
-  const board = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xffffff, 0.1, { map: boardTexture(d) }));
-  board.rotation.x = -Math.PI / 2; board.position.y = TOP;
-  board.userData.game = key;
-  G.board = board;
-  if (key === 'checkers') marbleTable(G, goldMat);
-  else if (key === 'othello') goldTable(G, goldMat);
-  else {
-    const frame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.05, 0.02, HALF * 2 + 0.05), frameMat);
-    frame.position.y = TABLE_Y + 0.01; frame.castShadow = true;
-    G.group.add(frame);
+  if (key === 'othello') {   // Othello: the marble table, and the crystal board in its onyx frame
+    goldTable(G, goldMat);
+    crystalBoard(G, goldMat);
+  } else {   // the others: a dark wood frame (checkers: a round slab of marble instead), a thin gold edge, and the polished squares
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.01, HALF * 2 + 0.01), goldMat);
+    edge.rotation.x = -Math.PI / 2; edge.position.y = TOP - 0.0006;
+    const board = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xffffff, 0.1, { map: boardTexture(d) }));
+    board.rotation.x = -Math.PI / 2; board.position.y = TOP;
+    board.userData.game = key;
+    G.board = board;
+    if (key === 'checkers') marbleTable(G, goldMat);
+    else {
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.05, 0.02, HALF * 2 + 0.05), frameMat);
+      frame.position.y = TABLE_Y + 0.01; frame.castShadow = true;
+      G.group.add(frame);
+    }
+    G.group.add(edge, board);
   }
-  G.group.add(edge, board, G.pieceLayer);
+  G.group.add(G.pieceLayer);
   // Highlights: the last move, your selected piece, a king in check, and dots where you can go
   const flat = (color, opacity) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(CELL, CELL), new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
@@ -1101,4 +1219,4 @@ export function updateGames(dt) {
     }
   }
 }
-// >>>>> END OF FILE 1 of 1: table/boardgames.js (1104 lines) <<<<<
+// >>>>> END OF FILE 1 of 1: table/boardgames.js (1222 lines) <<<<<
