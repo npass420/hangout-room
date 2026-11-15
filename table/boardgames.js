@@ -1,4 +1,4 @@
-// >>>>> START OF FILE 1 of 1: table/boardgames.js (1264 lines) <<<<<
+// >>>>> START OF FILE 1 of 1: table/boardgames.js (1381 lines) <<<<<
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
@@ -9,7 +9,10 @@
 // The Othello table is one round slab of black marble with glowing gold veins, ringed with glowing amber stones in gold,
 // and its board is 64 crystal tiles, milky white and clear icy crystal, in a raised frame of polished onyx. Its pieces are
 // black enamel discs trimmed in gold with a glowing jewel in the middle: yellow for one player, red for the other.
-// VERSION 6
+// A captured disc shimmers (a glint sweeps round it and its jewel flashes into the new color); a new one blooms in with a
+// ring of light across the crystal, and little twinkles drift up from the jewels now and then. The squares you can play
+// show a soft disc shadow ringed with a slowly pulsing glow in your color.
+// VERSION 7
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -276,17 +279,51 @@ const discGoldGeo = mergeParts([
   { g: new THREE.TorusGeometry(DISC_R * 0.76, 0.0006, 8, 48).rotateX(Math.PI / 2).translate(0, DISC_H, 0), t: 0 },     // the ring on top
   { g: new THREE.TorusGeometry(DISC_R * 0.42, 0.0012, 8, 40).rotateX(Math.PI / 2).translate(0, 0.0084, 0), t: 0 }      // the jewel's bezel
 ]);
-const jewelGeo = new THREE.SphereGeometry(DISC_R * 0.4, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.65, 1).translate(0, 0.0082, 0);
-const JEWEL = { 1: { color: new THREE.Color(0x8a5a00), glow: new THREE.Color(0xffb300) },    // yellow
-                2: { color: new THREE.Color(0x6a0010), glow: new THREE.Color(0xff1830) } };  // red
-const haloTex = (() => {   // the soft glow a jewel throws onto the crystal round its disc
-  const c = document.createElement('canvas'); c.width = c.height = 128;
-  const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grd.addColorStop(0, 'rgba(255,255,255,1)'); grd.addColorStop(0.35, 'rgba(255,255,255,0.55)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+const JEWEL_R = DISC_R * 0.4;
+const jewelGeo = planarUV(new THREE.SphereGeometry(JEWEL_R, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 0.65, 1).translate(0, 0.0082, 0),
+  (x, z) => [x / (2 * JEWEL_R) + 0.5, z / (2 * JEWEL_R) + 0.5]);   // (the glow picture laid straight down onto the dome)
+const JEWEL = { 1: { color: new THREE.Color(0x3a2200), glow: new THREE.Color(0xffb000) },    // yellow: dark amber glass, a hot gold core
+                2: { color: new THREE.Color(0x2a0006), glow: new THREE.Color(0xff1a2e) } };  // red: dark ruby glass, a hot red core
+function glowCanvas(draw) { const c = document.createElement('canvas'); c.width = c.height = 128; draw(c.getContext('2d')); return c; }
+function radial(g, stops) {   // a round glow from the middle of a 128 square canvas
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  for (const [at, col] of stops) grd.addColorStop(at, col);
   g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
-})();
-const haloGeo = new THREE.PlaneGeometry(CELL * 1.25, CELL * 1.25).rotateX(-Math.PI / 2);
+}
+const jewelTex = new THREE.CanvasTexture(glowCanvas(g => {   // what lights a jewel from inside: a hot core fading to dark glass,
+  const grd = g.createRadialGradient(60, 58, 0, 64, 64, 64);  // with little bright flecks caught in it
+  grd.addColorStop(0, '#ffffff'); grd.addColorStop(0.25, '#e0e0e0'); grd.addColorStop(0.6, '#505050'); grd.addColorStop(1, '#060606');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+  for (let i = 0; i < 40; i++) {
+    const a = Math.random() * 6.3, r = Math.random() * 40;
+    g.fillStyle = `rgba(255,255,255,${0.3 + Math.random() * 0.5})`;
+    g.beginPath(); g.arc(64 + Math.cos(a) * r, 64 + Math.sin(a) * r, 0.6 + Math.random() * 1.4, 0, 6.3); g.fill();
+  }
+}));
+const haloTex = new THREE.CanvasTexture(glowCanvas(g => radial(g, [[0, 'rgba(255,255,255,1)'], [0.3, 'rgba(255,255,255,0.5)'], [1, 'rgba(255,255,255,0)']])));
+const haloGeo = new THREE.PlaneGeometry(CELL * 1.4, CELL * 1.4).rotateX(-Math.PI / 2);
+const starTex = new THREE.CanvasTexture(glowCanvas(g => {   // a twinkle: a soft dot with four thin rays
+  radial(g, [[0, 'rgba(255,255,255,1)'], [0.12, 'rgba(255,255,255,0.6)'], [0.35, 'rgba(255,255,255,0.08)'], [1, 'rgba(255,255,255,0)']]);
+  for (const [w, h] of [[128, 3], [3, 128], [70, 2], [2, 70]]) {
+    const grd = w > h ? g.createLinearGradient(64 - w / 2, 0, 64 + w / 2, 0) : g.createLinearGradient(0, 64 - h / 2, 0, 64 + h / 2);
+    grd.addColorStop(0, 'rgba(255,255,255,0)'); grd.addColorStop(0.5, 'rgba(255,255,255,0.9)'); grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.save(); g.translate(64, 64); if (w === 70 || w === 2) g.rotate(Math.PI / 4); g.fillRect(-w / 2, -h / 2, w, h); g.restore();
+  }
+}));
+const sweepTex = new THREE.CanvasTexture(glowCanvas(g => {   // a glint: a bright wedge of light that turns round a disc's face
+  for (let i = 0; i < 60; i++) {
+    const a0 = -0.5 + i / 60, w = Math.exp(-(((i - 30) / 12) ** 2));
+    g.fillStyle = `rgba(255,240,210,${w})`;
+    g.beginPath(); g.moveTo(64, 64); g.arc(64, 64, 64, a0, a0 + 1 / 60 + 0.005); g.closePath(); g.fill();
+  }
+}));
+const sweepGeo = new THREE.RingGeometry(JEWEL_R * 1.05, DISC_R * 1.02, 48).rotateX(-Math.PI / 2);
+const rippleTex = new THREE.CanvasTexture(glowCanvas(g => radial(g, [[0, 'rgba(255,255,255,0)'], [0.62, 'rgba(255,255,255,0)'],
+  [0.8, 'rgba(255,255,255,1)'], [0.9, 'rgba(255,255,255,0.35)'], [1, 'rgba(255,255,255,0)']])));
+const hintShadowTex = new THREE.CanvasTexture(glowCanvas(g => radial(g, [[0, 'rgba(0,0,0,0.85)'], [0.7, 'rgba(0,0,0,0.7)'], [1, 'rgba(0,0,0,0)']])));
+const hintShadowGeo = new THREE.PlaneGeometry(DISC_R * 2.3, DISC_R * 2.3), hintRimGeo = new THREE.RingGeometry(DISC_R * 0.9, DISC_R * 0.98, 48);
+const fxMat = (map, opacity = 0) => ({ map, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+const noPick = o => { o.raycast = () => {}; return o; };   // light effects can't be clicked
 
 // Everything glossy here takes the room's reflection (tables.js hands it over with setRoomEnv)
 const shiny = [];
@@ -677,10 +714,10 @@ function squareShape(h, hole) {   // a square of half-size h (with a square hole
   return s;
 }
 function crystalBoard(G, goldMat) {
-  // the gold line under everything, and the pale seams between the tiles
+  // the gold line under everything, and the dark seams between the tiles
   const gold = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.008, HALF * 2 + 0.008), goldMat);
   gold.rotation.x = -Math.PI / 2; gold.position.y = GT_TOP + 0.0003;
-  const seam = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xe6edf3, 0.35));
+  const seam = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0x08090c, 0.3));   // dark, so the tiles read as set stones
   seam.rotation.x = -Math.PI / 2; seam.position.y = GT_TOP + 0.0006;
   seam.userData.game = G.key; seam.receiveShadow = true;
   G.pickMeshes.push(seam);   // (a click on a seam still counts as the square it's nearest)
@@ -694,8 +731,8 @@ function crystalBoard(G, goldMat) {
     g.translate(c.x, c.y, c.z);
     tiles.push(g);
   }
-  const crystal = new THREE.MeshPhysicalMaterial({ color: 0xdfe6ee, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.03,
-    emissive: 0xffffff, emissiveIntensity: 0.12, envMapIntensity: 1 });
+  const crystal = new THREE.MeshPhysicalMaterial({ color: 0x3a4452, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.02,
+    emissive: 0xc8dcff, emissiveIntensity: 0, envMapIntensity: 1.3 });
   shiny.push(crystal);
   const board = new THREE.Mesh(mergeGeos(tiles), crystal);
   board.receiveShadow = true; board.userData.game = G.key;
@@ -708,14 +745,24 @@ function crystalBoard(G, goldMat) {
     const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
     for (let r = 0; r < 8; r++) for (let k = 0; k < 8; k++) {
       const cs = Math.min(im.width, im.height) * (0.2 + rnd() * 0.12), sx = rnd() * (im.width - cs), sy = rnd() * (im.height - cs);
-      if ((r + k) % 2 === 0) g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s);   // milky white crystal
-      else {   // clear, icy crystal: mostly see-through, its clouds faint in the depths
-        g.fillStyle = '#7d93a6'; g.fillRect(k * s, r * s, s, s);
-        g.globalAlpha = 0.4; g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s); g.globalAlpha = 1;
+      if ((r + k) % 2 === 0) {   // milky crystal, deepened: its clouds kept, toned cool and dim
+        g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s);
+        g.globalCompositeOperation = 'multiply'; g.fillStyle = '#5f6d7e'; g.fillRect(k * s, r * s, s, s);
+        g.globalCompositeOperation = 'source-over';
+      } else {   // smoky crystal: dark, with faint clouds deep inside
+        g.fillStyle = '#121820'; g.fillRect(k * s, r * s, s, s);
+        g.globalCompositeOperation = 'screen'; g.globalAlpha = 0.22; g.drawImage(im, sx, sy, cs, cs, k * s, r * s, s, s);
+        g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
       }
     }
-    const t = texOf(c);
-    Object.assign(crystal, { map: t, emissiveMap: t, color: new THREE.Color(0xffffff) });
+    const sp = document.createElement('canvas'); sp.width = sp.height = 2048;   // fine frost glitter caught in the crystal
+    const sg = sp.getContext('2d');
+    sg.fillStyle = '#000'; sg.fillRect(0, 0, 2048, 2048);
+    for (let i = 0; i < 4000; i++) {
+      sg.fillStyle = `rgba(255,255,255,${0.2 + rnd() * 0.8})`;
+      sg.fillRect(rnd() * 2048, rnd() * 2048, 1 + rnd() * 1.5, 1 + rnd() * 1.5);
+    }
+    Object.assign(crystal, { map: texOf(c), emissiveMap: texOf(sp), emissiveIntensity: 0.7, color: new THREE.Color(0xffffff) });
     crystal.needsUpdate = true;
   });
   // the onyx frame: raised a little above the tiles, with softly rounded edges
@@ -801,9 +848,17 @@ function makeGame(key, x, z, frameMat, goldMat) {
   G.checkMark = flat(0xff3b30, 0.5);
   const dotGeo = new THREE.CircleGeometry(CELL * 0.14, 24), capGeo = new THREE.RingGeometry(CELL * 0.36, CELL * 0.45, 32);
   const dotMat = new THREE.MeshBasicMaterial({ color: 0x5cff9a, transparent: true, opacity: 0.55, depthWrite: false });
+  // Othello shows where you can play as the shadow of a disc, ringed with a glow in your color (instead of a dot)
+  const hintShadow = key === 'othello' ? new THREE.MeshBasicMaterial({ map: hintShadowTex, transparent: true, depthWrite: false }) : null;
+  if (key === 'othello') G.hintRim = new THREE.MeshBasicMaterial({ ...fxMat(null, 0.5), color: 0xffb000 });
   G.dots = [];
   for (let i = 0; i < 64; i++) {
-    const dot = new THREE.Mesh(dotGeo, dotMat), ring = new THREE.Mesh(capGeo, dotMat);
+    let dot;
+    if (key === 'othello') {
+      dot = new THREE.Group();
+      dot.add(noPick(new THREE.Mesh(hintShadowGeo, hintShadow)), noPick(new THREE.Mesh(hintRimGeo, G.hintRim)));
+    } else dot = new THREE.Mesh(dotGeo, dotMat);
+    const ring = new THREE.Mesh(capGeo, dotMat);
     for (const m of [dot, ring]) { m.rotation.x = -Math.PI / 2; m.position.copy(cellPos(i, TOP + 0.0015)); m.visible = false; G.group.add(m); }
     G.dots.push({ dot, ring });
   }
@@ -814,8 +869,8 @@ function makeGame(key, x, z, frameMat, goldMat) {
     shiny.push(enamel);
     for (let i = 0; i < 64; i++) {
       const g = new THREE.Group();
-      const jewel = new THREE.MeshPhysicalMaterial({ color: 0x8a5a00, emissive: 0xffb300, emissiveIntensity: 0.9, roughness: 0.05,
-        clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.2 });
+      const jewel = new THREE.MeshPhysicalMaterial({ color: 0x3a2200, emissive: 0xffb000, emissiveMap: jewelTex, emissiveIntensity: 1.5,
+        roughness: 0.03, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 1.3 });
       shiny.push(jewel);
       const body = new THREE.Mesh(discBodyGeo, enamel), trim = new THREE.Mesh(discGoldGeo, goldMat), gem = new THREE.Mesh(jewelGeo, jewel);
       body.castShadow = true;
@@ -823,13 +878,30 @@ function makeGame(key, x, z, frameMat, goldMat) {
       g.position.copy(cellPos(i, DISC_Y));
       g.visible = false;
       g.traverse(o => { if (o.isMesh) { o.userData.game = key; o.userData.sq = i; } });
-      const halo = new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ map: haloTex, color: 0xffb300, transparent: true, opacity: 0.35,
-        depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+      // the shimmer: a glint of light that sweeps round the disc's face, and a sparkle on its jewel
+      const sweep = noPick(new THREE.Mesh(sweepGeo, new THREE.MeshBasicMaterial(fxMat(sweepTex))));
+      sweep.position.y = DISC_H + 0.0008; sweep.visible = false;
+      const spark = noPick(new THREE.Sprite(new THREE.SpriteMaterial(fxMat(starTex))));
+      spark.position.y = DISC_H + 0.004; spark.visible = false;
+      g.add(sweep, spark);
+      const halo = noPick(new THREE.Mesh(haloGeo, new THREE.MeshBasicMaterial({ ...fxMat(haloTex, 0.22), color: 0xffb000 })));
       halo.position.copy(cellPos(i, TOP + 0.0002));
       halo.visible = false;
       G.group.add(g, halo);
-      G.discs.push({ g, jewel, halo: halo.material, haloMesh: halo, from: 1, to: 1, t: 1, delay: 0, color: 0, ph: Math.random() * 6.3 });
+      G.discs.push({ g, jewel, sweep, spark, halo: halo.material, haloMesh: halo, from: 1, to: 1, t: 1, delay: 0, color: 0, ph: Math.random() * 6.3 });
     }
+    // a ring of light that spreads across the crystal from a newly placed disc
+    G.ripple = noPick(new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial(fxMat(rippleTex))));
+    G.ripple.position.y = TOP + 0.0005; G.ripple.visible = false; G.rip = 1;
+    // little twinkles that drift up from the jewels now and then
+    G.twinkles = [];
+    for (let i = 0; i < 16; i++) {
+      const s = noPick(new THREE.Sprite(new THREE.SpriteMaterial(fxMat(starTex))));
+      s.visible = false; G.group.add(s);
+      G.twinkles.push({ s, life: 1, from: new THREE.Vector3() });
+    }
+    G.twinkleWait = 0;
+    G.group.add(G.ripple);
   }
   GAMES[key] = G;
   return G;
@@ -935,18 +1007,22 @@ function rebuildPieces(G) {
     });
   }
 }
-function showDiscs(G, prev) {   // Othello: a new disc drops in, and captured ones change color one after another
+function showDiscs(G, prev) {   // Othello: a new disc blooms in, and captured ones shimmer into the new color one after another
   const b = G.st.board;
   const placed = G.st.last && G.st.last.t >= 0 ? G.st.last.t : -1;
   let n = 0;
   for (let i = 0; i < 64; i++) {
     const d = G.discs[i], who = otOwner(b[i]);
-    if (!who) { d.g.visible = d.haloMesh.visible = false; d.color = 0; delete d.drop; continue; }
+    if (!who) { d.g.visible = d.haloMesh.visible = false; d.color = 0; delete d.appear; d.g.scale.setScalar(1); continue; }
     if (!prev || !d.color) {   // a new disc: shown in its color straight away
       d.g.visible = d.haloMesh.visible = true; d.from = d.to = who; d.t = 1; d.delay = 0;
-      if (prev && i === placed) d.drop = 0;
-    } else if (d.color !== who) {   // captured: a little hop, its jewel pulsing bright as it changes color
-      d.from = d.color; d.to = who; d.t = 0; d.delay = 0.12 + n * 0.07; n++;
+      if (prev && i === placed) {   // the one just placed blooms in, and a ring of light spreads out from it
+        d.appear = 0;
+        G.ripple.position.x = d.g.position.x; G.ripple.position.z = d.g.position.z;
+        G.ripple.material.color.copy(JEWEL[who].glow); G.rip = 0;
+      }
+    } else if (d.color !== who) {   // captured: it shimmers, its jewel flashing bright as it changes color
+      d.from = d.color; d.to = who; d.t = 0; d.delay = 0.12 + n * 0.08; n++;
       sound('flip', d.delay);
     }
     d.color = who;
@@ -956,9 +1032,71 @@ function paintDisc(d, k, pulse) {   // the jewel (and its glow on the crystal) p
   const a = JEWEL[d.from], z = JEWEL[d.to];
   d.jewel.color.copy(a.color).lerp(z.color, k);
   d.jewel.emissive.copy(a.glow).lerp(z.glow, k);
-  d.jewel.emissiveIntensity = 0.9 + pulse * 1.6;
+  d.jewel.emissiveIntensity = 1.5 + pulse * 2;
   d.halo.color.copy(d.jewel.emissive);
-  d.halo.opacity = 0.32 + pulse * 0.45;
+  d.halo.opacity = 0.22 + pulse * 0.4;
+}
+const WHITE = new THREE.Color(0xffffff);
+function updateDiscs(G, dt) {   // every frame: the jewels breathing, shimmers, blooms, the ring of light and the twinkles
+  const t = G.time || 0;
+  const lit = [];
+  G.hintRim.opacity = 0.4 + 0.25 * Math.sin(t * 3);   // the glow round the squares you can play, pulsing slowly
+  for (const d of G.discs) {
+    if (!d.g.visible) continue;
+    lit.push(d);
+    let pulse = 0.08 * Math.sin(t * 1.3 + d.ph), k = 1, fx = 0;   // every jewel breathes gently on its own
+    if (d.appear !== undefined) {   // a newly placed disc: grows in with a flash
+      d.appear = Math.min(1, d.appear + dt / 0.45);
+      d.g.scale.setScalar(0.8 + 0.2 * easeInOut(d.appear));
+      fx = Math.sin(d.appear * Math.PI);
+      if (d.appear >= 1) { delete d.appear; d.g.scale.setScalar(1); }
+    }
+    if (d.t < 1) {   // a captured disc: waits its turn in the ripple, then shimmers into the new color
+      if (d.delay > 0) { d.delay -= dt; k = 0; }
+      else {
+        d.t = Math.min(1, d.t + dt / 0.7);
+        fx = Math.max(fx, Math.sin(d.t * Math.PI));
+        k = Math.max(0, Math.min(1, (d.t - 0.35) / 0.3));
+      }
+    }
+    pulse += fx * 1.4;
+    const on = fx > 0.01;
+    d.sweep.visible = d.spark.visible = on;
+    if (on) {
+      d.sweep.rotation.y -= dt * 9;   // the glint racing round the gold rings
+      d.sweep.material.opacity = fx * 0.9;
+      d.spark.scale.setScalar(0.012 + fx * 0.05);
+      d.spark.material.opacity = fx;
+      d.spark.material.rotation += dt * 2;
+      d.spark.material.color.copy(d.jewel.emissive).lerp(WHITE, 0.5);
+    }
+    paintDisc(d, k, pulse);
+  }
+  if (G.rip < 1) {   // the ring of light spreading across the crystal
+    G.rip = Math.min(1, G.rip + dt / 0.9);
+    G.ripple.visible = true;
+    G.ripple.scale.setScalar(CELL * (1 + G.rip * 5));
+    G.ripple.material.opacity = (1 - G.rip) * 0.6;
+  } else G.ripple.visible = false;
+  G.twinkleWait -= dt;   // a twinkle drifts up from a jewel now and then
+  if (G.twinkleWait <= 0 && lit.length) {
+    G.twinkleWait = 0.2 + Math.random() * 0.35;
+    const tw = G.twinkles.find(x => x.life >= 1), d = lit[Math.floor(Math.random() * lit.length)];
+    if (tw) {
+      tw.life = 0;
+      tw.from.set(d.g.position.x + (Math.random() - 0.5) * 0.012, DISC_Y + DISC_H + 0.004, d.g.position.z + (Math.random() - 0.5) * 0.012);
+      tw.s.material.color.copy(d.jewel.emissive).lerp(WHITE, 0.3);
+    }
+  }
+  for (const tw of G.twinkles) {
+    if (tw.life >= 1) { tw.s.visible = false; continue; }
+    tw.life = Math.min(1, tw.life + dt / 1.4);
+    const f = Math.sin(tw.life * Math.PI);
+    tw.s.visible = true;
+    tw.s.position.set(tw.from.x, tw.from.y + tw.life * 0.035, tw.from.z);
+    tw.s.scale.setScalar(0.006 + f * 0.01);
+    tw.s.material.opacity = f * 0.9;
+  }
 }
 function refreshMarks(G) {
   const st = G.st;
@@ -971,7 +1109,7 @@ function refreshMarks(G) {
   const mine = myTurn(G);
   if (!mine) { G.sel = -1; G.targets = []; }
   if (mine && G.key === 'checkers' && st.chain >= 0) { G.sel = st.chain; G.targets = G.movesFrom(st, st.chain); }
-  if (mine && G.key === 'othello') G.targets = G.allMoves(st, st.turn);
+  if (mine && G.key === 'othello') { G.targets = G.allMoves(st, st.turn); G.hintRim.color.copy(JEWEL[st.turn].glow); }
   G.selMark.visible = G.sel >= 0;
   if (G.sel >= 0) G.selMark.position.copy(cellPos(G.sel, TOP + 0.0012));
   const tset = new Map(G.targets.map(m => [m.t, m]));
@@ -1225,7 +1363,7 @@ export function startGames(spots, frameMat, goldMat) {
 }
 export function gameAt(key) { return GAMES[key]; }
 
-// ---------- Every frame: pieces sliding and discs flipping ----------
+// ---------- Every frame: pieces sliding, and the Othello discs' light ----------
 export function updateGames(dt) {
   for (const G of Object.values(GAMES)) {
     if (G.gems) updateMarble(G, dt);
@@ -1237,28 +1375,7 @@ export function updateGames(dt) {
       a.obj.position.y = TOP + Math.sin(p * Math.PI) * (a.hop ? 0.045 : 0.012);
       if (p >= 1) { a.obj.position.copy(a.to); G.anim = null; }
     }
-    if (G.discs) {
-      const t = G.time || 0;
-      for (const d of G.discs) {
-        if (!d.g.visible) continue;
-        let lift = 0, pulse = 0.06 * Math.sin(t * 1.3 + d.ph);   // every jewel breathes gently on its own
-        if (d.drop !== undefined) {   // a newly placed disc drops in
-          d.drop = Math.min(1, d.drop + dt / 0.25);
-          lift += (1 - easeInOut(d.drop)) * 0.06;
-          if (d.drop >= 1) delete d.drop;
-        }
-        if (d.t < 1) {   // a captured disc: waits its turn in the ripple, then hops and changes color
-          if (d.delay > 0) d.delay -= dt;
-          else {
-            d.t = Math.min(1, d.t + dt / 0.5);
-            lift += Math.sin(d.t * Math.PI) * 0.012;
-            pulse += Math.sin(d.t * Math.PI);
-          }
-        }
-        d.g.position.y = DISC_Y + lift;
-        paintDisc(d, d.t >= 1 ? 1 : easeInOut(d.t), pulse);
-      }
-    }
+    if (G.discs) updateDiscs(G, dt);
   }
 }
-// >>>>> END OF FILE 1 of 1: table/boardgames.js (1264 lines) <<<<<
+// >>>>> END OF FILE 1 of 1: table/boardgames.js (1381 lines) <<<<<
