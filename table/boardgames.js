@@ -1,3 +1,4 @@
+// >>>>> START OF FILE 1 of 1: table/boardgames.js (1104 lines) <<<<<
 // =====================================================================
 // boardgames.js — the three games in the Table Room: Checkers, Chess and Othello
 // Each table has two chairs: sit in one and you're playing that side. Everyone else can walk up and watch.
@@ -5,7 +6,8 @@
 // Click one of your pieces to see where it can go (the squares light up), then click a square to move.
 // The rules for Checkers and Chess come from the old room; the boards and pieces are new, polished and glossy.
 // Checkers is played with poison dart frogs (red and blue) on crimson and black marble, at a table set with flickering rubies.
-// VERSION 3
+// The Othello table is one round slab of black marble with glowing gold veins, ringed with glowing amber stones in gold.
+// VERSION 4
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
@@ -513,7 +515,7 @@ function marbleTable(G, goldMat) {
   })();
   const glowGeo = new THREE.PlaneGeometry(0.075, 0.075); glowGeo.rotateX(-Math.PI / 2);
   const bezels = new THREE.InstancedMesh(new THREE.TorusGeometry(0.0112, 0.0016, 6, 24).rotateX(Math.PI / 2), goldMat, RUBIES);
-  G.rubies = [];
+  G.gems = [];
   const mtx = new THREE.Matrix4();
   for (let i = 0; i < RUBIES; i++) {
     const a = (i + 0.5) / RUBIES * Math.PI * 2, x = Math.cos(a) * RUBY_R, z = Math.sin(a) * RUBY_R;
@@ -527,14 +529,98 @@ function marbleTable(G, goldMat) {
     glow.position.set(x, TABLE_Y + 0.0012, z);
     bezels.setMatrixAt(i, mtx.makeTranslation(x, TABLE_Y + 0.0006, z));
     G.group.add(gem, glow);
-    G.rubies.push({ mat, glow: glow.material, p1: Math.random() * 6.3, p2: Math.random() * 6.3, s1: 0.7 + Math.random() * 0.6, s2: 2.1 + Math.random() * 1.4, f: 0.5 });
+    G.gems.push({ mat, glow: glow.material, p1: Math.random() * 6.3, p2: Math.random() * 6.3, s1: 0.7 + Math.random() * 0.6, s2: 2.1 + Math.random() * 1.4, f: 0.5 });
   }
   G.group.add(bezels);
 }
-function updateMarble(G, dt) {   // the rubies flickering, each on its own, and the marble's veins breathing slowly
+// ---------- The Othello table: one round slab of polished black marble with gold veins (goldmarble.jpg, a Kindroid picture)
+// over the whole table top, its gold veins softly glowing, two thin gold lines inlaid round the edge, and a ring of amber
+// stones set into the marble in gold bezels, with little gold and amber beads between them, each stone glowing warm yellow
+// like a candle inside it ----------
+const GT_R = 0.632, GT_H = 0.068;                       // the slab: a little wider than the wood top, and deep enough to cover it
+const GT_TOP = TABLE_Y + 0.02;                          // the top of the slab (the board sits just above it)
+const AMBER_R = 0.575, AMBERS = 16;                     // the ring of amber stones
+function goldVeinGlow(c) {   // keep only the bright gold veins of the marble picture (everything else goes dark): what glows
+  const g = c.getContext('2d'), img = g.getImageData(0, 0, c.width, c.height), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], gr = d[i + 1], b = d[i + 2];
+    const k = Math.max(0, Math.min(1, (gr - 60) / 110)) * Math.max(0, Math.min(1, (r - b - 15) / 40));
+    d[i] = r * k; d[i + 1] = gr * k * 0.85; d[i + 2] = b * k * 0.4;
+  }
+  g.putImageData(img, 0, 0);
+}
+function goldTable(G, goldMat) {
+  const slabTop = gloss(0x111114, 0.1, { emissive: 0xffffff, emissiveIntensity: 0 });
+  const slabSide = gloss(0x060607, 0.12);
+  const slab = new THREE.Mesh(new THREE.CylinderGeometry(GT_R, GT_R, GT_H, 160), [slabSide, slabTop, slabSide]);
+  slab.position.y = GT_TOP - GT_H / 2; slab.castShadow = true; slab.receiveShadow = true;
+  G.group.add(slab);
+  for (const y of [GT_TOP, GT_TOP - GT_H]) {   // a thin gold rim round the top and bottom edges of the slab
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(GT_R, 0.003, 10, 180), goldMat);
+    rim.rotation.x = Math.PI / 2; rim.position.y = y;
+    G.group.add(rim);
+  }
+  for (const r of [0.535, 0.613]) {   // two thin gold lines inlaid in the marble, either side of the stones
+    const line = new THREE.Mesh(new THREE.RingGeometry(r - 0.0016, r + 0.0016, 180), goldMat);
+    line.rotation.x = -Math.PI / 2; line.position.y = GT_TOP + 0.0003;
+    G.group.add(line);
+  }
+  G.veins = [slabTop];
+  // the marble, once the picture is in: the middle of the picture (inside its ring of stones) becomes the round top
+  loadImage('goldmarble.jpg').then(im => {
+    if (!im) return;
+    const [tc, te] = canvasPair(2048), cs = Math.min(im.width, im.height) * 0.64;
+    tc.getContext('2d').drawImage(im, (im.width - cs) / 2, (im.height - cs) / 2, cs, cs, 0, 0, 2048, 2048);
+    te.getContext('2d').drawImage(tc, 0, 0); goldVeinGlow(te);
+    Object.assign(slabTop, { map: texOf(tc), emissiveMap: texOf(te), color: new THREE.Color(0xffffff), emissiveIntensity: 0.45 });
+    slabTop.needsUpdate = true;
+  });
+  // the amber stones: smooth domes set into the marble in gold bezels, each with a soft warm glow round it
+  const gemGeo = new THREE.SphereGeometry(0.017, 32, 12, 0, Math.PI * 2, 0, Math.PI / 2); gemGeo.scale(1, 0.6, 1);
+  const glowTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const g = c.getContext('2d'), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(255,200,40,1)'); grd.addColorStop(0.3, 'rgba(230,140,0,0.5)'); grd.addColorStop(1, 'rgba(150,70,0,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  })();
+  const glowGeo = new THREE.PlaneGeometry(0.1, 0.1); glowGeo.rotateX(-Math.PI / 2);
+  const bezels = new THREE.InstancedMesh(new THREE.TorusGeometry(0.0178, 0.0024, 8, 32).rotateX(Math.PI / 2), goldMat, AMBERS);
+  // between each pair of stones: a gold bead, a little amber bead, a gold bead
+  const beadGeo = new THREE.SphereGeometry(0.0045, 14, 10), smallGeo = new THREE.SphereGeometry(0.0065, 18, 12);
+  const goldBeads = new THREE.InstancedMesh(beadGeo, goldMat, AMBERS * 2);
+  const smallMat = new THREE.MeshPhysicalMaterial({ color: 0x8a4a00, emissive: 0xffa400, emissiveIntensity: 0.5, roughness: 0.05,
+    clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.2 });
+  shiny.push(smallMat);
+  const smallBeads = new THREE.InstancedMesh(smallGeo, smallMat, AMBERS);
+  G.gems = [];
+  const mtx = new THREE.Matrix4(), step = Math.PI * 2 / AMBERS;
+  for (let i = 0; i < AMBERS; i++) {
+    const a = (i + 0.5) * step, x = Math.cos(a) * AMBER_R, z = Math.sin(a) * AMBER_R;
+    const mat = new THREE.MeshPhysicalMaterial({ color: 0x8a4a00, emissive: 0xffa800, emissiveIntensity: 0.6, roughness: 0.04,
+      clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 1.2 });
+    shiny.push(mat);
+    const gem = new THREE.Mesh(gemGeo, mat);
+    gem.position.set(x, GT_TOP + 0.0004, z);
+    const glow = new THREE.Mesh(glowGeo, new THREE.MeshBasicMaterial({ map: glowTex, transparent: true, depthWrite: false,
+      blending: THREE.AdditiveBlending, toneMapped: false, opacity: 0.5 }));
+    glow.position.set(x, GT_TOP + 0.0012, z);
+    bezels.setMatrixAt(i, mtx.makeTranslation(x, GT_TOP + 0.0006, z));
+    for (const [k, f] of [[0, 0.3], [1, 0.7]]) {
+      const b = a + step * f;
+      goldBeads.setMatrixAt(i * 2 + k, mtx.makeTranslation(Math.cos(b) * AMBER_R, GT_TOP + 0.0015, Math.sin(b) * AMBER_R));
+    }
+    const m = a + step * 0.5;
+    smallBeads.setMatrixAt(i, mtx.makeTranslation(Math.cos(m) * AMBER_R, GT_TOP + 0.002, Math.sin(m) * AMBER_R));
+    G.group.add(gem, glow);
+    G.gems.push({ mat, glow: glow.material, p1: Math.random() * 6.3, p2: Math.random() * 6.3, s1: 0.7 + Math.random() * 0.6, s2: 2.1 + Math.random() * 1.4, f: 0.5 });
+  }
+  G.group.add(bezels, goldBeads, smallBeads);
+}
+function updateMarble(G, dt) {   // the gems (rubies or amber) flickering, each on its own, and the marble's veins breathing slowly
   G.time = (G.time || 0) + dt;
   const t = G.time;
-  for (const r of G.rubies) {
+  for (const r of G.gems) {
     r.f += (Math.random() - 0.5) * dt * 3; r.f = Math.max(0.2, Math.min(0.8, r.f));   // a candle's little random wander
     const k = Math.max(0, Math.min(1.2, 0.35 + 0.18 * Math.sin(t * r.s1 + r.p1) + 0.08 * Math.sin(t * r.s2 + r.p2) + r.f * 0.45));
     r.mat.emissiveIntensity = 0.25 + k * 0.9;
@@ -551,7 +637,7 @@ function makeGame(key, x, z, frameMat, goldMat) {
   G.group.position.set(x, 0, z);
   scene.add(G.group);
   G.pieceMats = d.mats();
-  // The board: a dark wood frame (checkers: a round slab of black marble), a thin gold edge, and the polished squares
+  // The board: a dark wood frame (checkers and Othello: a round slab of marble instead), a thin gold edge, and the polished squares
   const edge = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2 + 0.01, HALF * 2 + 0.01), goldMat);
   edge.rotation.x = -Math.PI / 2; edge.position.y = TOP - 0.0006;
   const board = new THREE.Mesh(new THREE.PlaneGeometry(HALF * 2, HALF * 2), gloss(0xffffff, 0.1, { map: boardTexture(d) }));
@@ -559,6 +645,7 @@ function makeGame(key, x, z, frameMat, goldMat) {
   board.userData.game = key;
   G.board = board;
   if (key === 'checkers') marbleTable(G, goldMat);
+  else if (key === 'othello') goldTable(G, goldMat);
   else {
     const frame = new THREE.Mesh(new THREE.BoxGeometry(HALF * 2 + 0.05, 0.02, HALF * 2 + 0.05), frameMat);
     frame.position.y = TABLE_Y + 0.01; frame.castShadow = true;
@@ -987,7 +1074,7 @@ export function gameAt(key) { return GAMES[key]; }
 // ---------- Every frame: pieces sliding and discs flipping ----------
 export function updateGames(dt) {
   for (const G of Object.values(GAMES)) {
-    if (G.rubies) updateMarble(G, dt);
+    if (G.gems) updateMarble(G, dt);
     const a = G.anim;
     if (a && a.obj) {
       a.t += dt;
@@ -1014,3 +1101,4 @@ export function updateGames(dt) {
     }
   }
 }
+// >>>>> END OF FILE 1 of 1: table/boardgames.js (1104 lines) <<<<<
