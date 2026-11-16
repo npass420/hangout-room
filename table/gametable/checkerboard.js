@@ -1,16 +1,22 @@
 // ===================================================================================================================
 // Workshop/pieces/checkerboard.js: a checkerboard of polished red and black marble, set in one flat top of black marble
-// with red veins, its border sloping down and out an inch all the way round in the same stone. Every square is cut from
-// a different part of its stone, so no two squares match.
+// with red veins, its border sloping down and out an inch all the way round in the same stone, then dropping straight
+// down to the table in a plain upright side (as tall as the slope), so the board stands twice as high. Every square is
+// cut from a different part of its stone, so no two squares match.
 // Made as one piece: makeCheckerboard(THREE, options) gives back { group, materials }. The group sits with its
 // bottom at y = 0, centered, the playing squares facing up; materials lists everything that should reflect the room.
 // options: loader (a THREE.TextureLoader), anisotropy (texture sharpness), folder (where its pictures are),
 //          onReady (called each time a picture has loaded, so the room can take a new reflection snapshot),
 //          size (the whole board across, edge to edge, in meters).
 // Pictures (in textures/checker): checker_marble_red.jpg (red marble), checker_marble_black.jpg (black marble, red veins).
-// VERSION 11
+// VERSION 12
 // ===================================================================================================================
 import { squareSweep, wrapStone } from './shapes.js';
+
+// the whole board is raised by the slope's own height (from the flat top at 3 cm down to the 4 mm lip), with a straight
+// upright side under the slope; SQUARES_TOP is the height of the playing squares' top above the board's bottom
+export const LIFT = 0.03 - 0.004;
+export const SQUARES_TOP = 0.011 + 0.012 + LIFT;
 
 export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'textures/checker/', onReady = () => {}, size = 1.5 } = {}) {
   const N = 8;                 // squares along each side
@@ -22,7 +28,8 @@ export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'text
   const TILE_D = 0.012;        // how thick a square is
   const TILE_B = 0.0022;       // a square's rounded edge
   const UNDER = 0.011;         // the dark bed the squares sit in (its top is where the squares start)
-  const FH = 0.03;             // the black top's height (a little above the squares)
+  const FH = 0.03;             // the black top's height (a little above the squares), before raising
+  const UP = LIFT;             // how far the whole board is raised (the upright side under the slope)
 
   const group = new THREE.Group();
   const materials = [];
@@ -48,8 +55,9 @@ export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'text
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
 
   // ---------- The dark bed under the squares, reaching in under the black top (shows as the fine seams between them) ----------
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(PLAY + 0.004, UNDER, PLAY + 0.004), mat({ color: 0x050506, roughness: 0.5 }));
-  bed.position.y = UNDER / 2;
+  // (it reaches right down to the table, filling the raised board's middle)
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(PLAY + 0.004, UNDER + UP, PLAY + 0.004), mat({ color: 0x050506, roughness: 0.5 }));
+  bed.position.y = (UNDER + UP) / 2;
   group.add(bed);
 
   // ---------- The squares: red marble and black marble, each cut from its own part of the stone ----------
@@ -69,7 +77,7 @@ export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'text
     const face = mat({ color: 0x000000, roughness: STONES[name].roughness, envMapIntensity: 0.7 });
     faces[name].push(face);
     const tile = new THREE.Mesh(tileGeo, [face, edges[name]]);
-    tile.position.set(-PLAY / 2 + SQ * (c + 0.5), UNDER + TILE_D, -PLAY / 2 + SQ * (r + 0.5));
+    tile.position.set(-PLAY / 2 + SQ * (c + 0.5), UP + UNDER + TILE_D, -PLAY / 2 + SQ * (r + 0.5));
     group.add(tile);
   }
   for (const [name, S] of Object.entries(STONES)) picture(S.file, t => {
@@ -86,15 +94,15 @@ export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'text
 
   // ---------- The top and its border: one piece of black marble with red veins, right round the squares ----------
   // Its shape across (from the squares outward): up from the squares' bed to the flat top, out across the top, then a
-  // slope down and out an inch, then a thin upright edge to the bottom. Every edge along the way is very slightly
-  // rounded. That shape is carried round all four sides, meeting itself in a clean line at each corner.
+  // slope down and out an inch, then a straight upright side down to the bottom (the thin lip plus the raise). Every
+  // edge along the way is very slightly rounded. That shape is carried round all four sides, meeting itself in a clean line at each corner.
   const IN = PLAY / 2 + 0.0006;   // where it starts, from the middle (right against the squares)
   const TOP = size / 2 - SLOPE;   // where the flat top ends and the slope starts
-  const LIP = 0.004;              // the thin upright edge at the bottom of the slope
+  const LIP = 0.004;              // the thin upright edge at the bottom of the slope, before raising
   {
     const R = TOP + SLOPE;
     const geo = squareSweep(THREE, [   // [out from the middle, height, how much to round this corner]
-      [IN, UNDER, 0], [IN, FH, 0.0025], [TOP, FH, 0.004], [R, LIP, 0.003], [R, 0, 0]
+      [IN, UP + UNDER, 0], [IN, UP + FH, 0.0025], [TOP, UP + FH, 0.004], [R, UP + LIP, 0.003], [R, 0, 0]
     ]);
     wrapStone(geo, size + 0.1);
     const face = mat({ color: 0x0a0a0b, roughness: 0.16, envMapIntensity: 0.8 });

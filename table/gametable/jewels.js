@@ -12,14 +12,14 @@
 //     glowing deep inside: color 'ruby' (red) or 'violet' (purple); in a thin gold rim (rim: false for none).
 //   dome(x, z, y, radius, stone): a game piece: a perfectly smooth round dome with a flat bottom and no setting, a tiny
 //     light deep inside lighting fine specks through it: J.RUBY (deep crimson) or J.ONYX (black, glowing dark black
-//     light purple). Gives back { group, setKing(on) }: a king rises into a floating ball, glowing brighter.
+//     light purple). Gives back { group, setKing(on) }: a king rises into a floating ball, glowing brighter (no hum).
 //   crest(x, z, turn, y, grow): a large dark ruby kite crest in a smooth gold setting; turn points its long point
 //     (0 = toward -z), grow sizes it.
 //   oval(x, z, turn, y, stone, grow): an oval jewel lying along x (turned by turn), J.RUBY (cut) or J.ONYX (dome).
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
 //   the room); glowLayer: the room's glow layer; update(seconds): call every frame; dispose(): stops every piece's sounds,
 //   for when the whole set is taken away.
-// VERSION 40
+// VERSION 41
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -340,10 +340,14 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   //   setKing(on): crowns it: it rises out of its square, its flat bottom growing round as it lifts, into a whole glowing
   //     ball floating an inch up, bobbing and slowly rocking, brighter, with a soft glow on the board below (or sets back).
   //   moveTo(x, z, over): glides it to x, z (a promise, done when it lands). over: a piece it captures on the way. A
-  //     plain piece lifts, arcs up to hover over it, blasts it with a laser, then glides down onto its new square; a king
-  //     flies straight across, beaming the whole time it's over it. Without over, just the glide.
+  //     plain piece lifts, arcs up to hover over it, blasts it with a laser, then glides down onto its new square. A king
+  //     turns on its bigger laser and holds still a second, then flies across firing, arcing up over the piece (clearing
+  //     it, even a floating king) and smashing it as it passes, lands, fires a second more, and stops.
+  //     Without over, just the glide.
   //   The laser leaves glowing burn marks on the surface that cool to a dark scorch and fade.
-//   blast(): it heats up to glowing white, then explodes in a burst of sparks of its own color.  restore(): it grows back.
+  //   blast(): it heats up to glowing white, then explodes in a burst of sparks of its own color.
+  //   smash(): it flashes white and shatters at once into glitter: white shards that turn back to its color as they
+  //     fall, then lie on the board twinkling (until the whole set is taken away).  restore(): it grows back.
   const FLOAT = 0.0254;     // (a king floats an inch off the surface)
   const RISE = 1.6;         // (seconds to rise as a king)
   const domes = [];
@@ -438,10 +442,24 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     sparkGeo.setDrawRange(0, 0);   // (always there, drawing none until it bursts: so it's ready to draw, with no stall)
     group.add(sparks);
 
+    // the glitter it shatters into when smashed: shards flying out white, turning back to its own color as they fall,
+    // then lying on the board for good, each twinkling in its own time (colored one by one, so each can sparkle alone)
+    const GLITTER = 260, glitPos = new Float32Array(GLITTER * 3), glitCol = new Float32Array(GLITTER * 3), glit = [];
+    const glitGeo = new THREE.BufferGeometry();
+    glitGeo.setAttribute('position', new THREE.BufferAttribute(glitPos, 3));
+    glitGeo.setAttribute('color', new THREE.BufferAttribute(glitCol, 3));
+    const glitMat = new THREE.PointsMaterial({ map: glowDot(), vertexColors: true, size: radius * 0.1,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const glitter = new THREE.Points(glitGeo, glitMat);
+    glitter.layers.enable(glowLayer); glitter.frustumCulled = false; glitter.userData.noShadow = true;
+    glitGeo.setDrawRange(0, 0);   // (drawing none until it shatters)
+    group.add(glitter);
+    let smashAt = null;
+
     let king = 0, goal = 0, was = null, bx = x, bz = z, move = null, hit = null, grow = null, burstAt = null;
     // its sounds (made in code: see sounds.js), from where it is; the onyx a little deeper than the ruby
     const PITCH = stone === RUBY ? 1 : 0.8;
-    let zapping = null, humming = null, kingWas = 0, phase = '';
+    let zapping = null, kingWas = 0, phase = '';
     const sound = (name, o = {}) => sfx.play(name, d, { pitch: PITCH, ...o });
     function shape(c) {   // the flat bottom: a round disc where the slice crosses the ball
       const r = Math.sqrt(Math.max(radius * radius - c * c, 0)), pos = bottom.attributes.position;
@@ -455,25 +473,23 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
       get king() { return goal === 1; },
       setKing(on = goal === 0, now = false) {   // (now: already a king, no rising and no chime: as when you arrive mid game)
         goal = on ? 1 : 0;
-        if (now) { king = goal; kingWas = goal; if (goal && !humming) humming = sound('hum', { loop: true }); }
+        if (now) { king = goal; kingWas = goal; }
       },
       moveTo(tx, tz, over = null) {
         const target = over ? { piece: over, ...over.place() } : null;
         return new Promise(done => { move = { x0: bx, z0: bz, x1: tx, z1: tz, over: target, start: null, done, struck: false }; });
       },
       blast() { hit = { start: null }; },
+      smash() { hit = { start: null, smash: true }; },
       dispose() {   // (taken off the board for good: its held sounds stop)
-        if (humming) { humming.stop(); humming = null; }
         if (zapping) { zapping.stop(); zapping = null; }
       },
       restore() { hit = null; grow = { start: null }; d.visible = true; },
       tick(t) {
         const dt = was === null ? 0 : Math.min(t - was, 0.1); was = t;
-        if (goal !== kingWas) {   // crowned (a rising chime and a floating hum), or set down
+        if (goal !== kingWas) {   // crowned (a rising chime), or set down (a falling one)
           kingWas = goal;
           sound(goal ? 'rise' : 'settle');
-          if (goal && !humming) humming = sound('hum', { loop: true });
-          if (!goal && humming) { humming.stop(); humming = null; }
         }
         king += Math.sign(goal - king) * Math.min(Math.abs(goal - king), dt / RISE);
         const e = ease(king);
@@ -481,23 +497,33 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         if (c !== own.cut.value) { own.cut.value = c; shape(c); }
 
         // where it is: resting on its square, or on its way somewhere
-        let px = bx, pz = bz, lift = 0, beam = false;
+        let px = bx, pz = bz, lift = 0, beam = false, big = false;
         if (move) {
           const m = move;
           const first = m.start === null;
           if (first) m.start = t;
           const u = t - m.start, dist = Math.hypot(m.x1 - m.x0, m.z1 - m.z0);
           let finished = false;
-          if (goal === 1) {   // a king: straight across at a steady glide, rising a little, beaming while over its target
+          if (goal === 1 && m.over) {   // a king capturing: its bigger laser on, held still a second; then across, firing,
+            // arcing up over the piece (high enough to clear even a floating king) and smashing it as it passes; then a
+            // second more firing where it lands, and off
+            const CHARGE = 1.0, T = Math.max(1.4, dist / (radius * 5)), AFTER = 1.0;
+            const CLEAR = m.over.piece.king ? radius * 2.45 : radius * 1.4;   // (its bottom over the other's top, at the middle)
+            big = true; beam = true;
+            if (u >= CHARGE && phase !== 'fly') { phase = 'fly'; sound('glide', { length: T }); }
+            if (u < CHARGE) { px = m.x0; pz = m.z0; }
+            else if (u < CHARGE + T) {
+              const v = (u - CHARGE) / T, f = ease(v);
+              px = m.x0 + (m.x1 - m.x0) * f; pz = m.z0 + (m.z1 - m.z0) * f;
+              lift = CLEAR * Math.sin(Math.PI * f);
+            } else { px = m.x1; pz = m.z1; }
+            if (!m.struck && u >= CHARGE && Math.hypot(px - m.over.x, pz - m.over.z) < radius * 0.5) { m.struck = true; m.over.piece.smash(); }
+            finished = u >= CHARGE + T + AFTER;
+          } else if (goal === 1) {   // a king's plain move: straight across at a steady glide, rising a little
             const T = Math.max(1.2, dist / (radius * 5)), f = ease(u / T);
             if (first) sound('glide', { length: T });
             px = m.x0 + (m.x1 - m.x0) * f; pz = m.z0 + (m.z1 - m.z0) * f;
             lift = radius * 0.5 * Math.sin(Math.PI * Math.min(u / T, 1));
-            if (m.over) {
-              const gap = Math.hypot(px - m.over.x, pz - m.over.z);
-              beam = gap < radius * 1.3;
-              if (!m.struck && gap < radius * 0.35) { m.struck = true; m.over.piece.blast(); }
-            }
             finished = u >= T;
           } else if (m.over) {   // a plain piece capturing: up and over to hover above it, blast, then down beyond it
             const UP = 0.8, HOLD = 0.45, DOWN = 0.8, APEX = radius * 2.2;   // (it fires, then lands as its target burns)
@@ -527,7 +553,22 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         // being blasted: it heats up to glowing white, then explodes in a burst of sparks of its own color
         let heat = 0, size = 1;
         const HEAT = 1.0;   // (seconds glowing white before it bursts)
-        if (hit) {
+        const FLASH = 0.12;   // (seconds flashing white before it shatters, when smashed)
+        if (hit && hit.smash) {   // smashed: a quick white flash, then it shatters into glitter
+          if (hit.start === null) hit.start = t;
+          const u = t - hit.start;
+          heat = Math.min(u / FLASH, 1);
+          if (u >= FLASH && !hit.burst) {
+            hit.burst = t; smashAt = t; d.visible = false; sound('boom'); glitGeo.setDrawRange(0, GLITTER); glit.length = 0;
+            for (let i = 0; i < GLITTER; i++) {
+              const a = Math.random() * Math.PI * 2, up = Math.random() * 1.1 - 0.1, sp = radius * (2 + Math.random() * 6);
+              const r2 = Math.sqrt(Math.max(1 - up * up, 0)), at = Math.random() * radius * 0.9;
+              glit.push({ v: [Math.cos(a) * r2 * sp, Math.abs(up) * sp, Math.sin(a) * r2 * sp], down: false,
+                          ph: Math.random() * 6.3, rate: 1.5 + Math.random() * 3.5 });
+              glitPos.set([d.position.x + Math.cos(a) * r2 * at, d.position.y + (Math.random() - 0.3) * radius, d.position.z + Math.sin(a) * r2 * at], i * 3);
+            }
+          }
+        } else if (hit) {
           if (hit.start === null) { hit.start = t; sound('heat'); }
           const u = t - hit.start;
           heat = ease(u / HEAT);
@@ -553,6 +594,25 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           sparkMat.size = radius * (0.16 - 0.08 * Math.min(b / 1.6, 1));
           if (b > 1.6) { sparkGeo.setDrawRange(0, 0); burstAt = null; }
         }
+        if (smashAt !== null) {   // the glitter: flying, falling, then lying on the board twinkling (it stays)
+          const b = t - smashAt, white = 1 - ease(b / 0.8);   // (white as it shatters, back to its color as it falls)
+          for (let i = 0; i < GLITTER; i++) {
+            const g = glit[i], j = i * 3;
+            if (!g.down) {
+              const v = g.v;
+              v[0] *= 1 - 1.5 * dt; v[2] *= 1 - 1.5 * dt; v[1] -= radius * 22 * dt;
+              glitPos[j] += v[0] * dt; glitPos[j + 1] += v[1] * dt; glitPos[j + 2] += v[2] * dt;
+              if (glitPos[j + 1] <= y + 0.0005) { glitPos[j + 1] = y + 0.0005; g.down = true; }
+            }
+            // in flight, bright; lying on the board, a soft glint, flaring now and then
+            const glint = g.down ? 0.35 + 2.4 * Math.pow(Math.max(0, Math.sin(g.ph + t * g.rate)), 12) : 2.5;
+            glitCol[j]     = (color.r + (1 - color.r) * white) * glint;
+            glitCol[j + 1] = (color.g + (1 - color.g) * white) * glint;
+            glitCol[j + 2] = (color.b + (1 - color.b) * white) * glint;
+          }
+          glitGeo.attributes.position.needsUpdate = true; glitGeo.attributes.color.needsUpdate = true;
+          glitMat.size = radius * (0.1 - 0.045 * Math.min(b / 1.2, 1));
+        }
         if (!hit && grow) {   // growing back
           if (grow.start === null) grow.start = t;
           size = ease((t - grow.start) / 0.5);
@@ -575,10 +635,11 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           const fl = 1 + 0.18 * Math.sin(t * 43) + 0.1 * Math.sin(t * 71);
           laser.position.set(d.position.x, 0, d.position.z);
           beamOuter.position.y = beamCore.position.y = top;
-          beamOuter.scale.set(radius * 0.11 * fl, L, radius * 0.11 * fl);
-          beamCore.scale.set(radius * 0.035, L, radius * 0.035);
+          const W = big ? 1.5 : 1;   // (a king's laser: bigger)
+          beamOuter.scale.set(radius * 0.11 * W * fl, L, radius * 0.11 * W * fl);
+          beamCore.scale.set(radius * 0.035 * W, L, radius * 0.035 * W);
           spot.position.y = y + 0.0008;
-          spot.scale.setScalar(radius * 0.9 * fl);
+          spot.scale.setScalar(radius * 0.9 * W * fl);
           burn(t, d.position.x, d.position.z);
         }
         cool(t);

@@ -9,11 +9,11 @@
 // cell the size of one of its squares.
 // show: { loader, anisotropy, onReady, glowLayer, envCube } as for every piece; board: false for the table alone;
 // rug: its size in meters (0 for none). update(seconds) is to be called every frame.
-// VERSION 3
+// VERSION 4
 // ===================================================================================================================
 import { makeTable } from './table.js';
 import { makeStand } from './stand.js';
-import { makeCheckerboard } from './checkerboard.js';
+import { makeCheckerboard, SQUARES_TOP } from './checkerboard.js';
 import { makeRug } from './rug.js';
 
 export const SCALE = 0.75, TABLE_HEIGHT = 1.0;
@@ -42,7 +42,7 @@ export function makeGameTable(THREE, show, { board = true, rug = 0 } = {}) {
     materials.push(...b.materials);
   }
   const PLAY = (1.5 / 2 - 0.0254) / (0.5 + 0.151);   // (the board's playing area across, before shrinking: as checkerboard.js works it out)
-  return { group, materials, top: lift + TABLE_HEIGHT, boardTop: lift + TABLE_HEIGHT + 0.023 * SCALE, cell: PLAY / 8 * SCALE,   // (the squares' top: 2.3 cm up the board, before shrinking)
+  return { group, materials, top: lift + TABLE_HEIGHT, boardTop: lift + TABLE_HEIGHT + SQUARES_TOP * SCALE, cell: PLAY / 8 * SCALE,   // (the squares' top, as checkerboard.js gives it, shrunk)
            update: t => { stand.update(t); top.update(t); } };
 }
 // ===================================================================================================================
