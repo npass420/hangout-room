@@ -19,7 +19,7 @@
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
 //   the room); glowLayer: the room's glow layer; update(seconds): call every frame; dispose(): stops every piece's sounds,
 //   for when the whole set is taken away.
-// VERSION 38
+// VERSION 39
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -356,7 +356,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   }
   function dome(x, z, y, radius, stone) {
     const own = stone === RUBY ? {} : onyxGlow();
-    own.cut = { value: 0 }; own.boost = { value: 1 }; own.heat = { value: 0 }; own.specks = { value: 1 }; own.backing = { value: 0 }; own.backTint = { value: new THREE.Vector3(1, 1, 1) };
+    own.cut = { value: 0 }; own.boost = { value: 1 }; own.cap = { value: 2.6 }; own.heat = { value: 0 }; own.specks = { value: 1 }; own.backing = { value: 0 }; own.backTint = { value: new THREE.Vector3(1, 1, 1) };
     const mat = gemMaterial(null, null, 0, 0, radius, own);
     const color = (own.glowColor || gemShared.glowColor).value;
     const ball = new THREE.SphereGeometry(radius, 128, 64);
@@ -558,6 +558,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         own.heat.value = d.visible ? heat : 0;
         d.scale.setScalar(Math.max(size, 0.0001));
         own.boost.value = (1 + 1.2 * e) * (1 + 3 * heat);
+        own.cap.value = 2.6 * own.boost.value;   // (no tiny overbright glints flaring as you move; brighter as a king, and white hot when struck)
         pool.visible = d.visible && e > 0.001;
         pool.material.opacity = 0.35 * e;
         pool.position.set(d.position.x, y + 0.0007, d.position.z);
