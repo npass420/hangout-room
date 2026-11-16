@@ -19,7 +19,7 @@
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
 //   the room); glowLayer: the room's glow layer; update(seconds): call every frame; dispose(): stops every piece's sounds,
 //   for when the whole set is taken away.
-// VERSION 39
+// VERSION 40
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -138,10 +138,10 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         float tMin = 1e9; vec3 nOut = vec3(0.0, 1.0, 0.0); bool back = false;
         #if defined(ORB)
           float b = dot(p, d), c = dot(p, p) - ORB * ORB, h = b * b - c;   // (where the ray inside meets the round surface)
-          if (h > 0.0) { tMin = -b + sqrt(h); nOut = normalize(p + d * tMin); }
+          if (h > 0.0) { float t = -b + sqrt(h); if (t > 1e-6) { tMin = t; nOut = normalize(p + d * t); } }   // (only ahead of it)
         #elif defined(DOME)
           float b = dot(p, d), c = dot(p, p) - DOME * DOME, h = b * b - c;   // (the round top...)
-          if (h > 0.0) { tMin = -b + sqrt(h); nOut = normalize(p + d * tMin); }
+          if (h > 0.0) { float t = -b + sqrt(h); if (t > 1e-6) { tMin = t; nOut = normalize(p + d * t); } }   // (only ahead of it)
           if (d.y < -1e-5) {                                                  // (...or the flat bottom, if it's nearer)
             float tb = (cut - p.y) / d.y;
             if (tb > 1e-6 && tb < tMin) { tMin = tb; nOut = vec3(0.0, -1.0, 0.0); back = true; }
@@ -208,6 +208,9 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         colour = mix(colour, vec3(3.0), heat * heat);   // (struck: white hot, into the bloom)
       #endif
       colour = min(colour, vec3(cap));   // (a small stone kept from flaring: tiny overbright glints flicker in the glow as you move)
+      // (a broken number from a ray that grazes the stone's edge, here as black: one such pixel, carried into the glow,
+      // smears a big dark flash across the whole screen)
+      if (any(isnan(colour)) || any(isinf(colour)) || !(colour.r >= 0.0 && colour.g >= 0.0 && colour.b >= 0.0)) colour = vec3(0.0);
       gl_FragColor = vec4(colour, 1.0);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
