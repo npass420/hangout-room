@@ -2,11 +2,12 @@
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, and a big red
 // dot-matrix clock above the door. Toward the back wall, on its black velvet rug, stands the game
 // table (made in the Workshop: table/gametable/), its rubies glowing, with a tall chair on either side, under a red paper lantern that glows from a tiny
-// light deep inside and lets a soft white light fall onto the table. For now it's on show only; games are to come, a
-// table summoned for each.
+// light deep inside and lets a soft white light fall onto the table. On it: checkers, played with the glowing ruby and
+// onyx game pieces (checkers.js). Click a chair to sit down and play that side (the ruby chair plays ruby, the purple
+// chair onyx); Esc or Stand up gets you up again. More games are to come, a table summoned for each.
 // Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
-// VERSION 13
+// VERSION 18
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -26,6 +27,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { makeGameTable, TABLE_HEIGHT } from './gametable/gametable.js';
 import { makeChair } from './gametable/chair.js';
 import { makeLantern } from './gametable/lantern.js';
+import { startCheckers } from './checkers.js';
 
 document.querySelector('#ui h1').textContent = 'Table Room';
 document.title = 'Table Room';
@@ -155,7 +157,8 @@ const tableMats = [];   // (the game table's, filled in below)
 function snapRoom() {
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => {
-    const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people (they'd freeze in it)
+    const hide = [marker, ...Object.values(avatars).map(a => a.g)];   // not people or the game's pieces (they'd freeze in it)
+    if (game.pieces()) hide.push(game.pieces());
     const was = hide.map(o => o.visible);
     hide.forEach(o => { o.visible = false; });
     for (const m of tableMats) m.envMap = null;   // (the snapshots are taken without the table's own reflections)
@@ -192,7 +195,7 @@ scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm l
 // and its snapshots make its rubies shine.
 const GLOW = 1;   // the layer glowing things are put on (the rubies)
 const RUG = 3.0;  // the rug, meters square
-const TABLE_Z = -(R2 - RUG / 2 - 0.1);   // where it stands: toward the back wall, its rug's far edge 10 cm from the wall
+const TABLE_Z = -(R2 - RUG / 2 - 0.4);   // where it stands: toward the back wall, its rug's far edge 40 cm (about a foot) from the wall
 const tableManager = new THREE.LoadingManager();
 const tableLoaded = new Promise(r => { tableManager.onLoad = r; tableManager.onError = () => {}; });
 const tableLoader = new THREE.TextureLoader(tableManager).setPath(new URL('gametable/', import.meta.url).href);
@@ -212,12 +215,22 @@ const chairs = [1, -1].map(side => {
   const c = makeChair(THREE, showOpts, { stone: side > 0 ? 'ruby' : 'violet' });   // (one ruby, one purple)
   c.group.position.set(side * CHAIR_X, gameTable.top - TABLE_HEIGHT, TABLE_Z);   // (standing on the rug)
   c.group.rotation.y = -side * Math.PI / 2;   // (turned to face the table)
-  c.group.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+  c.group.traverse(o => { if (o.isMesh) o.receiveShadow = true; o.userData.chair = side > 0 ? 1 : 2; });   // (click it to sit)
   scene.add(c.group);
   tableMats.push(...c.materials);
   return c;
 });
 const TABLE_KEEP = 1.3;   // how close you can walk to the middle of the table (it's 1.5 m across, with its chairs)
+
+// ---------- Checkers on the table (checkers.js): its pieces' sounds come from where they are, heard by an ear on the camera ----------
+const listener = new THREE.AudioListener();
+camera.add(listener);
+const game = startCheckers({ center: new THREE.Vector3(0, 0, TABLE_Z), top: gameTable.boardTop, cell: gameTable.cell,
+  glowLayer: GLOW, envCube: cubeTarget.texture, listener,
+  addMaterials: list => {   // (the pieces reflect the room too)
+    for (const m of list) { tableMats.push(m); if (roomEnv) { m.envMap = roomEnv.texture; m.needsUpdate = true; } }
+  },
+  dropMaterials: list => { for (const m of list) { const i = tableMats.indexOf(m); if (i >= 0) tableMats.splice(i, 1); } } });
 
 // ---------- The red paper lantern hanging over the table ----------
 // Its little light shines soft and white straight down onto the table (white, so the table keeps its own colors); the
@@ -286,12 +299,14 @@ function refreshAvatars() {
     if (fresh) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const a = avatars[id], to = spotOf(p);
     a.tx = to.x; a.tz = to.z;
+    a.ty = p.s ? 0.42 : 0;   // (sitting in a chair at the table: up on its seat)
     if (fresh) a.g.position.set(to.x, 0, to.z);   // someone new just appears where they are
   }
 }
 function moveAvatars(dt) {   // everyone else glides toward where they're walking
   for (const a of Object.values(avatars)) {
     const p = a.g.position, dx = a.tx - p.x, dz = a.tz - p.z, d = Math.hypot(dx, dz);
+    p.y += ((a.ty || 0) - p.y) * Math.min(1, dt * 6);
     if (d < 0.001) continue;
     const step = Math.min(d, WALK * dt);
     p.x += dx / d * step; p.z += dz / d * step;
@@ -305,6 +320,7 @@ inRoom('tables');
 
 function refreshAll() {
   refreshAvatars();
+  game.refresh();
 }
 hooks.refreshAll = refreshAll;
 
@@ -437,6 +453,7 @@ function leaveRoom() {
 }
 function goHome() {   // the whoosh back to the Cave
   if (!S.myName) return;
+  standUp();
   travelHome(() => remove(ref(db, 'tables/presence/' + myId)));
 }
 leaveBtn.addEventListener('click', leaveRoom);
@@ -510,10 +527,47 @@ function clampSpot(x, z) {   // inside the walls, and not in the table
   if (d < TABLE_KEEP) return d > 0.001 ? [x * TABLE_KEEP / d, TABLE_Z + dz * TABLE_KEEP / d] : [0, TABLE_Z + TABLE_KEEP];
   return [x, z];
 }
-function mySpot() {   // what everyone else sees: where you're standing (or walking to)
+function mySpot() {   // what everyone else sees: where you're standing (or walking to), or the chair you're sitting in
+  if (seated) return { x: +(seatX(seated)).toFixed(2), z: +TABLE_Z.toFixed(2), s: 'checkers:' + seated };
   const x = me.tx != null ? me.tx : me.x, z = me.tz != null ? me.tz : me.z;
-  return { x: +x.toFixed(2), z: +z.toFixed(2) };
+  return { x: +x.toFixed(2), z: +z.toFixed(2), s: null };
 }
+
+// ---------- Sitting at the table to play: click a chair (1 the ruby chair at +x, 2 the purple one at -x) ----------
+// You sit looking down the table at the board; drag to look around as usual. Esc, Stand up, or clicking the floor gets
+// you up again, a step out from your chair.
+let seated = 0;
+const seatX = side => (side === 1 ? 1 : -1) * CHAIR_X;
+const SEAT_EYE = 1.45, SEAT_PITCH = -0.5;
+const seatYaw = side => (side === 1 ? Math.PI / 2 : -Math.PI / 2);   // (facing the middle of the table)
+const HINT_SEAT = PHONE ? 'Tap a piece, then a square' : 'Click a piece, then a square · Esc to stand up';
+let sitting = false;
+function sitDown(side) {
+  if (seated || sitting) return;
+  if (game.seatTaken(side)) { showBanner('Someone is sitting there', 2); return; }
+  sitting = true;
+  game.sit(side).then(ok => {
+    sitting = false;
+    if (!ok) { showBanner('Someone is sitting there', 2); return; }
+    seated = side;
+    me.tx = me.tz = null; marker.visible = false; keys.clear();
+    yaw = seatYaw(side); pitch = SEAT_PITCH; setFov(BASE_FOV);
+    hint.textContent = HINT_SEAT;
+    sendSpot(true);
+  });
+}
+function standUp() {
+  if (!seated) return;
+  const side = seated;
+  seated = 0;
+  game.stand();
+  [me.x, me.z] = clampSpot(seatX(side) * 1.45, TABLE_Z + 0.5);   // a step out from the chair
+  me.tx = me.tz = null;
+  yaw = seatYaw(side); pitch = -0.12;
+  hint.textContent = HINT_WALK;
+  sendSpot(true);
+}
+hooks.standUp = standUp;
 let sentAt = 0, sendTimer = 0;
 function sendSpot(now) {   // tell everyone where you're going (a few times a second at most)
   if (!S.myName) return;
@@ -546,13 +600,14 @@ let markerFade = 0;
 // ---------- Keys ----------
 const keys = new Set();
 function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
-function resetView() {   // R: look straight ahead again and zoom back out
+function resetView() {   // R: look straight ahead again and zoom back out (sitting: back to looking at the board)
   setFov(BASE_FOV);
-  pitch = -0.12;
+  if (seated) { yaw = seatYaw(seated); pitch = SEAT_PITCH; } else pitch = -0.12;
 }
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   if (e.key.toLowerCase() === 'r' && !intro) { resetView(); return; }
+  if (e.key === 'Escape' && seated) { standUp(); return; }
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
     keys.add(k);
@@ -562,7 +617,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right turn
-  if (!keys.size || typing()) return;
+  if (!keys.size || typing() || seated) return;
   if (keys.has('arrowleft')) yaw += 1.8 * dt;
   if (keys.has('arrowright')) yaw -= 1.8 * dt;
   const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
@@ -596,11 +651,16 @@ function aim(e) {
 }
 function pickUnder(e) {   // the first real thing under the pointer (not the light's glow, the marker or other people)
   aim(e);
+  if (seated) {   // sitting at the table: the board comes first (through the pieces on it)
+    const b = raycaster.intersectObject(game.pick)[0];
+    if (b) return { board: b.point };
+  }
   const hit = raycaster.intersectObjects(scene.children, true).find(h => shown(h.object) && !h.object.userData.avatar
     && h.object !== marker && !(h.object.material && h.object.material.blending === THREE.AdditiveBlending));
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.door) return { door: true };
+  if (u.chair) return { chair: u.chair };
   if (u.floor) return { floor: hit.point };
   return null;
 }
@@ -610,6 +670,7 @@ let pinchDist = 0;
 function pinchSpread() { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); }
 canvas.addEventListener('pointerdown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
+  if (listener.context.state === 'suspended') listener.context.resume();   // (sounds can only start after a click)
   touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
   down = { x: e.clientX, y: e.clientY };
@@ -632,7 +693,8 @@ window.addEventListener('pointermove', e => {
   }
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
-    canvas.style.cursor = pickUnder(e) ? 'pointer' : 'grab';
+    const p = pickUnder(e);
+    canvas.style.cursor = p && (p.board ? game.canTap(p.board) : !(p.chair && seated)) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
@@ -642,8 +704,10 @@ window.addEventListener('pointerup', e => {
   if (!wasTap || intro || !S.myName) return;
   const p = pickUnder(e);
   if (!p) return;
-  if (p.door) leaveRoom();
-  else if (p.floor) walkTo(p.floor.x, p.floor.z);
+  if (p.board) game.tap(p.board);
+  else if (p.chair) sitDown(p.chair);
+  else if (p.door) leaveRoom();
+  else if (p.floor) { standUp(); walkTo(p.floor.x, p.floor.z); }
 });
 
 // ---------- The glow ----------
@@ -722,7 +786,8 @@ renderer.setAnimationLoop(() => {
       if (d > 0.001) { me.x += dx / d * step; me.z += dz / d * step; }
       if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; }
     }
-    camera.position.set(me.x, EYE, me.z);
+    if (seated) camera.position.set(seatX(seated) * 0.93, SEAT_EYE, TABLE_Z);   // (sitting: a little forward in the chair)
+    else camera.position.set(me.x, EYE, me.z);
     camera.rotation.set(pitch, yaw, 0);
   }
   if (marker.visible && me.tx == null) {   // the ring fades once you get there
@@ -734,6 +799,7 @@ renderer.setAnimationLoop(() => {
   gameTable.update(clock.elapsedTime);   // (the rubies' glow slowly breathing)
   for (const c of chairs) c.update(clock.elapsedTime);
   lantern.update(clock.elapsedTime);
+  game.update(clock.elapsedTime, dt);   // (the pieces: floating kings, moves, lasers and sparks)
   wallClock.update();
   render();
 });

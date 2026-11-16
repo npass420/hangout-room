@@ -1,12 +1,12 @@
 // ===================================================================================================================
 // Workshop/pieces/sounds.js: the game pieces' sounds, all made in code (no sound files): each sound is worked out
 // sample by sample once, kept, and played from the piece itself, so it comes from where the piece is in the room.
-//   glide (a soft rushing whoosh while it moves), zap (the laser's buzzing hum, held while it fires), heat (a rising
+//   glide (a soft rushing whoosh while it moves), zap (the laser: a buzz as if played backwards, swelling and cutting off, held while it fires; the same for both stones), heat (a rising
 //   whine as a struck piece glows white), boom (the burst: a deep thump and a crackle of sparks), land (a glassy click),
 //   rise and settle (a shimmering chime as a king lifts, falling as it sets down), hum (a king's low floating hum).
 // makeSounds(THREE, listener) gives back { play(name, onto, { pitch, volume, loop }) } (play gives back the sound, so a
 // held one can be stopped with .stop()); listener: a THREE.AudioListener riding on the camera, or null for silence.
-// VERSION 1
+// VERSION 2
 // ===================================================================================================================
 export function makeSounds(THREE, listener) {
   if (!listener) return { play: () => null };
@@ -34,13 +34,16 @@ export function makeSounds(THREE, listener) {
         a[i] = (lo * 0.7 + band * 0.12) * Math.sin(Math.PI * u) ** 1.5;
       }
     }),
-    // the laser: a bright buzzing hum, a little unsteady, made to loop smoothly while it fires
-    zap: () => make('zap', 0.5, (a, n) => {
-      const f = 330;   // (a whole number of waves fits the half second, so the loop has no click)
+    // the laser: a buzz played as if recorded backwards: each short pulse swells up out of nothing and cuts off sharp,
+    // with a ringing feedback tone over it, swelling the same way (made to loop: the pulses run on while it fires)
+    zap: () => make('zap', 0.48, (a, n) => {
+      const PULSE = n / 4;   // (four swells in the loop)
       for (let i = 0; i < n; i++) {
-        const t = i / RATE, w = 1 + 0.004 * Math.sin(TAU * 14 * t);
-        const saw = ((f * t * w) % 1) * 2 - 1, sq = Math.sign(Math.sin(TAU * f * 2 * t));
-        a[i] = saw * 0.5 + sq * 0.12 + Math.sin(TAU * f * 3 * t) * 0.25 + noise() * 0.08;
+        const t = i / RATE, u = (i % PULSE) / PULSE;
+        const swell = Math.pow(u, 2.6) * Math.min(1, (1 - u) * 60);   // (rising, then a quick cut; no click at the cut)
+        const buzz = ((150 * t) % 1) * 2 - 1;
+        const ring = Math.sin(TAU * 1250 * t) * 0.5 + Math.sin(TAU * 1875 * t) * 0.25;   // (the feedback whine)
+        a[i] = (buzz * 0.55 + ring * (0.3 + 0.7 * u) + noise() * 0.06) * swell;
       }
     }),
     // the struck piece heating up: a whine climbing as it goes white, trembling faster
@@ -91,7 +94,7 @@ export function makeSounds(THREE, listener) {
       }
     });
   }
-  const LEVEL = { glide: 0.35, zap: 0.4, heat: 0.45, boom: 1, land: 0.5, rise: 0.6, settle: 0.5, hum: 0.12 };
+  const LEVEL = { glide: 0.26, zap: 0.22, heat: 0.32, boom: 0.7, land: 0.35, rise: 0.45, settle: 0.38, hum: 0.09 };   // (all kept soft)
 
   function play(name, onto, { pitch = 1, volume = 1, loop = false, length = 0 } = {}) {
     if (ctx.state !== 'running') return null;   // (the browser holds sound back until you've clicked or pressed a key)

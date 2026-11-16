@@ -17,8 +17,9 @@
 //     (0 = toward -z), grow sizes it.
 //   oval(x, z, turn, y, stone, grow): an oval jewel lying along x (turned by turn), J.RUBY (cut) or J.ONYX (dome).
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
-//   the room); glowLayer: the room's glow layer; update(seconds): call every frame.
-// VERSION 35
+//   the room); glowLayer: the room's glow layer; update(seconds): call every frame; dispose(): stops every piece's sounds,
+//   for when the whole set is taken away.
+// VERSION 38
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -334,7 +335,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   }
   // a game piece: a perfectly smooth round dome, flat bottomed, no setting, sitting on y. It gives back:
   //   setKing(on): crowns it: it rises out of its square, its flat bottom growing round as it lifts, into a whole glowing
-  //     ball floating an inch up, bobbing and slowly rocking, its light brighter and shining on the board (or sets back).
+  //     ball floating an inch up, bobbing and slowly rocking, brighter, with a soft glow on the board below (or sets back).
   //   moveTo(x, z, over): glides it to x, z (a promise, done when it lands). over: a piece it captures on the way. A
   //     plain piece lifts, arcs up to hover over it, blasts it with a laser, then glides down onto its new square; a king
   //     flies straight across, beaming the whole time it's over it. Without over, just the glide.
@@ -363,8 +364,13 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     const unit = bottom.attributes.position.array.slice();
     const d = new THREE.Group();
     d.add(shine(new THREE.Mesh(ball, mat)), shine(new THREE.Mesh(bottom, mat)));
-    const light = new THREE.PointLight(color, 0, 0.35, 2);
-    d.add(light);   // (a king's light on the board below)
+    // a king's glow on the board below it: a soft pool of its color (drawn, not a real light: a light per piece would
+    // slow the whole room, and make it stall as pieces come and go)
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ map: glowDot(), color: color.clone(), transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -3 }));
+    pool.scale.setScalar(radius * 4.5); pool.userData.noShadow = true; pool.visible = false;
+    group.add(pool);
     d.position.set(x, y, z);
     group.add(d);
 
@@ -425,7 +431,8 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     const sparkMat = new THREE.PointsMaterial({ map: glowDot(), color: color.clone().multiplyScalar(4), size: radius * 0.12,
       transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     const sparks = new THREE.Points(sparkGeo, sparkMat);
-    sparks.layers.enable(glowLayer); sparks.visible = false; sparks.frustumCulled = false;
+    sparks.layers.enable(glowLayer); sparks.frustumCulled = false;
+    sparkGeo.setDrawRange(0, 0);   // (always there, drawing none until it bursts: so it's ready to draw, with no stall)
     group.add(sparks);
 
     let king = 0, goal = 0, was = null, bx = x, bz = z, move = null, hit = null, grow = null, burstAt = null;
@@ -443,12 +450,19 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     const piece = {
       group: d,
       get king() { return goal === 1; },
-      setKing(on = goal === 0) { goal = on ? 1 : 0; },
+      setKing(on = goal === 0, now = false) {   // (now: already a king, no rising and no chime: as when you arrive mid game)
+        goal = on ? 1 : 0;
+        if (now) { king = goal; kingWas = goal; if (goal && !humming) humming = sound('hum', { loop: true }); }
+      },
       moveTo(tx, tz, over = null) {
         const target = over ? { piece: over, ...over.place() } : null;
         return new Promise(done => { move = { x0: bx, z0: bz, x1: tx, z1: tz, over: target, start: null, done, struck: false }; });
       },
       blast() { hit = { start: null }; },
+      dispose() {   // (taken off the board for good: its held sounds stop)
+        if (humming) { humming.stop(); humming = null; }
+        if (zapping) { zapping.stop(); zapping = null; }
+      },
       restore() { hit = null; grow = { start: null }; d.visible = true; },
       tick(t) {
         const dt = was === null ? 0 : Math.min(t - was, 0.1); was = t;
@@ -499,7 +513,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
             lift = radius * 1.2 * Math.sin(Math.PI * Math.min(u / T, 1));
             finished = u >= T;
           }
-          if (finished) { bx = m.x1; bz = m.z1; px = bx; pz = bz; lift = 0; move = null; phase = ''; if (!goal) sound('land'); m.done(); }
+          if (finished) { bx = m.x1; bz = m.z1; px = bx; pz = bz; lift = 0; move = null; phase = ''; m.done(); }
         }
 
         // a king rocks and drifts gently as it floats
@@ -515,7 +529,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           const u = t - hit.start;
           heat = ease(u / HEAT);
           if (u >= HEAT && !hit.burst) {   // the burst: the stone gone at once, sparks flying out from all through it
-            hit.burst = t; burstAt = t; d.visible = false; sound('boom'); sparks.visible = true; sparkVel.length = 0;
+            hit.burst = t; burstAt = t; d.visible = false; sound('boom'); sparkGeo.setDrawRange(0, SPARKS); sparkVel.length = 0;
             for (let i = 0; i < SPARKS; i++) {
               const a = Math.random() * Math.PI * 2, up = Math.random() * 1.2 - 0.2, sp = radius * (4 + Math.random() * 9);
               const r2 = Math.sqrt(Math.max(1 - up * up, 0)), at = Math.random() * radius * 0.8;
@@ -534,7 +548,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           sparkGeo.attributes.position.needsUpdate = true;
           sparkMat.opacity = 1 - ease(b / 1.6);
           sparkMat.size = radius * (0.16 - 0.08 * Math.min(b / 1.6, 1));
-          if (b > 1.6) { sparks.visible = false; burstAt = null; }
+          if (b > 1.6) { sparkGeo.setDrawRange(0, 0); burstAt = null; }
         }
         if (!hit && grow) {   // growing back
           if (grow.start === null) grow.start = t;
@@ -544,12 +558,13 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         own.heat.value = d.visible ? heat : 0;
         d.scale.setScalar(Math.max(size, 0.0001));
         own.boost.value = (1 + 1.2 * e) * (1 + 3 * heat);
-        light.intensity = 0.004 * e;
-        light.position.y = c - 0.005;
+        pool.visible = d.visible && e > 0.001;
+        pool.material.opacity = 0.35 * e;
+        pool.position.set(d.position.x, y + 0.0007, d.position.z);
 
         // the laser: from the stone's underside straight down to the surface, flickering
         laser.visible = beam;
-        if (beam && !zapping) zapping = sound('zap', { loop: true });
+        if (beam && !zapping) zapping = sound('zap', { loop: true, pitch: 1 });   // (the same laser sound for both stones)
         if (!beam && zapping) { zapping.stop(); zapping = null; }
         if (beam) {
           const top = d.position.y + c, L = Math.max(top - y, 0.001);
@@ -609,7 +624,8 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     gemShared.glow.value = ember * (1 + 0.23 * Math.sin(t * 1.3) + 0.07 * Math.sin(t * 3.1));
     for (const p of domes) p.tick(t);
   }
-  return { crest, oval, orb, dome, inlay, RUBY, ONYX, group, update };
+  function dispose() { for (const p of domes) p.dispose(); }   // (the whole set taken away: every held sound stops)
+  return { crest, oval, orb, dome, inlay, RUBY, ONYX, group, update, dispose };
 }
 // ===================================================================================================================
 // END OF Workshop/pieces/jewels.js

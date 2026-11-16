@@ -4,11 +4,12 @@
 // rug under it. It's what goes into a room; the pieces themselves stay separate (they move in play).
 // It's made at 75% of the size its parts were first made at (a 1.5 m top, a board a little over a meter), all of it shrunk
 // evenly so every jewel, ring and band keeps its true shape; its stand is cut to suit, so the top stands 1 m up.
-// makeGameTable(THREE, show, { board, rug }) gives back { group, materials, top, boardTop, update }: the group stands on
-// y = 0 (the floor), centered; top is the height of the tabletop, boardTop the height of the board's playing surface.
+// makeGameTable(THREE, show, { board, rug }) gives back { group, materials, top, boardTop, cell, update }: the group stands on
+// y = 0 (the floor), centered; top is the height of the tabletop, boardTop the height of the board's playing surface,
+// cell the size of one of its squares.
 // show: { loader, anisotropy, onReady, glowLayer, envCube } as for every piece; board: false for the table alone;
 // rug: its size in meters (0 for none). update(seconds) is to be called every frame.
-// VERSION 2
+// VERSION 3
 // ===================================================================================================================
 import { makeTable } from './table.js';
 import { makeStand } from './stand.js';
@@ -40,7 +41,8 @@ export function makeGameTable(THREE, show, { board = true, rug = 0 } = {}) {
     stand.group.add(b.group);
     materials.push(...b.materials);
   }
-  return { group, materials, top: lift + TABLE_HEIGHT, boardTop: lift + TABLE_HEIGHT + 0.023 * SCALE,   // (the squares' top: 2.3 cm up the board, before shrinking)
+  const PLAY = (1.5 / 2 - 0.0254) / (0.5 + 0.151);   // (the board's playing area across, before shrinking: as checkerboard.js works it out)
+  return { group, materials, top: lift + TABLE_HEIGHT, boardTop: lift + TABLE_HEIGHT + 0.023 * SCALE, cell: PLAY / 8 * SCALE,   // (the squares' top: 2.3 cm up the board, before shrinking)
            update: t => { stand.update(t); top.update(t); } };
 }
 // ===================================================================================================================
