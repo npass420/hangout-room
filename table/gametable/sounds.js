@@ -2,11 +2,11 @@
 // Workshop/pieces/sounds.js: the game pieces' sounds, all made in code (no sound files): each sound is worked out
 // sample by sample once, kept, and played from the piece itself, so it comes from where the piece is in the room.
 //   glide (a soft rushing whoosh while it moves), zap (the laser: a buzz as if played backwards, swelling and cutting off, held while it fires; the same for both stones), heat (a rising
-//   whine as a struck piece glows white), boom (the burst: a deep thump and a crackle of sparks), land (a glassy click),
-//   rise and settle (a shimmering chime as a king lifts, falling as it sets down), hum (a king's low floating hum).
+//   whine as a struck piece glows white), boom (a piece knocked out: a buzzy sliding-down "brrrnn"), land (a glassy click),
+//   rise and settle (a shimmering chime as a king lifts, falling as it sets down), hum (a low floating hum, no longer used).
 // makeSounds(THREE, listener) gives back { play(name, onto, { pitch, volume, loop }) } (play gives back the sound, so a
 // held one can be stopped with .stop()); listener: a THREE.AudioListener riding on the camera, or null for silence.
-// VERSION 2
+// VERSION 3
 // ===================================================================================================================
 export function makeSounds(THREE, listener) {
   if (!listener) return { play: () => null };
@@ -55,16 +55,18 @@ export function makeSounds(THREE, listener) {
         a[i] = (Math.sin(ph) + 0.3 * Math.sin(ph * 2.01)) * u * u * (0.8 + 0.2 * Math.sin(TAU * (6 + 30 * u) * i / RATE));
       }
     }),
-    // the burst: a deep thump, a roar of noise falling away, and a crackle of sparks after
-    boom: () => make('boom', 1.8, (a, n) => {
-      let lo = 0, ph = 0;
+    // the burst (a piece knocked out): a buzzy game "brrrnn": a chunky square-ish tone sliding down, fluttering fast
+    // so it rattles, rounded off so it stays soft and toy-like, slowing and dropping as it fades out
+    boom: () => make('boom', 1.1, (a, n) => {
+      let ph = 0, fl = 0, lo = 0;
       for (let i = 0; i < n; i++) {
-        const t = i / RATE, x = noise();
-        lo += (x - lo) * (0.25 * Math.exp(-t * 3) + 0.01);
-        ph += TAU * (90 * Math.exp(-t * 4) + 40) / RATE;
-        let s = Math.sin(ph) * Math.exp(-t * 5) * 1.2 + lo * Math.exp(-t * 2.5) * 1.5;
-        if (t > 0.08 && noise() > 1 - 0.004 * Math.exp(-t * 1.5)) s += 0.8 * Math.sign(noise());   // (the crackle)
-        a[i] = s;
+        const u = i / n;
+        ph += TAU * (260 * Math.pow(0.22, u)) / RATE;                     // (sliding down from 260 to under 60)
+        fl += TAU * (34 - 16 * u) / RATE;                                  // (the rattle, slowing as it falls)
+        const tone = Math.tanh(Math.sin(ph) * 3) * 0.8 + Math.sin(ph * 2) * 0.2;   // (square-ish, not harsh)
+        const rattle = 0.55 + 0.45 * Math.tanh(Math.sin(fl) * 4);
+        lo += (tone * rattle - lo) * 0.18;                                 // (rounded off: no fizz)
+        a[i] = lo * Math.min(1, u * 60) * Math.pow(1 - u, 0.8);
       }
     }),
     // landing: a small glassy click
@@ -94,7 +96,7 @@ export function makeSounds(THREE, listener) {
       }
     });
   }
-  const LEVEL = { glide: 0.26, zap: 0.22, heat: 0.32, boom: 0.7, land: 0.35, rise: 0.45, settle: 0.38, hum: 0.09 };   // (all kept soft)
+  const LEVEL = { glide: 0.26, zap: 0.22, heat: 0.32, boom: 0.4, land: 0.35, rise: 0.45, settle: 0.38, hum: 0.09 };   // (all kept soft)
 
   function play(name, onto, { pitch = 1, volume = 1, loop = false, length = 0 } = {}) {
     if (ctx.state !== 'running') return null;   // (the browser holds sound back until you've clicked or pressed a key)

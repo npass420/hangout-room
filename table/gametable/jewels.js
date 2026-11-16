@@ -19,7 +19,7 @@
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
 //   the room); glowLayer: the room's glow layer; update(seconds): call every frame; dispose(): stops every piece's sounds,
 //   for when the whole set is taken away.
-// VERSION 41
+// VERSION 42
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -341,7 +341,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   //     ball floating an inch up, bobbing and slowly rocking, brighter, with a soft glow on the board below (or sets back).
   //   moveTo(x, z, over): glides it to x, z (a promise, done when it lands). over: a piece it captures on the way. A
   //     plain piece lifts, arcs up to hover over it, blasts it with a laser, then glides down onto its new square. A king
-  //     turns on its bigger laser and holds still a second, then flies across firing, arcing up over the piece (clearing
+  //     turns on its bigger laser and holds still half a second, then flies across firing, arcing up over the piece (clearing
   //     it, even a floating king) and smashing it as it passes, lands, fires a second more, and stops.
   //     Without over, just the glide.
   //   The laser leaves glowing burn marks on the surface that cool to a dark scorch and fade.
@@ -504,10 +504,10 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           if (first) m.start = t;
           const u = t - m.start, dist = Math.hypot(m.x1 - m.x0, m.z1 - m.z0);
           let finished = false;
-          if (goal === 1 && m.over) {   // a king capturing: its bigger laser on, held still a second; then across, firing,
+          if (goal === 1 && m.over) {   // a king capturing: its bigger laser on, held still half a second; then across, firing,
             // arcing up over the piece (high enough to clear even a floating king) and smashing it as it passes; then a
             // second more firing where it lands, and off
-            const CHARGE = 1.0, T = Math.max(1.4, dist / (radius * 5)), AFTER = 1.0;
+            const CHARGE = 0.5, T = Math.max(1.4, dist / (radius * 5)), AFTER = 1.0;
             const CLEAR = m.over.piece.king ? radius * 2.45 : radius * 1.4;   // (its bottom over the other's top, at the middle)
             big = true; beam = true;
             if (u >= CHARGE && phase !== 'fly') { phase = 'fly'; sound('glide', { length: T }); }
