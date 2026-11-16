@@ -7,7 +7,7 @@
 // makeLantern(THREE, { glowLayer, radius, shadows }) gives back { group, light, update }: the group's middle is the
 // ball's middle; light is the white light shining down (aimed at its target, which is placed by whoever hangs it).
 // update(seconds) is to be called every frame (the little light flickers softly and drifts, like a flame).
-// VERSION 8
+// VERSION 9
 // ===================================================================================================================
 export function makeLantern(THREE, { glowLayer = 1, radius = 0.26, shadows = true } = {}) {
   const R = radius, SQUAT = 0.88;     // (a little wider than it is tall)
@@ -84,7 +84,7 @@ export function makeLantern(THREE, { glowLayer = 1, radius = 0.26, shadows = tru
   group.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.userData.noShadow = true; } });
 
   // ---------- The light: soft and white, falling straight down out of the bottom ----------
-  const light = new THREE.SpotLight(0xfff3e8, 18, 7, 0.85, 1, 1.2);
+  const light = new THREE.SpotLight(0xfff3e8, 18, 7, 0.5, 1, 1.2);   // (a beam just wide enough for the table and its rug, so the shiny floor beyond catches no glare)
   light.position.y = -ringY - 0.02;
   if (shadows) { light.castShadow = true; light.shadow.mapSize.set(1024, 1024); light.shadow.bias = -0.0005; light.shadow.radius = 4; }
   group.add(light);

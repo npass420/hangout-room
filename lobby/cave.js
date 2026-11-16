@@ -15,7 +15,7 @@
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 7
+// VERSION 8
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -637,4 +637,14 @@ function frame(now) {
   }
 }
 build();
-raf = window.requestAnimationFrame(frame);
+// Testing on this PC: localhost:8080/HangoutRoom/?room=table goes straight into the Table Room (no Cave, no walk in
+// through the door), under your saved name. Only on this PC; the live site always starts in the Cave.
+const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const TEST_ROOM = LOCAL ? new URLSearchParams(location.search).get('room') : null;
+if (TEST_ROOM === 'table') {
+  setName(myName || 'Tester');
+  going = 'leftFront';
+  leaveCave();
+  cv.style.visibility = 'hidden'; nameBox.style.display = 'none';
+  loadRoom();
+} else raf = window.requestAnimationFrame(frame);

@@ -8,6 +8,8 @@
 // update }
 // (envCube: the room's reflection snapshot as a cube, which the rubies look out at through their facets):
 //   orb(x, y, z, radius): a smooth round ruby, drawn by the same gem shader.
+//   inlay(x, y, z, radius, { wide, low, rim, color }): a clear bright oval dome set on a surface, facing +z, a tiny light
+//     glowing deep inside: color 'ruby' (red) or 'violet' (purple); in a thin gold rim (rim: false for none).
 //   dome(x, z, y, radius, stone): a game piece: a perfectly smooth round dome with a flat bottom and no setting, a tiny
 //     light deep inside lighting fine specks through it: J.RUBY (deep crimson) or J.ONYX (black, glowing dark black
 //     light purple). Gives back { group, setKing(on) }: a king rises into a floating ball, glowing brighter.
@@ -16,7 +18,7 @@
 //   oval(x, z, turn, y, stone, grow): an oval jewel lying along x (turned by turn), J.RUBY (cut) or J.ONYX (dome).
 //   y is the surface they sit on; size scales them all; materials: a list to add their materials to (so they reflect
 //   the room); glowLayer: the room's glow layer; update(seconds): call every frame.
-// VERSION 29
+// VERSION 35
 // ===================================================================================================================
 import { makeSounds } from './sounds.js';
 export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, envCube = null, listener = null } = {}) {
@@ -82,7 +84,8 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     glow: { value: 0.3 },
     envIntensity: { value: 1.32 },
     envMap: { value: envCube },
-    ior: { value: 1.77 }                                // (a ruby's: how much it bends light)
+    ior: { value: 1.77 },                               // (a ruby's: how much it bends light)
+    cap: { value: 100 }                                 // (the brightest it may be anywhere: no limit, unless a stone sets its own)
   };
   const gemVertex = `
     varying vec3 vPos; varying vec3 vCam;
@@ -97,11 +100,14 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   const gemFragment = `
     uniform vec4 planes[${MAX_PLANES}]; uniform int planeCount;
     uniform samplerCube envMap; uniform float envIntensity; uniform vec3 absorb;
-    uniform vec3 glowColor; uniform float glow; uniform float ior;
+    uniform vec3 glowColor; uniform float glow; uniform float ior; uniform float cap;
     #ifdef DOME
       uniform float cut;     // (where a dome's flat bottom is: 0 a dome, down to -DOME a whole ball, as a king)
       uniform float boost;   // (how much brighter its light is: 1, and more as a king)
       uniform float heat;    // (0, up to 1 as it's struck: the whole stone glowing white hot)
+      uniform float specks;  // (1: the glittering specks inside; 0: none, a clear stone)
+      uniform float backing; // (0: its flat bottom lets light through; more: it's set on something that throws light back up)
+      uniform vec3 backTint; // (the color that light comes back up as)
     #endif
     uniform mat4 modelMatrix;
     varying vec3 vPos; varying vec3 vCam;
@@ -128,7 +134,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
       vec3 d = refract(rd, n, 1.0 / ior), p = vPos;
       vec3 through = vec3(1.0), inside = vec3(0.0);
       for (int bounce = 0; bounce < 5; bounce++) {
-        float tMin = 1e9; vec3 nOut = vec3(0.0, 1.0, 0.0);
+        float tMin = 1e9; vec3 nOut = vec3(0.0, 1.0, 0.0); bool back = false;
         #if defined(ORB)
           float b = dot(p, d), c = dot(p, p) - ORB * ORB, h = b * b - c;   // (where the ray inside meets the round surface)
           if (h > 0.0) { tMin = -b + sqrt(h); nOut = normalize(p + d * tMin); }
@@ -137,7 +143,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
           if (h > 0.0) { tMin = -b + sqrt(h); nOut = normalize(p + d * tMin); }
           if (d.y < -1e-5) {                                                  // (...or the flat bottom, if it's nearer)
             float tb = (cut - p.y) / d.y;
-            if (tb > 1e-6 && tb < tMin) { tMin = tb; nOut = vec3(0.0, -1.0, 0.0); }
+            if (tb > 1e-6 && tb < tMin) { tMin = tb; nOut = vec3(0.0, -1.0, 0.0); back = true; }
           }
         #else
         for (int i = 0; i < ${MAX_PLANES}; i++) {
@@ -179,7 +185,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
             float dd = length(cross(sp - p, d)) / (0.01 * DOME * (0.6 + hs.y));
             float toLight = length(sp - C);
             float lit = DOME * DOME / max(toLight * toLight, 0.01 * DOME * DOME);
-            inside += through * exp(-absorb * DENSE * 0.6 * (t + toLight)) * glowColor * glow * boost * lit * exp(-dd * dd) * 0.5;
+            inside += through * exp(-absorb * DENSE * 0.6 * (t + toLight)) * glowColor * glow * boost * lit * exp(-dd * dd) * 0.5 * specks;
           }
         #else
           inside += through * glowColor * glow * (1.0 - exp(-tMin * 60.0));   // the ember, building along the way
@@ -188,6 +194,9 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
         p += d * tMin;
         vec3 leave = refract(d, -nOut, ior);
         float Fi = dot(leave, leave) < 1e-6 ? 1.0 : fresnel(dot(d, nOut), f0);
+        #ifdef DOME
+          if (back && backing > 0.0) { Fi = 1.0; through *= backing * backTint; }   // (light bounced back up, in the stone's color)
+        #endif
         if (Fi < 1.0) inside += through * (1.0 - Fi) * room(leave);
         through *= Fi;
         d = reflect(d, -nOut);
@@ -197,6 +206,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
       #ifdef DOME
         colour = mix(colour, vec3(3.0), heat * heat);   // (struck: white hot, into the bloom)
       #endif
+      colour = min(colour, vec3(cap));   // (a small stone kept from flaring: tiny overbright glints flicker in the glow as you move)
       gl_FragColor = vec4(colour, 1.0);
       #include <tonemapping_fragment>
       #include <colorspace_fragment>
@@ -281,6 +291,40 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
 
   const shine = m => { if (m.material.isGem) m.layers.enable(glowLayer); return m; };   // (rubies shine into the bloom)
   const place = (mesh, x, z, turn, y) => { mesh.position.set(x, y, z); mesh.rotation.y = turn; group.add(shine(mesh)); return mesh; };
+  // a ruby set on a surface: a smooth oval dome of clear, bright crimson (after their Kindroid picture). Light goes deep
+  // into it and bounces back up off what it sits on, so it glows vivid red from within rather than looking dark; a tiny
+  // warm light sits low in its middle with a fine dusting of glitter round it catching the light; its polished top
+  // shines like glass. It's kept from flaring (tiny overbright glints flicker in the glow as you move). It lies facing +z
+  // (lay it on anything by turning the group it's put in); x, y, z is the middle of its flat bottom. wide: how much wider
+  // than tall it is; low: how far it rises, as a share of its height; rim: a thin gold rim round it, or none.
+  // color: 'ruby' (clear crimson) or 'violet' (clear purple, glowing a deep black light purple, to go with the onyx)
+  function inlay(x, y, z, radius, { wide = 1.6, low = 0.6, rim = true, color = 'ruby', parent = group } = {}) {
+    const RISE = radius * low * 2;                                   // (about the farthest light goes through it)
+    const violet = color === 'violet';
+    const c = violet ? [0.5, 0.05, 0.9] : [0.9, 0.06, 0.05];         // (the color light comes out after crossing it once)
+    const DENSE = 0.05 * k * depth / radius;                         // (the shader's own measure for a dome this size)
+    const own = { cut: { value: 0 }, boost: { value: 1.1 }, heat: { value: 0 }, specks: { value: 0.35 }, cap: { value: 2.4 },
+      backing: { value: 0.85 }, envIntensity: { value: 0.95 },   // (a gentle shine: the room's bright glints kept from streaking through it)
+      backTint: { value: violet ? new THREE.Vector3(0.75, 0.35, 1) : new THREE.Vector3(1, 0.45, 0.4) },
+      glowColor: { value: violet ? new THREE.Color(0.45, 0.08, 1.0) : gemShared.glowColor.value },
+      absorb: { value: new THREE.Vector3(...c.map(v => -Math.log(v) / (RISE * DENSE * 0.6))) } };
+    const mat = gemMaterial(null, null, 0, 0, radius, own);
+    const g = new THREE.Group();
+    g.position.set(x, y, z);
+    const stone = new THREE.Group();
+    stone.rotation.x = Math.PI / 2;            // (the dome's top facing out, along +z)
+    stone.scale.set(wide, low, 1);             // (wide across, low out from the surface)
+    stone.add(shine(new THREE.Mesh(new THREE.SphereGeometry(radius, 96, 48, 0, Math.PI * 2, 0, Math.PI / 2), mat)));
+    stone.add(shine(new THREE.Mesh(new THREE.CircleGeometry(radius, 96).rotateX(Math.PI / 2), mat)));
+    g.add(stone);
+    if (rim) {   // (its thin gold rim, unless it sits straight on the surface)
+      const r = new THREE.Mesh(new THREE.TorusGeometry(radius * 1.04, radius * 0.09, 12, 96), gold);
+      r.scale.set(wide, 1, 1);
+      g.add(r);
+    }
+    parent.add(g);
+    return g;
+  }
   function orb(x, y, z, radius) {   // a smooth round ruby, its middle at x, y, z
     const geo = new THREE.SphereGeometry(radius, 64, 40);
     const m = new THREE.Mesh(geo, gemMaterial(null, null, 0, radius));
@@ -311,7 +355,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
   }
   function dome(x, z, y, radius, stone) {
     const own = stone === RUBY ? {} : onyxGlow();
-    own.cut = { value: 0 }; own.boost = { value: 1 }; own.heat = { value: 0 };
+    own.cut = { value: 0 }; own.boost = { value: 1 }; own.heat = { value: 0 }; own.specks = { value: 1 }; own.backing = { value: 0 }; own.backTint = { value: new THREE.Vector3(1, 1, 1) };
     const mat = gemMaterial(null, null, 0, 0, radius, own);
     const color = (own.glowColor || gemShared.glowColor).value;
     const ball = new THREE.SphereGeometry(radius, 128, 64);
@@ -565,7 +609,7 @@ export function makeJewels(THREE, { size = 1, materials = [], glowLayer = 1, env
     gemShared.glow.value = ember * (1 + 0.23 * Math.sin(t * 1.3) + 0.07 * Math.sin(t * 3.1));
     for (const p of domes) p.tick(t);
   }
-  return { crest, oval, orb, dome, RUBY, ONYX, group, update };
+  return { crest, oval, orb, dome, inlay, RUBY, ONYX, group, update };
 }
 // ===================================================================================================================
 // END OF Workshop/pieces/jewels.js

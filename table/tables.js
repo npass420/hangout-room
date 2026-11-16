@@ -1,17 +1,17 @@
 // =====================================================================
-// tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, a window and a big red
-// dot-matrix clock. In the middle of the room, on its black velvet rug, stands the game
-// table (made in the Workshop: table/gametable/), its rubies glowing, under a red paper lantern that glows from a tiny
+// tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, and a big red
+// dot-matrix clock above the door. Toward the back wall, on its black velvet rug, stands the game
+// table (made in the Workshop: table/gametable/), its rubies glowing, with a tall chair on either side, under a red paper lantern that glows from a tiny
 // light deep inside and lets a soft white light fall onto the table. For now it's on show only; games are to come, a
 // table summoned for each.
 // Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
-// VERSION 7
+// VERSION 13
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
          query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db, myId, S, hooks, ROOM, HEIGHT, EYE, rnd, renderer, scene, camera, canvas, BASE_FOV,
+import { db, myId, S, hooks, ROOM, HEIGHT, EYE, renderer, scene, camera, canvas, BASE_FOV,
          box, std, envMap, goldMat, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
 import { sfx, setupMute } from '../sounds.js';
 import { travelHome } from '../portal.js';
@@ -23,7 +23,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { makeGameTable } from './gametable/gametable.js';
+import { makeGameTable, TABLE_HEIGHT } from './gametable/gametable.js';
+import { makeChair } from './gametable/chair.js';
 import { makeLantern } from './gametable/lantern.js';
 
 document.querySelector('#ui h1').textContent = 'Table Room';
@@ -122,7 +123,7 @@ const WAIN = 1.0;                                            // the wainscot com
 const DOOR_X = 1.6;
 const ENTRANCE = { style: 'tavern', file: new URL('tdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
   door: { x0: 0.234, x1: 0.781, top: 0.125, bottom: 0.887, spring: 0.293 } };
-for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door, window, clock), left, right
+for (const [x, z, ry] of [[0, -R2, 0], [0, R2, Math.PI], [-R2, 0, Math.PI / 2], [R2, 0, -Math.PI / 2]]) {   // far, entry (door and clock), left, right
   plane(ROOM, WAIN, wallMat, x, WAIN / 2, z, 0, ry);                          // wood below
   plane(ROOM, HEIGHT - WAIN, paperMat, x, WAIN + (HEIGHT - WAIN) / 2, z, 0, ry);   // wallpaper above
 }
@@ -158,7 +159,7 @@ function snapRoom() {
     const was = hide.map(o => o.visible);
     hide.forEach(o => { o.visible = false; });
     for (const m of tableMats) m.envMap = null;   // (the snapshots are taken without the table's own reflections)
-    cubeCamera.position.set(0, TABLE_TOP + 0.35, 0); cubeCamera.updateMatrixWorld();
+    cubeCamera.position.set(0, TABLE_TOP + 0.35, TABLE_Z); cubeCamera.updateMatrixWorld();
     cubeCamera.update(renderer, scene);
     scene.position.y = -1.0;
     const env = pmrem.fromScene(scene, 0.02, 0.05, 30);
@@ -172,71 +173,9 @@ function snapRoom() {
 const floorLoaded = loadPhoto('floor.jpg', floorMat, ROOM / 1.8, ROOM / 1.8);   // one copy of the picture covers 1.8 meters
 const wallLoaded = loadPhoto('wall.jpg', wallMat, ROOM / 1.0, 1);              // and the wainscot is a meter tall
 
-// ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
-const skyCanvas = document.createElement('canvas');
-skyCanvas.width = 256; skyCanvas.height = 192;
-const skyCtx = skyCanvas.getContext('2d');
-const skyTex = new THREE.CanvasTexture(skyCanvas);
-skyTex.colorSpace = THREE.SRGBColorSpace;
-const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
-const windowLights = [];
-{                                                  // light falling in through the window onto the floor in front of it
-  const l = new THREE.SpotLight(0x8fa8ff, 0.8, 7, 0.75, 1, 0);
-  l.position.set(-1.6, 2.3, ROOM / 2 - 0.1);
-  l.target.position.set(-1.6, 0, ROOM / 2 - 3.2);
-  scene.add(l, l.target);
-  windowLights.push(l);
-}
-
-const SKY = {
-  night: { top: '#050b1f', bottom: '#0d1d45', light: 0x8fa8ff, power: 0.3 },
-  dawn:  { top: '#2b4f8f', bottom: '#ff9e6b', light: 0xffb27a, power: 0.4 },
-  day:   { top: '#3d8fe0', bottom: '#a9d8ff', light: 0xfff4e0, power: 0.6 },
-  dusk:  { top: '#3a2a6b', bottom: '#ff7a45', light: 0xff9a6a, power: 0.4 }
-};
-let lastSkyMinute = -1;
-function updateSky() {
-  const now = new Date();
-  const minute = now.getHours() * 60 + now.getMinutes();
-  if (minute === lastSkyMinute) return;          // only redraw once a minute
-  lastSkyMinute = minute;
-  const h = minute / 60;
-  const phase = (h < 5 || h >= 21) ? 'night' : h < 7 ? 'dawn' : h < 17.5 ? 'day' : 'dusk';
-  const s = SKY[phase], g = skyCtx, W = 256, H = 192;
-  const grad = g.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, s.top); grad.addColorStop(1, s.bottom);
-  g.fillStyle = grad; g.fillRect(0, 0, W, H);
-  if (phase === 'night') {                        // just stars at night
-    g.fillStyle = '#ffffff';
-    for (const [x, y, b] of STARS) { g.globalAlpha = 0.35 + b * 0.65; g.fillRect(x * W, y * H, 1 + b * 1.5, 1 + b * 1.5); }
-    g.globalAlpha = 1;
-  }
-  skyTex.needsUpdate = true;
-  for (const l of windowLights) { l.color.setHex(s.light); l.intensity = s.power * 2.5; }
-}
-updateSky();
-
-function makeWindow(x, z, rotY) {
-  const g = new THREE.Group();
-  const frame = goldMat;
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), new THREE.MeshBasicMaterial({ map: skyTex }));
-  g.add(glass);
-  box(1.75, 0.08, 0.06, frame, 0, 0.64, 0, g);
-  box(1.75, 0.08, 0.06, frame, 0, -0.64, 0, g);
-  box(0.08, 1.36, 0.06, frame, -0.84, 0, 0, g);
-  box(0.08, 1.36, 0.06, frame, 0.84, 0, 0, g);
-  box(0.05, 1.2, 0.05, frame, 0, 0, 0, g);
-  box(1.6, 0.05, 0.05, frame, 0, 0, 0, g);
-  box(1.9, 0.06, 0.18, frame, 0, -0.7, 0.06, g); // sill
-  g.position.set(x, 1.8, z);
-  g.rotation.y = rotY;
-  scene.add(g);
-}
-makeWindow(-1.6, ROOM / 2 - 0.02, Math.PI);      // on the entry wall, left of the door
-
-// ---------- A dot-matrix wall clock above the window: the day and your local time ----------
+// ---------- A dot-matrix wall clock above the door: the day and your local time ----------
 const wallClock = makeClock({ lit: '#ff2a1f', dim: '#3a1613', width: 1.25, frame: goldMat });
-wallClock.group.position.set(-1.6, 2.92, R2 - 0.03);
+wallClock.group.position.set(DOOR_X, 3.15, R2 - 0.03);
 wallClock.group.rotation.y = Math.PI;
 scene.add(wallClock.group);
 
@@ -252,33 +191,50 @@ scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm l
 // Made in the Workshop (its files and pictures are in table/gametable/). Its pictures load from there; the room's glow
 // and its snapshots make its rubies shine.
 const GLOW = 1;   // the layer glowing things are put on (the rubies)
-const RUG = 2.6;  // the rug, meters square
+const RUG = 3.0;  // the rug, meters square
+const TABLE_Z = -(R2 - RUG / 2 - 0.1);   // where it stands: toward the back wall, its rug's far edge 10 cm from the wall
 const tableManager = new THREE.LoadingManager();
 const tableLoaded = new Promise(r => { tableManager.onLoad = r; tableManager.onError = () => {}; });
 const tableLoader = new THREE.TextureLoader(tableManager).setPath(new URL('gametable/', import.meta.url).href);
 const gameTable = makeGameTable(THREE, { loader: tableLoader, anisotropy: MAX_ANISO, onReady: () => snapRoom(),
   glowLayer: GLOW, envCube: cubeTarget.texture }, { rug: RUG });
 const TABLE_TOP = gameTable.top;
+gameTable.group.position.z = TABLE_Z;
 scene.add(gameTable.group);
 gameTable.group.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
 gameTable.group.children[0].traverse(o => { o.userData.floor = true; });   // (the rug: click it to walk there, like the floor)
 tableMats.push(...gameTable.materials);
-const TABLE_KEEP = 0.95;   // how close you can walk to the middle of the table (it's 1.2 m across)
+// Two tall chairs across from each other at its left and right ends, each facing the table (side on to the door, so
+// both players can see the door and the clock)
+const showOpts = { loader: tableLoader, anisotropy: MAX_ANISO, onReady: () => snapRoom(), glowLayer: GLOW, envCube: cubeTarget.texture };
+const CHAIR_X = 1.05;   // how far out from the middle of the table each chair stands
+const chairs = [1, -1].map(side => {
+  const c = makeChair(THREE, showOpts, { stone: side > 0 ? 'ruby' : 'violet' });   // (one ruby, one purple)
+  c.group.position.set(side * CHAIR_X, gameTable.top - TABLE_HEIGHT, TABLE_Z);   // (standing on the rug)
+  c.group.rotation.y = -side * Math.PI / 2;   // (turned to face the table)
+  c.group.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+  scene.add(c.group);
+  tableMats.push(...c.materials);
+  return c;
+});
+const TABLE_KEEP = 1.3;   // how close you can walk to the middle of the table (it's 1.5 m across, with its chairs)
 
 // ---------- The red paper lantern hanging over the table ----------
 // Its little light shines soft and white straight down onto the table (white, so the table keeps its own colors); the
 // lantern itself glows red. It hangs on a thin dark cord from a small dark plate on the ceiling.
 const LANTERN_Y = 3.0;
 const lantern = makeLantern(THREE, { glowLayer: GLOW, shadows: !PHONE });
-lantern.group.position.set(0, LANTERN_Y, 0);
+lantern.group.position.set(0, LANTERN_Y, TABLE_Z);
+lantern.light.target.position.set(0, 0, TABLE_Z);   // (its light falling straight down onto the table)
+scene.add(lantern.light.target);
 scene.add(lantern.group);
 {
   const cordMat = new THREE.MeshStandardMaterial({ color: 0x140a06, roughness: 0.6 });
   const top = LANTERN_Y + 0.26 * 0.88 + 0.04;   // (the top of its wooden ring)
   const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, HEIGHT - top, 8), cordMat);
-  cord.position.set(0, (HEIGHT + top) / 2, 0);
+  cord.position.set(0, (HEIGHT + top) / 2, TABLE_Z);
   const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.025, 32), cordMat);
-  plate.position.set(0, HEIGHT - 0.0125, 0);
+  plate.position.set(0, HEIGHT - 0.0125, TABLE_Z);
   scene.add(cord, plate);
 }
 
@@ -550,8 +506,8 @@ const me = { x: 1.6 + (Math.random() - 0.5) * 1.2, z: R2 - 1.4, tx: null, tz: nu
 let yaw = 0, pitch = -0.12;                   // facing the table
 function clampSpot(x, z) {   // inside the walls, and not in the table
   x = Math.max(-LIMIT, Math.min(LIMIT, x)); z = Math.max(-LIMIT, Math.min(LIMIT, z));
-  const d = Math.hypot(x, z);
-  if (d < TABLE_KEEP) { const k = d > 0.001 ? TABLE_KEEP / d : 0; return d > 0.001 ? [x * k, z * k] : [0, TABLE_KEEP]; }
+  const dz = z - TABLE_Z, d = Math.hypot(x, dz);
+  if (d < TABLE_KEEP) return d > 0.001 ? [x * TABLE_KEEP / d, TABLE_Z + dz * TABLE_KEEP / d] : [0, TABLE_Z + TABLE_KEEP];
   return [x, z];
 }
 function mySpot() {   // what everyone else sees: where you're standing (or walking to)
@@ -776,9 +732,9 @@ renderer.setAnimationLoop(() => {
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt);
   gameTable.update(clock.elapsedTime);   // (the rubies' glow slowly breathing)
+  for (const c of chairs) c.update(clock.elapsedTime);
   lantern.update(clock.elapsedTime);
   wallClock.update();
-  updateSky();
   render();
 });
 
@@ -802,7 +758,12 @@ function playIntro(dt) {                              // the camera and the door
   camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
   if (t > 4.3) { intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
 }
-window.addEventListener('room-show', () => { if (intro) intro.t = 0; });
+// (testing on this PC with ?room=table: straight in, no walk through the door)
+const SKIP_DOOR = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && new URLSearchParams(location.search).get('room') === 'table';
+window.addEventListener('room-show', () => {
+  if (SKIP_DOOR) { intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); return; }
+  if (intro) intro.t = 0;
+});
 camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
 (async () => {
   await Promise.race([Promise.all([tableLoaded, floorLoaded, wallLoaded, entrance.loaded]), wait(8000)]);   // a slow connection doesn't keep you out forever
