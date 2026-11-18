@@ -3,7 +3,7 @@
 // walking around, the people in the room, chat, and the main loop. Leaving by the door whooshes you back to the Cave.
 // Its door is a pair of grand black and gold doors (sdoor.jpg, a Kindroid picture); you come in already standing inside,
 // as the Cave's white flash fades.
-// VERSION 2
+// VERSION 3
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -93,14 +93,14 @@ const DOOR_X = 1.6;
 const ENTRANCE = { style: 'gallery', file: new URL('sdoor.jpg', import.meta.url).href, x: DOOR_X, z: R2, height: 2.35, roomHalf: R2, roomHeight: HEIGHT,
   door: { x0: 0.256, x1: 0.740, top: 0.137, bottom: 0.923 } };
 plane(ROOM, HEIGHT, wallMats[0], 0, H2, -R2, 0, 0);              // the far wall (the doodle board)
-plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, window, clock)
+plane(ROOM, HEIGHT, wallMats[1], 0, H2, R2, 0, Math.PI);         // the entry wall (door, clock)
 plane(ROOM, HEIGHT, wallMats[2], -R2, H2, 0, 0, Math.PI / 2);    // the left wall (pictures)
 plane(ROOM, HEIGHT, wallMats[3], R2, H2, 0, 0, -Math.PI / 2);    // the right wall (pictures)
 const floor = plane(ROOM, ROOM, floorMat, 0, 0, 0, -Math.PI / 2, 0);
 floor.userData.floor = true;
 plane(ROOM, ROOM, ceilMat, 0, HEIGHT, 0, Math.PI / 2, 0);
 // The marble's reflections: a snapshot of this very room, so the polish on the floor, walls and ceiling shows the
-// real ring, neon and window (and nothing that isn't here). It's retaken when the marble loads and when the neon changes color.
+// real ring and neon (and nothing that isn't here). It's retaken when the marble loads and when the neon changes color.
 const pmrem = new THREE.PMREMGenerator(renderer);
 let roomEnv = null, snapTimer = 0;
 function snapRoom() {
@@ -125,69 +125,7 @@ function snapRoom() {
   }
 }
 
-// ---------- A window whose sky follows your own clock (sky colors and stars only, no sun or moon) ----------
-const skyCanvas = document.createElement('canvas');
-skyCanvas.width = 256; skyCanvas.height = 192;
-const skyCtx = skyCanvas.getContext('2d');
-const skyTex = new THREE.CanvasTexture(skyCanvas);
-skyTex.colorSpace = THREE.SRGBColorSpace;
-const STARS = Array.from({ length: 45 }, () => [rnd(), rnd() * 0.8, rnd()]);
-const windowLights = [];
-{                                                  // light falling in through the window onto the floor in front of it
-  const l = new THREE.SpotLight(0x8fa8ff, 0.8, 7, 0.75, 1, 0);
-  l.position.set(-1.6, 2.3, ROOM / 2 - 0.1);
-  l.target.position.set(-1.6, 0, ROOM / 2 - 3.2);
-  scene.add(l, l.target);
-  windowLights.push(l);
-}
-
-const SKY = {
-  night: { top: '#050b1f', bottom: '#0d1d45', light: 0x8fa8ff, power: 0.3 },
-  dawn:  { top: '#2b4f8f', bottom: '#ff9e6b', light: 0xffb27a, power: 0.4 },
-  day:   { top: '#3d8fe0', bottom: '#a9d8ff', light: 0xfff4e0, power: 0.6 },
-  dusk:  { top: '#3a2a6b', bottom: '#ff7a45', light: 0xff9a6a, power: 0.4 }
-};
-let lastSkyMinute = -1;
-function updateSky() {
-  const now = new Date();
-  const minute = now.getHours() * 60 + now.getMinutes();
-  if (minute === lastSkyMinute) return;          // only redraw once a minute
-  lastSkyMinute = minute;
-  const h = minute / 60;
-  const phase = (h < 5 || h >= 21) ? 'night' : h < 7 ? 'dawn' : h < 17.5 ? 'day' : 'dusk';
-  const s = SKY[phase], g = skyCtx, W = 256, H = 192;
-  const grad = g.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, s.top); grad.addColorStop(1, s.bottom);
-  g.fillStyle = grad; g.fillRect(0, 0, W, H);
-  if (phase === 'night') {                        // just stars at night
-    g.fillStyle = '#ffffff';
-    for (const [x, y, b] of STARS) { g.globalAlpha = 0.35 + b * 0.65; g.fillRect(x * W, y * H, 1 + b * 1.5, 1 + b * 1.5); }
-    g.globalAlpha = 1;
-  }
-  skyTex.needsUpdate = true;
-  for (const l of windowLights) { l.color.setHex(s.light); l.intensity = s.power * 2.5; }
-}
-updateSky();
-
-function makeWindow(x, z, rotY) {
-  const g = new THREE.Group();
-  const frame = goldMat;
-  const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), new THREE.MeshBasicMaterial({ map: skyTex }));
-  g.add(glass);
-  box(1.75, 0.08, 0.06, frame, 0, 0.64, 0, g);
-  box(1.75, 0.08, 0.06, frame, 0, -0.64, 0, g);
-  box(0.08, 1.36, 0.06, frame, -0.84, 0, 0, g);
-  box(0.08, 1.36, 0.06, frame, 0.84, 0, 0, g);
-  box(0.05, 1.2, 0.05, frame, 0, 0, 0, g);
-  box(1.6, 0.05, 0.05, frame, 0, 0, 0, g);
-  box(1.9, 0.06, 0.18, frame, 0, -0.7, 0.06, g); // sill
-  g.position.set(x, 1.8, z);
-  g.rotation.y = rotY;
-  scene.add(g);
-}
-makeWindow(-1.6, ROOM / 2 - 0.02, Math.PI);      // on the entry wall, left of the door
-
-// ---------- A dot-matrix wall clock above the window: the day and your local time ----------
+// ---------- A dot-matrix wall clock on the entry wall, left of the door: the day and your local time ----------
 const wallClock = makeClock({ lit: '#3dff6a', dim: '#2b332d', width: 0.74, frame: goldMat });
 wallClock.group.position.set(-1.6, 2.75, R2 - 0.03);
 wallClock.group.rotation.y = Math.PI;
@@ -789,7 +727,6 @@ renderer.setAnimationLoop(() => {
   moveAvatars(dt);
   updateSketch(dt);
   wallClock.update();
-  updateSky();
   renderer.render(scene, camera);
 });
 
