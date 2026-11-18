@@ -9,13 +9,13 @@
 // The skylight and the archway behind the orb show a painted sky that slowly drifts, picked by your own clock: dawn from
 // 5am, day from 7am, dusk from 5pm and night from 7:30pm (sky_dawn.jpg, sky_day.jpg, sky_dusk.jpg, sky_night.jpg), each
 // fading into the next over half an hour. Stars twinkle over the night and dusk skies, and now and then a star shoots.
-// The screen flashes white (or warm gold for a door), fades to black, and only then does that room's code load; a little
-// snowflake turns while it does. Then the room fades in and you walk in through its door.
+// The screen flashes white (for the orb and the doors alike), and while it's all white that room's code loads; a little
+// snowflake turns while it does. Then the white fades away and you're standing inside the room.
 // The galaxy in the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 8
+// VERSION 9
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -92,8 +92,11 @@ try {
 } catch (e) {}
 
 // ---------- Versions: which copy of each room's files your browser has, popping up briefly on every load ----------
-const VERSIONED = [['Cave', import.meta.url], ['Game Room', new URL('../game/games.js', import.meta.url).href],
-                   ['Skee-ball', new URL('../game/skeeball.js', import.meta.url).href]];
+const here = f => new URL(f, import.meta.url).href;
+const VERSIONED = [['Cave', import.meta.url], ['Gallery', here('../studio/studio.js')], ['Table Room', here('../table/tables.js')],
+                   ['Checkers', here('../table/checkers.js')], ['Checker pieces', here('../table/gametable/checkerset.js')],
+                   ['Checker look', here('../table/gametable/checker.js')],
+                   ['Game Room', here('../game/games.js')], ['Skee-ball', here('../game/skeeball.js')]];
 (async () => {
   const found = await Promise.all(VERSIONED.map(async ([name, url]) => {
     try {   // read the top of the file the same way the room would load it (from the browser's copy if it has one)
@@ -104,7 +107,7 @@ const VERSIONED = [['Cave', import.meta.url], ['Game Room', new URL('../game/gam
   }));
   const tag = document.createElement('div');
   tag.textContent = found.join('   ·   ');
-  tag.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:90;pointer-events:none;white-space:nowrap;' +
+  tag.style.cssText = 'position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:90;pointer-events:none;width:max-content;max-width:92vw;text-align:center;line-height:1.5;' +
     'padding:7px 16px;border-radius:14px;background:rgba(8,14,30,0.82);border:1px solid rgba(160,210,255,0.6);color:#e6f3ff;' +
     'font:bold 14px "Trebuchet MS",sans-serif;box-shadow:0 0 14px rgba(120,190,255,0.45);transition:opacity 0.8s';
   document.body.appendChild(tag);
@@ -295,14 +298,16 @@ function tryEnter(place) {
   leaveCave();   // off to a room: you'll show up there instead
   sfx.whoosh();   // through the portal
 }
-// Once the screen is black: load the room, say you're here, and wait for it to be ready before showing it
+// Once the screen is white: load the room, say you're here, and wait for it to be ready before showing it
 function loadRoom() {
+  loadFlake.style.color = '#5f9fd6'; loadFlake.style.textShadow = '0 0 10px rgba(110,170,240,0.55)';   // (seen on the white)
+  cv.style.transition = 'opacity 1.3s ease-out';
   loadFlake.classList.add('on');
   window.addEventListener('room-ready', () => {
-    window.dispatchEvent(new Event('room-show'));   // the room starts its walk in through the door
+    window.dispatchEvent(new Event('room-show'));
     loadFlake.classList.remove('on');
-    cv.classList.add('gone');                       // and the black fades away
-    setTimeout(() => { cv.style.display = 'none'; nameBox.style.display = 'none'; }, 1000);
+    cv.classList.add('gone');                       // and the white fades away, with you standing inside
+    setTimeout(() => { cv.style.display = 'none'; nameBox.style.display = 'none'; }, 1400);
   }, { once: true });
   import(PLACES[going].file)
     .then(() => document.getElementById('enter').click())
@@ -465,11 +470,11 @@ function frame(now) {
 
   g.setTransform(DPR, 0, 0, DPR, 0, 0);
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
-  // Going somewhere: a flash of light from the globe (or the doorway) fills the screen, then fades to black
-  const FLASH = 550, DARK = 450;
+  // Going somewhere: a flash of white light from the globe (or the doorway) fills the screen, and stays white
+  const FLASH = 550, HOLD = 120;
   const since = going ? now - goneAt : 0;
-  if (going && since >= FLASH + DARK) {   // all black: stop drawing the Cave and load the room
-    g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  if (going && since >= FLASH + HOLD) {   // all white: stop drawing the Cave and load the room
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
     window.cancelAnimationFrame(raf);
     loadRoom();
     return;
@@ -620,11 +625,12 @@ function frame(now) {
     }
   }
 
-  // The flash, then the fade to black
+  // The flash of white
   if (going) {
-    let fx0, fy0, col;
-    if (going === 'orb') { fx0 = X; fy0 = Y; col = '255,255,255'; }
-    else { const d = ARCHES[going].door; fx0 = sx(d.x); fy0 = sy(d.y); col = '255,214,150'; }
+    let fx0, fy0;
+    const col = '255,255,255';
+    if (going === 'orb') { fx0 = X; fy0 = Y; }
+    else { const d = ARCHES[going].door; fx0 = sx(d.x); fy0 = sy(d.y); }
     const e = k * k * (3 - 2 * k), far = Math.hypot(W, H);
     g.globalCompositeOperation = 'lighter';           // light pouring out of the center, growing to fill everything
     const fl = g.createRadialGradient(fx0, fy0, 0, fx0, fy0, R * 0.4 + far * 1.2 * e);
@@ -632,8 +638,6 @@ function frame(now) {
     g.fillStyle = fl; g.fillRect(0, 0, W, H);
     g.globalCompositeOperation = 'source-over';
     g.fillStyle = `rgba(${col},${e * e})`; g.fillRect(0, 0, W, H);   // until it's all light
-    const d = Math.max(0, (since - FLASH) / DARK);
-    if (d > 0) { g.fillStyle = `rgba(0,0,0,${d * d * (3 - 2 * d)})`; g.fillRect(0, 0, W, H); }
   }
 }
 build();

@@ -1,13 +1,14 @@
 // =====================================================================
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, and a big red
-// dot-matrix clock above the door. Toward the back wall, on its black velvet rug, stands the game
+// dot-matrix clock above the door. In the middle of the room, on its black velvet rug, stands the game
 // table (made in the Workshop: table/gametable/), its rubies glowing, with a tall chair on either side, under a red paper lantern that glows from a tiny
 // light deep inside and lets a soft white light fall onto the table. On it: checkers, played with the glowing crimson and
 // violet checkers (checkers.js). Click a chair to sit down and play that side (the ruby chair plays crimson, the purple
 // chair violet); Esc or Stand up gets you up again. More games are to come, a table summoned for each.
 // Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
-// You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
-// VERSION 19
+// Its door is an old tavern door (tdoor.jpg, a Kindroid picture); you come in already standing inside, as the Cave's
+// white flash fades.
+// VERSION 20
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -183,8 +184,8 @@ wallClock.group.rotation.y = Math.PI;
 scene.add(wallClock.group);
 
 // ---------- The way in: the front of the building outside, and its doors (click them twice to leave) ----------
-// You come in through them: the room fades in with you a few steps outside, the doors swing open, you walk in and they
-// shut behind you. Outside, everything but the picture is dark, so the room only shows through the doorway.
+// You don't walk in through them any more: the room fades in from the Cave's white flash with you already inside.
+// Outside, everything but the picture is dark, so the room only shows through the doorway.
 const entrance = makeEntrance(ENTRANCE);
 
 // ---------- Lights ----------
@@ -195,7 +196,7 @@ scene.add(new THREE.HemisphereLight(0xffe2c0, 0x3a2414, 1.5));   // soft, warm l
 // and its snapshots make its rubies shine.
 const GLOW = 1;   // the layer glowing things are put on (the rubies)
 const RUG = 3.0;  // the rug, meters square
-const TABLE_Z = -(R2 - RUG / 2 - 0.4);   // where it stands: toward the back wall, its rug's far edge 40 cm (about a foot) from the wall
+const TABLE_Z = 0;   // where it stands: the middle of the room
 const tableManager = new THREE.LoadingManager();
 const tableLoaded = new Promise(r => { tableManager.onLoad = r; tableManager.onError = () => {}; });
 const tableLoader = new THREE.TextureLoader(tableManager).setPath(new URL('gametable/', import.meta.url).href);
@@ -606,7 +607,7 @@ function resetView() {   // R: look straight ahead again and zoom back out (sitt
 }
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
-  if (e.key.toLowerCase() === 'r' && !intro) { resetView(); return; }
+  if (e.key.toLowerCase() === 'r') { resetView(); return; }
   if (e.key === 'Escape' && seated) { standUp(); return; }
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
@@ -686,7 +687,7 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
-  if (down && !intro) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+  if (down) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
     yaw -= (e.clientX - lastX) * k;
     pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
@@ -701,7 +702,7 @@ window.addEventListener('pointerup', e => {
   const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
   down = null;
   endTouch(e);
-  if (!wasTap || intro || !S.myName) return;
+  if (!wasTap || !S.myName) return;
   const p = pickUnder(e);
   if (!p) return;
   if (p.board) game.tap(p.board);
@@ -778,8 +779,7 @@ const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
   entrance.update(dt);       // the doors on their springs
-  if (intro) playIntro(dt);   // walking in through the door
-  else {
+  {
     keyWalk(dt);
     if (me.tx != null) {   // walking to where you clicked
       const dx = me.tx - me.x, dz = me.tz - me.z, d = Math.hypot(dx, dz);
@@ -805,33 +805,12 @@ renderer.setAnimationLoop(() => {
   render();
 });
 
-// ---------- Coming in: the room gets ready behind the Cave (which is black by now), then you walk in through the door ----------
+// ---------- Coming in: the room gets ready behind the Cave (which is white by now), then the white fades away ----------
 // The pictures and the first data load, the reflections are taken and everything is drawn once, all while the screen
-// is black, so any stutter happens where nobody can see it. Then the Cave fades away and the walk in begins.
+// is white, so any stutter happens where nobody can see it. Then the Cave's white fades and you're standing inside.
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : window.requestAnimationFrame(f)); window.requestAnimationFrame(f); });
-let intro = { t: -1 };                                // -1 until the Cave says go
-const OUTSIDE = new THREE.Vector3(DOOR_X, EYE, R2 + 2.6);   // a few steps back, looking at the front of the building
-function easeIO(k) { k = Math.max(0, Math.min(1, k)); return k * k * (3 - 2 * k); }
-function playIntro(dt) {                              // the camera and the doors, moment by moment
-  if (intro.t >= 0) intro.t += dt;
-  const t = Math.max(0, intro.t);
-  if (t >= 0.8 && !intro.opened) { intro.opened = true; entrance.open(); }    // the doors swing open...
-  if (t >= 3.4 && !intro.closed) { intro.closed = true; entrance.close(); }   // ...and shut behind you
-  const k = easeIO((t - 1.2) / 2.3);                  // the walk: through the doorway, then over to your spot
-  const z = OUTSIDE.z + (me.z - OUTSIDE.z) * k;
-  const past = Math.max(0, Math.min(1, (R2 - 0.2 - z) / (R2 - 0.2 - me.z)));   // only drift sideways once you're inside
-  camera.position.set(DOOR_X + (me.x - DOOR_X) * past, EYE, z);
-  camera.rotation.set(-0.02 + (pitch + 0.02) * k, 0, 0);
-  if (t > 4.3) { intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); }
-}
-// (testing on this PC with ?room=table: straight in, no walk through the door)
-const SKIP_DOOR = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && new URLSearchParams(location.search).get('room') === 'table';
-window.addEventListener('room-show', () => {
-  if (SKIP_DOOR) { intro = null; camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0); return; }
-  if (intro) intro.t = 0;
-});
-camera.position.copy(OUTSIDE); camera.rotation.set(-0.02, 0, 0);
+camera.position.set(me.x, EYE, me.z); camera.rotation.set(pitch, yaw, 0);
 (async () => {
   await Promise.race([Promise.all([tableLoaded, floorLoaded, wallLoaded, entrance.loaded]), wait(8000)]);   // a slow connection doesn't keep you out forever
   await wait(300);                                    // the reflection snapshot is taken just after the pictures land
