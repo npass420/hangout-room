@@ -10,12 +10,12 @@
 // 5am, day from 7am, dusk from 5pm and night from 7:30pm (sky_dawn.jpg, sky_day.jpg, sky_dusk.jpg, sky_night.jpg), each
 // fading into the next over half an hour. Stars twinkle over the night and dusk skies, and now and then a star shoots.
 // The screen flashes white (for the orb and the doors alike), and while it's all white that room's code loads; a little
-// snowflake turns while it does. Then the white fades away and you're standing inside the room.
+// snowflake turns in the bottom left corner while it does. Then the white fades away and you're standing inside the room.
 // The galaxy in the orb turns slowly, stars twinkle in the glass, and its glow gently breathes.
 // Coming back through a room's portal, the Cave fades in from black.
 // Every time the page loads, a little tag pops up for a few seconds with the version of each room's files your browser
 // has right now (each file says its version on a "VERSION" line at its top), so you can tell when an update has arrived.
-// VERSION 9
+// VERSION 10
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Cave)
@@ -300,7 +300,8 @@ function tryEnter(place) {
 }
 // Once the screen is white: load the room, say you're here, and wait for it to be ready before showing it
 function loadRoom() {
-  loadFlake.style.color = '#5f9fd6'; loadFlake.style.textShadow = '0 0 10px rgba(110,170,240,0.55)';   // (seen on the white)
+  loadFlake.style.cssText = 'left:22px;top:auto;bottom:22px;margin:0;font-size:26px;color:#5f9fd6;' +   // (small, in the corner, seen on the white)
+    'text-shadow:0 0 10px rgba(110,170,240,0.55)';
   cv.style.transition = 'opacity 1.3s ease-out';
   loadFlake.classList.add('on');
   window.addEventListener('room-ready', () => {
@@ -313,6 +314,7 @@ function loadRoom() {
     .then(() => document.getElementById('enter').click())
     .catch(e => {
       console.warn('Room load', e);
+      loadFlake.style.cssText = 'color:#24405e;text-shadow:none';   // (back in the middle, dark on the white)
       loadFlake.textContent = `${PLACES[going].name} couldn't load · tap to try again`;
       loadFlake.classList.add('oops');
       loadFlake.addEventListener('click', () => location.reload());
