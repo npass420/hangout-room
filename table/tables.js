@@ -2,12 +2,12 @@
 // tables.js — the Table Room: dark wood plank floor, dark wood wainscot under burgundy wallpaper, and a big red
 // dot-matrix clock above the door. Toward the back wall, on its black velvet rug, stands the game
 // table (made in the Workshop: table/gametable/), its rubies glowing, with a tall chair on either side, under a red paper lantern that glows from a tiny
-// light deep inside and lets a soft white light fall onto the table. On it: checkers, played with the glowing ruby and
-// onyx game pieces (checkers.js). Click a chair to sit down and play that side (the ruby chair plays ruby, the purple
-// chair onyx); Esc or Stand up gets you up again. More games are to come, a table summoned for each.
+// light deep inside and lets a soft white light fall onto the table. On it: checkers, played with the glowing crimson and
+// violet checkers (checkers.js). Click a chair to sit down and play that side (the ruby chair plays crimson, the purple
+// chair violet); Esc or Stand up gets you up again. More games are to come, a table summoned for each.
 // Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // You walk in through an old tavern door (tdoor.jpg, a Kindroid picture) that swings open in front of you.
-// VERSION 18
+// VERSION 19
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -226,7 +226,7 @@ const TABLE_KEEP = 1.3;   // how close you can walk to the middle of the table (
 const listener = new THREE.AudioListener();
 camera.add(listener);
 const game = startCheckers({ center: new THREE.Vector3(0, 0, TABLE_Z), top: gameTable.boardTop, cell: gameTable.cell,
-  glowLayer: GLOW, envCube: cubeTarget.texture, listener,
+  glowLayer: GLOW, listener,
   addMaterials: list => {   // (the pieces reflect the room too)
     for (const m of list) { tableMats.push(m); if (roomEnv) { m.envMap = roomEnv.texture; m.needsUpdate = true; } }
   },
@@ -749,6 +749,7 @@ if (!PHONE) {
   render = () => {
     scene.traverse(o => {
       if (o.layers.test(glowOnly)) return;
+      if (o.isMesh && o.userData.seeThrough && o.visible) { hidden.push(o); o.visible = false; return; }   // (clear glass, like the checkers' jewels: the glow inside shows through)
       if (o.isMesh) { swapped.set(o, o.material); o.material = blackFor(o.material); }   // (still hides what's behind it)
       else if ((o.isSprite || o.isPoints || o.isLine) && o.visible) { hidden.push(o); o.visible = false; }   // (name tags)
     });

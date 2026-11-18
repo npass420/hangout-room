@@ -1,25 +1,26 @@
 // =====================================================================
-// checkers.js — Checkers on the game table in the Table Room, played with the glowing game pieces made in the Workshop:
-// ruby domes for the player in the ruby chair, onyx domes (with their black light purple glow) for the player in the
-// purple chair. Sit in a chair to play that side; everyone else can walk up and watch.
+// checkers.js — Checkers on the game table in the Table Room, played with the checkers made in the Workshop
+// (gametable/checkerset.js): black onyx discs with a glowing glass jewel, crimson for the player in the ruby chair,
+// violet for the player in the purple chair. Sit in a chair to play that side; everyone else can walk up and watch.
 // Alone? "Play alone" lets you play both sides; someone who sits in the other chair can "Join game" and take theirs.
 // Click one of your pieces (its square lights up, and so do the squares it can go to, if hints are on), then a square.
-// A piece glides to its new square; a capture lifts it up and over, it blasts the piece below with its laser (leaving
-// glowing burn marks), and the struck piece glows white hot and bursts into sparks. A piece that reaches the far side is
-// crowned: it rises into a floating, brighter orb (a king), which beams its laser the whole time it flies over a capture.
-// Rules (classic American checkers): ruby moves first; captures are a must, and you keep jumping while you can; a piece
+// A piece glides to its new square; a capture flies it up and over to hover above the piece below, bobbing, and blast
+// it with its laser (leaving glowing burn marks), and the struck piece glows white hot and bursts into sparks. A piece
+// that reaches the far side is crowned: it melts into a floating, glowing glass orb (a king), which beams its laser the
+// whole time it flies over a capture.
+// Rules (classic American checkers): crimson moves first; captures are a must, and you keep jumping while you can; a piece
 // that reaches the far row becomes a king (and that ends its move); kings move one square, in any diagonal direction.
 // The game is shared through the database (tables/checkers, where the old checkers game kept its board), so everyone in the room sees the same board.
-// VERSION 4
+// VERSION 5
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, scene } from '../core.js';
-import { makeJewels } from './gametable/jewels.js';
+import { makeCheckerSet } from './gametable/checkerset.js';
 
 // ---------- The rules ----------
-// The board: 64 letters, row by row: '.' empty, 'r' ruby, 'R' ruby king, 'w' onyx, 'W' onyx king. Ruby starts on rows
-// 5 to 7 and moves toward row 0; onyx starts on rows 0 to 2 and moves toward row 7. Pieces stand on squares where
+// The board: 64 letters, row by row: '.' empty, 'r' crimson, 'R' crimson king, 'w' violet, 'W' violet king. Crimson
+// starts on rows 5 to 7 and moves toward row 0; violet starts on rows 0 to 2 and moves toward row 7. Pieces stand on squares where
 // row + column is odd (the dark marble squares).
 const rc = sq => [Math.floor(sq / 8), sq % 8];
 const at = (r, c) => (r >= 0 && r < 8 && c >= 0 && c < 8 ? r * 8 + c : -1);
@@ -77,23 +78,23 @@ function play(st, m) {   // the next state after a legal move
 }
 const count = (b, who) => [...b].filter(ch => owner(ch) === who).length;
 const fresh = () => ({ board: START, turn: 1, chain: -1, over: 0, winner: 0, last: { f: -1, t: -1, cap: -1 } });
-const SIDES = { 1: 'Ruby', 2: 'Onyx' };
+const SIDES = { 1: 'Crimson', 2: 'Violet' };
 
 // ---------- The game: pieces on the board, players, and what everyone sees ----------
 // opts: center (the board's middle, on the floor), top (the board's playing surface), cell (one square), and the
-// room's glowLayer, envCube (its snapshot as a cube, for the stones) and listener (the ear on the camera, for sounds);
+// room's glowLayer and listener (the ear on the camera, for sounds);
 // addMaterials / dropMaterials(list): so the room can give the pieces its reflections (and stop, once they're gone).
-// The board's rows run along x (ruby's end at +x), its columns along z.
-export function startCheckers({ center, top, cell, glowLayer, envCube, listener, addMaterials = () => {}, dropMaterials = () => {} }) {
-  const HALF = cell * 4, R = cell * 0.324;   // (a piece fits well inside its square)
+// The board's rows run along x (crimson's end at +x), its columns along z.
+export function startCheckers({ center, top, cell, glowLayer, listener, addMaterials = () => {}, dropMaterials = () => {} }) {
+  const HALF = cell * 4, SIZE = cell * 0.84;   // (a piece fits well inside its square)
   const cellPos = sq => { const [r, c] = rc(sq); return [center.x - HALF + cell * (r + 0.5), center.z - HALF + cell * ((7 - c) + 0.5)]; };
   const G = { st: null, sel: -1, targets: [], ref: ref(db, 'tables/checkers'), pieces: {}, J: null, queue: Promise.resolve() };
 
-  // the pieces, made from the Workshop's jewels (a fresh set whenever the board needs setting out again)
+  // the pieces, the Workshop's checkers (a fresh set whenever the board needs setting out again; the old one freed)
   function setOut(st) {
-    if (G.J) { G.J.dispose(); scene.remove(G.J.group); dropMaterials(G.mats); }
+    if (G.J) { scene.remove(G.J.group); dropMaterials(G.mats); G.J.dispose(); }
     G.mats = [];
-    G.J = makeJewels(THREE, { size: 1, materials: G.mats, glowLayer, envCube, listener });
+    G.J = makeCheckerSet(THREE, { materials: G.mats, glowLayer, listener });
     scene.add(G.J.group);
     addMaterials(G.mats);
     G.pieces = {};
@@ -101,7 +102,7 @@ export function startCheckers({ center, top, cell, glowLayer, envCube, listener,
       const ch = st.board[sq];
       if (ch === '.') continue;
       const [x, z] = cellPos(sq);
-      const p = G.J.dome(x, z, top, R, owner(ch) === 1 ? G.J.RUBY : G.J.ONYX);
+      const p = G.J.piece(x, z, top, SIZE, owner(ch) === 1 ? 'crimson' : 'violet');
       if (isKing(ch)) p.setKing(true, true);
       G.pieces[sq] = p;
     }
@@ -248,7 +249,7 @@ export function startCheckers({ center, top, cell, glowLayer, envCube, listener,
   const q = s => panel.querySelector(s);
   const el = { status: q('.gpStatus'), players: q('.gpPlayers'), solo: q('.gpSolo'), join: q('.gpJoin'), newG: q('.gpNew'),
                resign: q('.gpResign'), hints: q('.gpHints'), stand: q('.gpStand') };
-  let seat = 0;   // the chair you're sitting in (1 ruby, 2 purple), or 0
+  let seat = 0;   // the chair you're sitting in (1 ruby: crimson, 2 purple: violet), or 0
   function arm(btn, label, action, ask) {   // buttons that end a game ask you to click twice
     let armed = false, timer = 0;
     btn.addEventListener('click', () => {
@@ -289,7 +290,7 @@ export function startCheckers({ center, top, cell, glowLayer, envCube, listener,
     else if (alone) s = (st.chain >= 0 ? 'Keep jumping! ' : '') + `Playing alone · ${SIDES[st.turn]} to move`;
     else s = (st.chain >= 0 ? 'Keep jumping! ' : '') + (myTurn() ? 'Your move!' : `${SIDES[st.turn]}'s turn (${name(st.turn)})`);
     el.status.textContent = s;
-    el.players.textContent = (alone ? `Ruby and Onyx: ${name(1)}` : `Ruby: ${name(1) || 'open'} · Onyx: ${name(2) || 'open'}`) +
+    el.players.textContent = (alone ? `Crimson and Violet: ${name(1)}` : `Crimson: ${name(1) || 'open'} · Violet: ${name(2) || 'open'}`) +
       ` · ${count(st.board, 1)} – ${count(st.board, 2)}`;
     const playing = active() && side;
     el.solo.style.display = side && !validPlayer(3 - side) ? '' : 'none';
