@@ -12,7 +12,7 @@
 //       A checker lifts and flies over to hover above it, bobbing up and down, blasts it with its laser, then glides
 //       down onto its new square (about 2.3 seconds in all). A king turns on its bigger laser and holds still half a
 //       second, then flies across firing, arcing up over the piece and smashing it as it passes, lands, fires a moment
-//       more, and stops. Without over, just the glide.
+//       more, and stops (about 2.3 seconds too). Without over, just the glide.
 //     The laser leaves glowing burn marks on the surface that cool to a dark scorch and fade.
 //     blast(): it heats up to glowing white, then explodes in a burst of sparks of its own color.
 //     smash(): it flashes white and shatters at once into glitter that lies on the board twinkling.
@@ -174,7 +174,7 @@ export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener 
           if (goal === 1 && m.over) {   // a king capturing: its bigger laser on, held still half a second; then across, firing,
             // arcing up over the piece (high enough to clear it, even a floating king) and smashing it as it passes; then
             // a moment more firing where it lands, and off
-            const CHARGE = 0.5, T = Math.max(1.3, dist / (radius * 5)), AFTER = 0.6;
+            const CHARGE = 0.5, T = Math.max(1.2, dist / (radius * 8)), AFTER = 0.6;   // (about 2.3 seconds in all)
             const CLEAR = heightOf(m.over.piece) + size * 0.15 - FLOAT;   // (its bottom over the other's top, at the middle)
             big = true; beam = true;
             if (u >= CHARGE && phase !== 'fly') { phase = 'fly'; sound('glide', { length: T }); }
