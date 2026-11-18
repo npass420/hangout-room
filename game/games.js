@@ -5,11 +5,11 @@
 // stand on the right (skeeball.js); bowling down the left side and pool in the middle come next, their spots marked out on the floor.
 // Its door is the frog's doors (gdoor.jpg, a Kindroid picture); you come in already standing inside, as the Cave's white
 // flash fades. Clicking the doors twice whooshes you back to the Cave.
-// On the door wall: a neon clock over the door (clock.jpg) that shows your time, and a round window onto the sky to the door's left.
+// On the door wall: a neon clock over the door (clock.jpg) that shows your time.
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
 // The neon walls are alive: they breathe gently, slow waves of light run along their lines, and pink and teal slowly
 // trade places (and back again) every couple of minutes.
-// VERSION 5
+// VERSION 6
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -277,53 +277,6 @@ const skee = makeSkee({
   leave(x, z, y, p) { [me.x, me.z] = clampSpot(x, z); yaw = y; pitch = p; sendSpot(true); }             // back to walking, from right there
 });
 
-// ---------- A round window by the door, onto the sky outside (it follows your own clock) ----------
-// It sits to the door's left as you face the door from inside, clear of the frog's padded surround (about 1.9 m out each side).
-const WIN_X = DOOR_X + 3.6, WIN_Y = 2.35, WIN_SIZE = 1.35;   // in the middle of the wall between the pink pillar and the door
-// (Quick ones for now; they'll get their proper look later.)
-const portCanvas = document.createElement('canvas');
-portCanvas.width = portCanvas.height = 256;
-const portTex = new THREE.CanvasTexture(portCanvas);
-portTex.colorSpace = THREE.SRGBColorSpace;
-const PORT_STARS = Array.from({ length: 70 }, () => [Math.random(), Math.random(), Math.random()]);
-const PORT_SKY = {
-  night: ['#040818', '#0d1d45'], dawn: ['#2b4f8f', '#ff9e6b'], day: ['#3d8fe0', '#a9d8ff'], dusk: ['#3a2a6b', '#ff7a45']
-};
-let portMinute = -1;
-function updatePort() {
-  const now = new Date(), minute = now.getHours() * 60 + now.getMinutes();
-  if (minute === portMinute) return;   // once a minute is plenty
-  portMinute = minute;
-  const h = minute / 60, phase = (h < 5 || h >= 21) ? 'night' : h < 7 ? 'dawn' : h < 17.5 ? 'day' : 'dusk';
-  const g = portCanvas.getContext('2d'), grd = g.createLinearGradient(0, 0, 0, 256);
-  grd.addColorStop(0, PORT_SKY[phase][0]); grd.addColorStop(1, PORT_SKY[phase][1]);
-  g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
-  if (phase === 'night') {
-    g.fillStyle = '#ffffff';
-    for (const [x, y, b] of PORT_STARS) { g.globalAlpha = 0.3 + b * 0.7; g.fillRect(x * 256, y * 200, 1 + b * 1.6, 1 + b * 1.6); }
-    g.globalAlpha = 1;
-  }
-  portTex.needsUpdate = true;
-}
-updatePort();
-{
-  const g = new THREE.Group();
-  g.position.set(WIN_X, WIN_Y, HZ - 0.03); g.rotation.y = Math.PI; g.scale.setScalar(WIN_SIZE);
-  const glass = new THREE.Mesh(new THREE.CircleGeometry(0.62, 48), new THREE.MeshBasicMaterial({ map: portTex, toneMapped: false }));
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.67, 0.08, 18, 64),
-    new THREE.MeshPhysicalMaterial({ color: 0xff8da0, roughness: 0.4, clearcoat: 1, clearcoatRoughness: 0.12, emissive: 0xff3f8a, emissiveIntensity: 0.25 }));
-  rim.scale.z = 0.7;
-  const halo = new THREE.Mesh(new THREE.RingGeometry(0.74, 0.86, 64),
-    new THREE.MeshBasicMaterial({ color: TEAL, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-  halo.position.z = -0.01;
-  g.add(glass, rim, halo);
-  for (let i = 0; i < 8; i++) {   // little gold bolts round the rim
-    const a = i / 8 * Math.PI * 2, b = new THREE.Mesh(new THREE.SphereGeometry(0.025, 12, 8), goldMat);
-    b.position.set(Math.cos(a) * 0.67, Math.sin(a) * 0.67, 0.07);
-    g.add(b);
-  }
-  scene.add(g);
-}
 // ---------- The neon clock over the door: its pink and blue rings (clock.jpg) and glowing hands showing your own time ----------
 const DIAL = { x: 507, y: 510, ring: 445, face: 402 };   // where things sit in clock.jpg (in its pixels, out of 1024)
 const CLOCK_SIZE = 1.2;                                  // how big the whole picture is on the wall (meters)
@@ -841,7 +794,7 @@ renderer.setAnimationLoop(() => {
   floorU.uTime.value = t; skyU.uTime.value = t; wallU.uTime.value = t;
   { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
   entrance.update(dt);       // the doors on their springs
-  updateNeonClock(); updatePort();
+  updateNeonClock();
   skee.update(dt);           // the balls, the orbs and the signs (and the camera, while you're playing)
   if (skee.playing) fall(dt);
   else {
