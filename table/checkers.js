@@ -4,6 +4,8 @@
 // violet for the player in the purple chair. Sit in a chair to play that side; everyone else can walk up and watch.
 // Alone? "Play alone" lets you play both sides; someone who sits in the other chair can "Join game" and take theirs.
 // Click one of your pieces (its square lights up, and so do the squares it can go to, if hints are on), then a square.
+// A click that lands a little off counts for the nearest square it can go to; a missed click changes nothing; click
+// the piece again, or press Esc, to put it down.
 // A piece glides to its new square; a capture flies it up and over to hover above the piece below, bobbing, and blast
 // it with its laser (leaving glowing burn marks), and the struck piece glows white hot and bursts into sparks. A piece
 // that reaches the far side is crowned: it melts into a floating, glowing glass orb (a king), which beams its laser the
@@ -11,12 +13,13 @@
 // Rules (classic American checkers): crimson moves first; captures are a must, and you keep jumping while you can; a piece
 // that reaches the far row becomes a king (and that ends its move); kings move one square, in any diagonal direction.
 // The game is shared through the database (tables/checkers, where the old checkers game kept its board), so everyone in the room sees the same board.
-// VERSION 5
+// VERSION 6
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, scene } from '../core.js';
 import { makeCheckerSet } from './gametable/checkerset.js';
+import { slide } from '../hud.js';
 
 // ---------- The rules ----------
 // The board: 64 letters, row by row: '.' empty, 'r' crimson, 'R' crimson king, 'w' violet, 'W' violet king. Crimson
@@ -124,8 +127,9 @@ export function startCheckers({ center, top, cell, glowLayer, listener, addMater
     if (hintsOn) G.targets.forEach((m, i) => { if (targetMarks[i]) put(targetMarks[i], m.t); });
   }
 
-  // clicking on the board: an invisible sheet over the squares
-  const pick = new THREE.Mesh(new THREE.PlaneGeometry(cell * 8, cell * 8).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ visible: false }));
+  // clicking on the board: an invisible sheet over the squares (and half a square past them, so a click that just
+  // misses the edge still counts as the board)
+  const pick = new THREE.Mesh(new THREE.PlaneGeometry(cell * 9, cell * 9).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ visible: false }));
   pick.position.set(center.x, top + 0.002, center.z);
   scene.add(pick);
   function squareAt(point) {
@@ -177,25 +181,45 @@ export function startCheckers({ center, top, cell, glowLayer, listener, addMater
     G.sel = -1; G.targets = [];
     refreshMarks();
   }
+  // Clicking: a click never throws away the piece you picked. Click your own piece to pick it (again to put it down);
+  // click where it can go to move there. A click that lands a little off still counts for the nearest square it can go
+  // to (within about half a square); a click anywhere else does nothing. Esc puts the piece down.
+  const NEAR_MOVE = 0.65;   // (how close to a square it can go to counts, in squares)
+  function nearestMove(point) {
+    let best = null, bestD = NEAR_MOVE * cell;
+    for (const m of G.targets) {
+      const [x, z] = cellPos(m.t), d = Math.hypot(point.x - x, point.z - z);
+      if (d < bestD) { best = m; bestD = d; }
+    }
+    return best;
+  }
+  const mine = (st, sq) => sq >= 0 && owner(st.board[sq]) === st.turn && !(st.chain >= 0 && sq !== st.chain);
   function tap(point) {   // you clicked on the board at the table you're sitting at
-    if (!G.st) return;
-    const sq = squareAt(point);
-    if (sq < 0 || !myTurn()) { G.sel = -1; G.targets = []; refreshMarks(); return; }
-    const st = G.st, m = G.targets.find(x => x.t === sq);
-    if (G.sel >= 0 && m) sendMove(m);
-    else if (owner(st.board[sq]) === st.turn && !(st.chain >= 0 && sq !== st.chain)) {
-      const moves = movesFrom(st, sq);
-      G.sel = sq; G.targets = moves;
-      if (!moves.length && allMoves(st, st.turn).some(x => x.cap !== undefined) && hooks.banner) hooks.banner('You have to jump!', 1.8);
-    } else { G.sel = -1; G.targets = []; }
+    if (!G.st || !myTurn()) return;
+    const st = G.st, sq = squareAt(point);
+    if (mine(st, sq)) {
+      if (sq === G.sel && st.chain < 0) { G.sel = -1; G.targets = []; }   // (your picked piece again: put it down)
+      else {
+        const moves = movesFrom(st, sq);
+        G.sel = sq; G.targets = moves;
+        if (!moves.length && allMoves(st, st.turn).some(x => x.cap !== undefined) && hooks.banner) hooks.banner('You have to jump!', 1.8);
+      }
+    } else if (G.sel >= 0) {
+      const m = G.targets.find(x => x.t === sq) || nearestMove(point);
+      if (m) { sendMove(m); return; }
+    }
     refreshMarks(); refreshPanel();
   }
-  function canTap(point) {   // for the pointer: your own movable piece, or a square you can move to
+  function canTap(point) {   // for the pointer: your own movable piece, or near a square you can move to
     if (!G.st || !myTurn()) return false;
     const sq = squareAt(point);
-    if (sq < 0) return false;
-    if (G.targets.some(x => x.t === sq)) return true;
-    return owner(G.st.board[sq]) === G.st.turn && movesFrom(G.st, sq).length > 0;
+    if (mine(G.st, sq) && movesFrom(G.st, sq).length > 0) return true;
+    return G.sel >= 0 && !!(G.targets.find(x => x.t === sq) || nearestMove(point));
+  }
+  function deselect() {   // Esc: put the picked piece down (true if there was one; not mid-jump, when it stays picked)
+    if (G.sel < 0 || (G.st && G.st.chain >= 0)) return false;
+    G.sel = -1; G.targets = []; refreshMarks();
+    return true;
   }
 
   // ---------- Shared state arrives: animate the move that was made (one move at a time), or set the board out ----------
@@ -246,6 +270,7 @@ export function startCheckers({ center, top, cell, glowLayer, listener, addMater
   panel.innerHTML = `<div class="gpTitle">Checkers</div><div class="gpStatus"></div><div class="gpPlayers"></div>
     <div><button class="gpSolo">Play alone</button><button class="gpJoin">Join game</button><button class="gpNew">New game</button><button class="gpResign">Resign</button><button class="gpHints"></button><button class="gpStand">Stand up</button></div>`;
   document.body.appendChild(panel);
+  slide(panel, 'left');   // (slides off the left edge while the mouse is elsewhere)
   const q = s => panel.querySelector(s);
   const el = { status: q('.gpStatus'), players: q('.gpPlayers'), solo: q('.gpSolo'), join: q('.gpJoin'), newG: q('.gpNew'),
                resign: q('.gpResign'), hints: q('.gpHints'), stand: q('.gpStand') };
@@ -313,7 +338,7 @@ export function startCheckers({ center, top, cell, glowLayer, listener, addMater
   return {
     ready, pick,
     pieces: () => (G.J ? G.J.group : null),   // (hidden while the room takes its reflection snapshots)
-    tap, canTap,
+    tap, canTap, deselect,
     sit(side) { return sit(side).then(ok => { if (ok) { seat = side; refreshPanel(); } return ok; }); },
     stand() { const s = seat; seat = 0; stand(s); refreshPanel(); },
     seatTaken: side => { const id = chairHolder(side); return !!id && id !== myId; },

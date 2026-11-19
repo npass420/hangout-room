@@ -9,7 +9,7 @@
 // It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
 // The neon walls are alive: they breathe gently, slow waves of light run along their lines, and pink and teal slowly
 // trade places (and back again) every couple of minutes.
-// VERSION 6
+// VERSION 7
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -20,7 +20,11 @@ import { sfx, setupMute } from '../sounds.js';
 import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 import { inRoom } from '../world.js';
+import { setupHud, slide, peek } from '../hud.js';
 import { makeSkee } from './skeeball.js';
+setupHud();   // (the panels slide away when the mouse is elsewhere, and the title fades: see hud.js)
+slide(document.getElementById('who'), 'right');
+slide(document.getElementById('chat'), 'right');
 
 document.querySelector('#ui h1').textContent = 'Game Room';
 document.title = 'Game Room';
@@ -466,6 +470,7 @@ function addMsg(name, text, mine, c) {
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   if (!mine) {
+    peek(document.getElementById('chat'));   // (a new message slides the chat in for a few seconds)
     sfx.ping();
     if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
   }

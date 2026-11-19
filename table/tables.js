@@ -8,7 +8,7 @@
 // Chat is shared with the other rooms. Leaving by the door whooshes you back to the Cave.
 // Its door is an old tavern door (tdoor.jpg, a Kindroid picture); you come in already standing inside, as the Cave's
 // white flash fades.
-// VERSION 20
+// VERSION 21
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -20,6 +20,7 @@ import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 import { makeClock } from '../clock.js';
 import { inRoom } from '../world.js';
+import { setupHud, slide, peek } from '../hud.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -29,6 +30,9 @@ import { makeGameTable, TABLE_HEIGHT } from './gametable/gametable.js';
 import { makeChair } from './gametable/chair.js';
 import { makeLantern } from './gametable/lantern.js';
 import { startCheckers } from './checkers.js';
+setupHud();   // (the panels slide away when the mouse is elsewhere, and the title fades: see hud.js)
+slide(document.getElementById('who'), 'right');
+slide(document.getElementById('chat'), 'right');
 
 document.querySelector('#ui h1').textContent = 'Table Room';
 document.title = 'Table Room';
@@ -376,6 +380,7 @@ function addMsg(name, text, mine, c) {
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   if (!mine) {
+    peek(document.getElementById('chat'));   // (a new message slides the chat in for a few seconds)
     sfx.ping();
     if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
   }
@@ -535,11 +540,12 @@ function mySpot() {   // what everyone else sees: where you're standing (or walk
 }
 
 // ---------- Sitting at the table to play: click a chair (1 the ruby chair at +x, 2 the purple one at -x) ----------
-// You sit looking down the table at the board; drag to look around as usual. Esc, Stand up, or clicking the floor gets
-// you up again, a step out from your chair.
+// You sit looking down the table at the board; drag to look around as usual. Esc (once nothing's picked on the board)
+// or Stand up gets you up again, a step out from your chair. While sitting, a click that misses the board does nothing
+// (it used to stand you up).
 let seated = 0;
 const seatX = side => (side === 1 ? 1 : -1) * CHAIR_X;
-const SEAT_EYE = 1.45, SEAT_PITCH = -0.5;
+const SEAT_EYE = 1.45, SEAT_PITCH = -0.62;   // (tilted down toward the board, the table's rim still in view on both sides)
 const seatYaw = side => (side === 1 ? Math.PI / 2 : -Math.PI / 2);   // (facing the middle of the table)
 const HINT_SEAT = PHONE ? 'Tap a piece, then a square' : 'Click a piece, then a square · Esc to stand up';
 let sitting = false;
@@ -608,7 +614,7 @@ function resetView() {   // R: look straight ahead again and zoom back out (sitt
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
   if (e.key.toLowerCase() === 'r') { resetView(); return; }
-  if (e.key === 'Escape' && seated) { standUp(); return; }
+  if (e.key === 'Escape' && seated) { if (!game.deselect()) standUp(); return; }   // (first puts a picked piece down)
   const k = e.key.toLowerCase();
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
     keys.add(k);
@@ -706,6 +712,7 @@ window.addEventListener('pointerup', e => {
   const p = pickUnder(e);
   if (!p) return;
   if (p.board) game.tap(p.board);
+  else if (seated) return;   // (sitting: a click off the board does nothing)
   else if (p.chair) sitDown(p.chair);
   else if (p.door) leaveRoom();
   else if (p.floor) { standUp(); walkTo(p.floor.x, p.floor.z); }

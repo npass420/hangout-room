@@ -3,7 +3,7 @@
 // walking around, the people in the room, chat, and the main loop. Leaving by the door whooshes you back to the Cave.
 // Its door is a pair of grand black and gold doors (sdoor.jpg, a Kindroid picture); you come in already standing inside,
 // as the Cave's white flash fades.
-// VERSION 3
+// VERSION 4
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, remove, push, onValue, onDisconnect,
@@ -16,6 +16,10 @@ import { travelHome } from '../portal.js';
 import { makeEntrance, doorSpan } from '../entrance.js';
 import { makeClock } from '../clock.js';
 import { inRoom } from '../world.js';
+import { setupHud, slide, peek } from '../hud.js';
+setupHud();   // (the panels slide away when the mouse is elsewhere, and the title fades: see hud.js)
+slide(document.getElementById('who'), 'right');
+slide(document.getElementById('chat'), 'right');
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
 // The picture is big enough to use once per surface, so nothing repeats: each wall shows a different part of it,
@@ -364,6 +368,7 @@ function addMsg(name, text, mine, c) {
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   if (!mine) {
+    peek(document.getElementById('chat'));   // (a new message slides the chat in for a few seconds)
     sfx.ping();
     if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
   }
