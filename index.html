@@ -29,7 +29,7 @@
 					input { font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 10px; background: #f3e6cf; color: #2a1c10; }
 					#chatInput { flex: 1; min-width: 0; }
 					#chatRow button { margin: 0; }
-					/* The Cave (cave.js): the front door, drawn over everything until you go through the orb */
+					/* The Lobby (cave.js): the front door, drawn over everything until you go through a ruby */
 					#cave { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 20; touch-action: none; transition: opacity 0.9s; }
 					#cave.gone { opacity: 0; pointer-events: none; }
 					#nameBox { position: fixed; left: 0; right: 0; bottom: 5%; z-index: 30; display: flex; justify-content: center; pointer-events: none; transition: opacity 0.5s; }
@@ -119,7 +119,7 @@
 					<button id="nameChange">change name</button>
 				</div>
 				<button id="enter">Enter</button>
-				<div class="tip" id="nameTip">then touch the orb ✦ or an open door</div>
+				<div class="tip" id="nameTip">then touch a ruby ✦</div>
 			</div>
 		</div>
 		<div id="loadFlake">❄</div>
@@ -130,7 +130,7 @@
 			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 			} }
 		</script>
-		<!-- The Cave (lobby/cave.js) is the front door. It loads the room you pick: studio/studio.js (the Doodle Gallery) or table/tables.js (the Table Room) -->
+		<!-- The Lobby (lobby/cave.js) is the front door: a marble slab with three ruby portals. It loads the room you pick: studio/studio.js (the Doodle Gallery), table/tables.js (the Table Room) or game/games.js (the Game Room) -->
 		<script type="module" src="lobby/cave.js"></script>
 	</body>
 </html>
