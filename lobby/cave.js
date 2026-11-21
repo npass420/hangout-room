@@ -1,17 +1,17 @@
 // =====================================================================
-// cave.js (357 lines) — the Lobby: the front door of the site. A great slab of white marble (slab.webp, from a Kindroid
+// cave.js (372 lines) — the Lobby: the front door of the site. A great slab of white marble (slab.webp, from a Kindroid
 // image) floats in deep space, glowing rings and runes carved into its top. Three rubies hover over it, each a portal:
-//   the dark dome ruby on the left    -> the Table Room (checkers)
+//   the checker piece on the left (a ruby dome on a black stone disc) -> the Table Room (checkers)
 //   the round glowing ruby in the middle, over the rings -> the Doodle Gallery
 //   the faceted ruby on the right     -> the Game Room
 // Behind it all, three nebula pictures (sky1, sky2, sky3) drift at their own speeds, layered so the dark gaps in the
 // nearer ones show the farther ones through. Stars twinkle over them, and little motes of light rise from the rings.
+// A moment after the Lobby appears, each one's name fades in above it in glowing letters, brightening when you point at it.
 // Pick your name, then touch a ruby. It glows up, the screen floods with white from it, and while it's all white that
 // room's code loads (a little snowflake turns in the bottom left corner). Then the white fades and you're in the room.
 // Coming back through a room's portal, the Lobby fades in from black. On every load a little tag pops up for a few
 // seconds with the version of each room's files your browser has (each file says its version on a "VERSION" line).
-// No names float over anything: people find their way.
-// VERSION 11
+// VERSION 12
 // =====================================================================
 import { sfx } from '../sounds.js';
 import { inCave, joinCave, leaveCave } from '../world.js';   // who's online, everywhere (and you, here in the Lobby)
@@ -25,7 +25,7 @@ const PLACES = {
 const SPOTS = { table: { u: 0.27, v: 0.36 }, gallery: { u: 0.5, v: 0.27 }, game: { u: 0.73, v: 0.34 } };
 const RINGS = { u: 0.5, v: 0.262 };   // the middle of the carved rings
 const SLAB_ASPECT = 1266 / 1600;      // the slab picture's height, as a part of its width
-const GEM_SIZE = 0.15;                // a ruby's width, as a part of the slab's width
+const GEM_SIZE = { table: 0.2, gallery: 0.15, game: 0.15 };   // each one's width, as a part of the slab's width
 const HOVER = 0.075;                  // how high it floats above its spot, as a part of the slab's width
 
 const cv = document.getElementById('cave');
@@ -114,7 +114,7 @@ const slabX = u => sx0 - look.x * SLAB_DRIFT + u * S;
 const slabY = v => sy0 - look.y * SLAB_DRIFT * 0.6 + v * S;   // (v in parts of the slab's width, so it stays in proportion)
 function gemAt(key, t) {   // a ruby's middle and width on screen, bobbing gently (each on its own beat)
   const spot = SPOTS[key], beat = { table: 0, gallery: 2.1, game: 4.2 }[key];
-  const w = S * GEM_SIZE * (hover === key ? 1.08 : 1);
+  const w = S * GEM_SIZE[key] * (hover === key ? 1.08 : 1);
   return { x: slabX(spot.u), y: slabY(spot.v * SLAB_ASPECT) - S * HOVER + Math.sin(t * 1.3 + beat) * S * 0.008, w,
            floor: slabY(spot.v * SLAB_ASPECT) };
 }
@@ -302,6 +302,21 @@ function drawGem(key, t, flash) {
     g.drawImage(img, p.x - p.w / 2, p.y - h / 2, p.w, h);
     g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
   }
+  // its name, fading in above it a moment after the Lobby appears (one after another), glowing
+  const order = { table: 0, gallery: 1, game: 2 }[key];
+  const fade = clamp((t - 1.2 - order * 0.5) / 1.6, 0, 1);
+  if (fade > 0 && !going) {
+    const size = clamp(S * 0.028, 13, 30);
+    const ty = p.y - h / 2 - size * 0.9 + Math.sin(t * 1.3) * 1.5;
+    g.font = `${size}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'bottom';
+    g.globalAlpha = fade * (0.75 + 0.25 * breathe + (hover === key ? 0.25 : 0));
+    g.shadowColor = hover === key ? 'rgba(255,120,110,1)' : 'rgba(255,70,60,0.9)';
+    g.shadowBlur = size * (hover === key ? 1.1 : 0.7);
+    g.fillStyle = '#ffe9e4';
+    g.fillText(PLACES[key].name, p.x, ty);
+    g.shadowBlur = size * 0.25; g.fillText(PLACES[key].name, p.x, ty);   // (a second pass: a crisp core in the glow)
+    g.shadowBlur = 0; g.globalAlpha = 1;
+  }
 }
 
 let raf = 0, last = performance.now();
@@ -353,5 +368,5 @@ if (TEST_ROOM && PLACES[TEST_ROOM]) {
   loadRoom();
 } else raf = window.requestAnimationFrame(frame);
 // =====================================================================
-// END OF cave.js (357 lines)
+// END OF cave.js (372 lines)
 // =====================================================================
