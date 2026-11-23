@@ -29,31 +29,26 @@
 					input { font-family: inherit; font-size: 14px; padding: 6px 10px; border: none; border-radius: 10px; background: #f3e6cf; color: #2a1c10; }
 					#chatInput { flex: 1; min-width: 0; }
 					#chatRow button { margin: 0; }
-					/* The Lobby (cave.js): the front door, drawn over everything until you go through a ruby */
-					#cave { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 20; touch-action: none; transition: opacity 0.9s; }
-					#cave.gone { opacity: 0; pointer-events: none; }
-					#nameBox { position: fixed; left: 0; right: 0; bottom: 5%; z-index: 30; display: flex; justify-content: center; pointer-events: none; transition: opacity 0.5s; }
-					#nameBox.leaving { opacity: 0; }
-					#nameBox .panel { position: static; pointer-events: auto; text-align: center; padding: 14px 20px; background: rgba(14,22,52,0.62); color: #e6f2ff;
-					box-shadow: 0 4px 18px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(150,215,255,0.45); backdrop-filter: blur(4px); }
-					#nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; }
-					#nameBox input { background: #e9f3ff; text-align: center; font-size: 16px; }
+					/* start.js: a black cover while the room loads, then the name box over the gallery */
+					#cover { position: fixed; inset: 0; z-index: 20; background: #000; transition: opacity 1.3s ease-out; }
+					#cover.gone { opacity: 0; pointer-events: none; }
+					#nameBox { position: fixed; left: 0; right: 0; bottom: 8%; z-index: 30; display: flex; justify-content: center; pointer-events: none;
+					opacity: 0; visibility: hidden; transition: opacity 0.6s, visibility 0.6s; }
+					#nameBox.show { opacity: 1; visibility: visible; }
+					#nameBox .panel { position: static; pointer-events: auto; text-align: center; padding: 16px 22px; background: rgba(20,16,12,0.78); backdrop-filter: blur(4px);
+					box-shadow: 0 4px 18px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(201,162,39,0.55); }
+					#nameBox h2 { margin: 0 0 10px; font-weight: normal; font-size: 19px; color: #ffe9a0; }
+					#nameBox input { text-align: center; font-size: 16px; }
 					#nameBox #enter { display: none; }
 					#nameRow { display: flex; gap: 6px; justify-content: center; }
-					#nameRow button { margin: 0; font-size: 16px; padding: 6px 14px; background: #bfe3ff; color: #0e1a3a; border-radius: 10px; }
-					#hello { display: none; }
-					#hello h2 { margin: 0 0 4px; }
-					#hello button { margin: 2px 0 0; font-size: 12px; padding: 3px 10px; background: rgba(191,227,255,0.2); color: #e6f2ff; }
-					#nameBox.named #askName { display: none; }
-					#nameBox.named #hello { display: block; }
-					/* The little snowflake that turns on the black screen while a room loads (it fades in only if loading takes a moment) */
+					#nameRow button { margin: 0; font-size: 16px; padding: 6px 14px; border-radius: 10px; }
+					/* The little snowflake that turns on the black cover while a room loads (it fades in only if loading takes a moment) */
 					#loadFlake { position: fixed; left: 50%; top: 50%; z-index: 25; margin: -24px 0 0 -24px; width: 48px; height: 48px; line-height: 48px; text-align: center;
 					font-size: 38px; color: #dff3ff; text-shadow: 0 0 12px rgba(150,215,255,0.9); opacity: 0; pointer-events: none; transition: opacity 0.4s; }
 					#loadFlake.on { opacity: 0.85; transition-delay: 0.35s; animation: flakeTurn 3s linear infinite, flakePulse 1.6s ease-in-out infinite; }
 					#loadFlake.oops { opacity: 1; animation: none; width: 320px; margin-left: -160px; font-size: 16px; text-shadow: none; pointer-events: auto; cursor: pointer; }
 					@keyframes flakeTurn { to { rotate: 360deg; } }
 					@keyframes flakePulse { 50% { scale: 1.18; } }
-					#nameBox .tip { margin-top: 8px; font-size: 13px; font-style: italic; opacity: 0.8; }
 					#nameBox.nudge .panel { animation: nudge 0.4s; }
 					@keyframes nudge { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
 					#phoneBar { display: none; }
@@ -87,7 +82,6 @@
 			<div id="whoList"></div>
 			<div id="conn">Connecting…</div>
 			<div id="whoBtns">
-				<button id="leaveRoom">🚪 Leave</button>
 				<button id="mute" title="Sound">🔊</button>
 			</div>
 		</div>
@@ -104,22 +98,15 @@
 			</button>
 			<button id="whoBtn">👥 0</button>
 		</div>
-		<canvas id="cave"></canvas>
+		<div id="cover"></div>
 		<div id="nameBox">
 			<div class="panel">
-				<div id="askName">
-					<h2>Welcome! What's your name?</h2>
-					<div id="nameRow">
-						<input id="nameInput" maxlength="20" placeholder="Your name">
-							<button id="nameOk" title="That's me">✓</button>
-						</div>
-				</div>
-				<div id="hello">
-					<h2 id="helloText"></h2>
-					<button id="nameChange">change name</button>
-				</div>
+				<h2 id="nameTitle">Welcome! What's your name?</h2>
+				<div id="nameRow">
+					<input id="nameInput" maxlength="20" placeholder="Your name">
+						<button id="nameOk" title="Come in">✓</button>
+					</div>
 				<button id="enter">Enter</button>
-				<div class="tip" id="nameTip">then touch a jewel ✦</div>
 			</div>
 		</div>
 		<div id="loadFlake">❄</div>
@@ -130,7 +117,7 @@
 			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
 			} }
 		</script>
-		<!-- The Lobby (lobby/cave.js) is the front door: a marble slab with three ruby portals. It loads the room you pick: studio/studio.js (the Doodle Gallery), table/tables.js (the Table Room) or game/games.js (the Game Room) -->
-		<script type="module" src="lobby/cave.js?v=1.1"></script>
+		<!-- start.js is the front door: it opens straight into the Doodle Gallery (studio/studio.js), with the name box over it -->
+		<script type="module" src="start.js?v=2"></script>
 	</body>
 </html>
