@@ -9,7 +9,6 @@
 //          onReady (called each time a picture has loaded, so the room can take a new reflection snapshot),
 //          size (the whole board across, edge to edge, in meters).
 // Pictures (in textures/checker): checker_marble_red.jpg (red marble), checker_marble_black.jpg (black marble, red veins).
-// VERSION 12
 // ===================================================================================================================
 import { squareSweep, wrapStone } from './shapes.js';
 

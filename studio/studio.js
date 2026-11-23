@@ -16,10 +16,9 @@ import { inRoom } from '../world.js';
 import { build as buildTable } from '../pieces/marbletable.js';
 import { throne } from '../pieces/throne.js';
 import { makeCurtain } from '../pieces/curtain.js';
-import { setupHud, slide, peek } from '../hud.js';
-setupHud();   // (the panels slide away when the mouse is elsewhere, and the title fades: see hud.js)
-slide(document.getElementById('who'), 'right');
-slide(document.getElementById('chat'), 'right');
+import { makeSummon } from '../pieces/summon.js';
+import { setupHud } from '../hud.js';
+setupHud();   // (the corner buttons open and close the chat, the menu and who's here; the title fades: see hud.js)
 
 // ---------- Black and gold marble (marble.jpg, a Kindroid image) ----------
 // The picture is big enough to use once per surface, so nothing repeats: each wall shows a different part of it,
@@ -120,17 +119,27 @@ function snapRoom() {
 // White marble, its jewels, and the summoning circle set into its top, where games will be summoned.
 const gameTable = buildTable();
 scene.add(gameTable);
-// and a white marble throne at each side, facing in (made in the Workshop: pieces/throne.js)
+// Summoning: click the circle and checkers rise out of it, with their name; click them and the board assembles out of
+// glowing motes onto the table (pieces/summon.js). Esc sends it all back.
+const summon = makeSummon({ top: 0.85 });
+scene.add(summon.group);
+// and a white marble throne at each side, facing in (made in the Workshop: pieces/throne.js), pulled back so its base
+// clears the table's legs with a little room. Click one (or Z beside it) to sit in it; Z again to get up.
+const THRONE_AT = 1.08;                       // each throne's middle, out from the table's middle
+const THRONES = [];                           // where each one stands: { x, z, a }
 for (let k = 0; k < 4; k++) {
-  const a = k * Math.PI / 2, seat = throne();
-  seat.position.set(Math.sin(a) * 0.97, 0, Math.cos(a) * 0.97);
-  seat.rotation.y = a + Math.PI;   // (its front toward the table)
-  scene.add(seat);
+  const a = k * Math.PI / 2, t = throne();
+  t.position.set(Math.sin(a) * THRONE_AT, 0, Math.cos(a) * THRONE_AT);
+  t.rotation.y = a + Math.PI;   // (its front toward the table)
+  t.traverse(o => { o.userData.throne = k; });
+  scene.add(t);
+  THRONES.push({ x: t.position.x, z: t.position.z, a });
 }
 
 // The game curtain: black glass that drops from the ring round the table when a game starts (pieces/curtain.js).
 // For now G drops it and lifts it again; while it's down, click the hanging light (or B) to change its sky.
-const curtain = makeCurtain({ radius: 1.97, top: HEIGHT - 0.72, ceiling: HEIGHT, lampLow: 1.75 });
+const curtainHide = [];   // (the ring light goes in here once it's made: hidden while the curtain's sky is in)
+const curtain = makeCurtain({ radius: 1.97, top: HEIGHT - 0.72, ceiling: HEIGHT, lampLow: 1.75, hide: curtainHide });
 scene.add(curtain.group);
 
 // Gold baseboards along the bottom of every wall, all the way across
@@ -158,6 +167,7 @@ function neonMat(opacity, core, map) {
 const RING_R = 2.0, RING_Y = HEIGHT - 0.7;   // 4 m across: big enough to hang over a table for four with its chairs
 const ring = new THREE.Group();
 scene.add(ring);
+curtainHide.push(ring);
 const LID_W = 0.075;                                   // how far the lid reaches past the tube on each side
 const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
 const lid = new THREE.Mesh(new THREE.RingGeometry(RING_R - LID_W, RING_R + LID_W, 180), lidMat);   // the flat top
@@ -294,12 +304,15 @@ function refreshAvatars() {
     if (fresh) avatars[id] = makeAvatar(p.name, colorIndex(p));
     const a = avatars[id], to = spotOf(p);
     a.tx = to.x; a.tz = to.z;
-    if (fresh) a.g.position.set(to.x, 0, to.z);   // someone new just appears where they are
+    a.ty = Number.isInteger(p.ch) && THRONES[p.ch] ? 0.4 : 0;   // (sitting in a throne: up on its cushion)
+    if (Number.isInteger(p.ch) && THRONES[p.ch]) { const t = THRONES[p.ch]; a.tx = t.x - Math.sin(t.a) * 0.04; a.tz = t.z - Math.cos(t.a) * 0.04; }
+    if (fresh) a.g.position.set(a.tx, a.ty, a.tz);   // someone new just appears where they are
   }
 }
 function moveAvatars(dt) {   // everyone else glides toward where they're walking
   for (const a of Object.values(avatars)) {
     const p = a.g.position, dx = a.tx - p.x, dz = a.tz - p.z, d = Math.hypot(dx, dz);
+    p.y += ((a.ty || 0) - p.y) * Math.min(1, dt * 6);   // (easing up into a throne, or down out of it)
     if (d < 0.001) continue;
     const step = Math.min(d, WALK * dt);
     p.x += dx / d * step; p.z += dz / d * step;
@@ -367,7 +380,6 @@ function addMsg(name, text, mine, c) {
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
   if (!mine) {
-    peek(document.getElementById('chat'));   // (a new message slides the chat in for a few seconds)
     sfx.ping();
     if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
   }
@@ -417,17 +429,6 @@ function sendChat() {
 document.getElementById('send').addEventListener('click', sendChat);
 chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
 
-// Phone buttons: open and close chat and the room list
-document.getElementById('chatBtn').addEventListener('click', () => {
-  document.body.classList.toggle('chatOpen');
-  document.body.classList.remove('whoOpen');
-  newDot.style.display = 'none';
-  msgs.scrollTop = msgs.scrollHeight;
-});
-whoBtn.addEventListener('click', () => {
-  document.body.classList.toggle('whoOpen');
-  document.body.classList.remove('chatOpen');
-});
 setupMute(document.getElementById('mute'));
 
 // ---------- Entering the room (the name box over the gallery, set up by start.js) ----------
@@ -490,10 +491,10 @@ nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom();
 // ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
 const hint = document.getElementById('hint');
 const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk · tap the board to doodle · tap a picture to see it'
-                        : 'Drag to look · click the floor to walk (or W A S D) · Z to sit · click the board to doodle · click a picture to see it';
+                        : 'Drag to look · click the floor to walk (or W A S D) · click a throne (or Z) to sit · click the board to doodle · click a picture to see it';
 hint.textContent = HINT_WALK;
 const LIMIT = R2 - 0.5;                       // how close to the walls you can walk
-const TABLE_KEEP = 1.32 + 0.25;               // how close to the table's middle you can walk (out past the thrones, plus your body)
+const TABLE_KEEP = THRONE_AT + 0.31 + 0.25;   // how close to the table's middle you can walk (out past the thrones, plus your body)
 const me = { x: (Math.random() - 0.5) * 2.4, z: R2 - 1.2, tx: null, tz: null };   // you start a step out from the back wall (spread a little, so nobody stacks up)
 let yaw = 0, pitch = -0.05;                   // facing the doodle board
 let anim = null;                              // a camera move in progress (walking up to the board and back)
@@ -507,9 +508,10 @@ function clampSpot(x, z) {   // (inside the walls, and not in the table)
   return [x, z];
 }
 function mySpot() {   // what everyone else sees: where you're standing (or walking to), and whether you're at the board
-  if (S.atSketch) return { x: +boardSpot.x.toFixed(2), z: +boardSpot.z.toFixed(2), b: true };
+  if (S.atSketch) return { x: +boardSpot.x.toFixed(2), z: +boardSpot.z.toFixed(2), b: true, ch: null };
+  if (chair != null) return { x: +THRONES[chair].x.toFixed(2), z: +THRONES[chair].z.toFixed(2), b: null, ch: chair };
   const x = me.tx != null ? me.tx : me.x, z = me.tz != null ? me.tz : me.z;
-  return { x: +x.toFixed(2), z: +z.toFixed(2), b: null };
+  return { x: +x.toFixed(2), z: +z.toFixed(2), b: null, ch: null };
 }
 let sentAt = 0, sendTimer = 0;
 function sendSpot(now) {   // tell everyone where you're going (a few times a second at most)
@@ -520,7 +522,7 @@ function sendSpot(now) {   // tell everyone where you're going (a few times a se
   update(ref(db, 'room/presence/' + myId), mySpot()).catch(() => {});
 }
 function walkTo(x, z) {
-  if (seat.sitting) return;   // (sitting: stand up first, with Z)
+  if (seat.sitting || chair != null) return;   // (sitting: stand up first, with Z)
   [me.tx, me.tz] = clampSpot(x, z);
   marker.position.set(me.tx, 0.012, me.tz);
   marker.visible = true; markerFade = 1;
@@ -545,6 +547,11 @@ camera.rotation.set(pitch, yaw, 0);
 const SIT = 0.9, PLOP = [90, 9], RISE = [30, 11];   // (eye height sitting; how it pulls you down, and back up)
 const seat = { sitting: false, y: EYE, fall: 0, settling: false };
 function toggleSit() {
+  if (chair != null) { leaveThrone(); return; }   // (in a throne: Z gets you up)
+  if (!seat.sitting) {   // (standing right beside a free throne: Z sits you in it)
+    const near = THRONES.findIndex(t => Math.hypot(t.x - me.x, t.z - me.z) < 0.95);
+    if (near >= 0 && !throneTaken(near)) { sitThrone(near); return; }
+  }
   seat.sitting = !seat.sitting;
   seat.settling = true; seat.fall = 0;
   if (seat.sitting) { me.tx = me.tz = null; marker.visible = false; }
@@ -555,6 +562,33 @@ function settle(dt) {
   seat.fall += ((target - seat.y) * pull[0] - seat.fall * pull[1]) * dt;
   seat.y += seat.fall * dt;
   if (Math.abs(target - seat.y) < 0.002 && Math.abs(seat.fall) < 0.02) { seat.y = target; seat.settling = false; }
+}
+
+// ---------- Sitting in a throne: the view glides down into the seat, facing the table ----------
+const CHAIR_EYE = 1.14;                       // your eye height sitting in a throne
+let chair = null;                             // which throne you're in (or null)
+function throneTaken(k) { return Object.entries(S.presence).some(([id, p]) => id !== myId && p.ch === k); }
+function sitThrone(k) {
+  if (anim || chair != null || S.atSketch) return;
+  if (throneTaken(k)) { showBanner('Someone is sitting there'); return; }
+  const t = THRONES[k];
+  seat.sitting = seat.settling = false;
+  me.tx = me.tz = null; marker.visible = false;
+  chair = k;
+  const x = t.x - Math.sin(t.a) * 0.06, z = t.z - Math.cos(t.a) * 0.06;   // (a touch forward on the cushion)
+  me.x = x; me.z = z;
+  yaw = Math.atan2(t.x, t.z); pitch = -0.3;   // (facing the table, looking down at it a little)
+  moveCamera(new THREE.Vector3(x, CHAIR_EYE, z), viewQuat(yaw, pitch), () => { seat.y = CHAIR_EYE; });
+  sendSpot(true);
+}
+function leaveThrone() {
+  if (anim || chair == null) return;
+  const t = THRONES[chair];
+  chair = null;
+  [me.x, me.z] = clampSpot(t.x + Math.sin(t.a) * 0.6, t.z + Math.cos(t.a) * 0.6);   // (up, and a step back out behind it)
+  pitch = -0.05;
+  moveCamera(new THREE.Vector3(me.x, EYE, me.z), viewQuat(yaw, pitch), () => { seat.y = EYE; });
+  sendSpot(true);
 }
 
 // A soft gold ring on the floor showing where you'll walk
@@ -568,7 +602,7 @@ let markerFade = 0;
 // ---------- Walking up to the doodle board, and stepping back ----------
 function enterSketch() {
   if (anim || S.atSketch || !S.myName) return;
-  seat.sitting = seat.settling = false; seat.y = EYE;   // (up off the floor to draw)
+  seat.sitting = seat.settling = false; seat.y = EYE; chair = null;   // (up off the floor, or out of the throne, to draw)
   boardSaved.x = me.x; boardSaved.z = me.z; boardSaved.yaw = yaw; boardSaved.pitch = pitch;
   me.tx = me.tz = null;
   const others = Object.entries(S.presence).filter(([id, p]) => id !== myId && p.b).length;
@@ -601,7 +635,7 @@ const keys = new Set();
 function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
 window.addEventListener('keydown', e => {
   if (typing() || !S.myName) return;
-  if (e.key === 'Escape') { if (S.atSketch) leaveSketch(); return; }
+  if (e.key === 'Escape') { if (S.atSketch) leaveSketch(); else if (!typing()) summon.back(); return; }
   const k = e.key.toLowerCase();
   if (k === 'g' && !e.repeat && !S.atSketch && !S.galleryOpen) { curtain.toggle(); return; }
   if (k === 'b' && !e.repeat && curtain.closed) { curtain.nextSky(); return; }
@@ -615,7 +649,7 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right turn
-  if (seat.sitting || seat.settling) { if (keys.has('arrowleft')) yaw += 1.8 * dt; if (keys.has('arrowright')) yaw -= 1.8 * dt; return; }   // (sitting: turn only)
+  if (seat.sitting || seat.settling || chair != null) { if (keys.has('arrowleft')) yaw += 1.8 * dt; if (keys.has('arrowright')) yaw -= 1.8 * dt; return; }   // (sitting: turn only)
   if (!keys.size || S.atSketch || anim || S.galleryOpen || typing()) return;
   if (keys.has('arrowleft')) yaw += 1.8 * dt;
   if (keys.has('arrowright')) yaw -= 1.8 * dt;
@@ -653,6 +687,9 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.curtainLamp) return { lamp: true };
+  if (u.summonPick) return { summon: true };
+  if (u.circle) return { circle: true };
+  if (u.throne != null) return { throne: u.throne };
   if (u.sketch) return { sketch: true };
   if (u.lightSwitch) return { lightSwitch: true };
   if (u.gallery) return { gallery: true };   // the gallery opens its own viewer
@@ -688,7 +725,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
-    canvas.style.cursor = p && (p.lamp || p.sketch || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
+    canvas.style.cursor = p && (p.lamp || p.summon || p.circle || p.throne != null || p.sketch || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
@@ -699,6 +736,9 @@ window.addEventListener('pointerup', e => {
   const p = pickUnder(e);
   if (!p) return;
   if (p.lamp) curtain.nextSky();
+  else if (p.summon) summon.choose();
+  else if (p.circle) summon.circleClicked();
+  else if (p.throne != null) { if (chair == null) sitThrone(p.throne); }
   else if (p.sketch) enterSketch();
   else if (p.lightSwitch) nextNeon();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
@@ -741,6 +781,7 @@ renderer.setAnimationLoop(() => {
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt);
   curtain.update(dt);
+  summon.update(dt);
   updateSketch(dt);
   renderer.render(scene, camera);
 });

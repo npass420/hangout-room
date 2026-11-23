@@ -6,7 +6,6 @@
 //   rise and settle (a shimmering chime as a king lifts, falling as it sets down), hum (a low floating hum, no longer used).
 // makeSounds(THREE, listener) gives back { play(name, onto, { pitch, volume, loop }) } (play gives back the sound, so a
 // held one can be stopped with .stop()); listener: a THREE.AudioListener riding on the camera, or null for silence.
-// VERSION 3
 // ===================================================================================================================
 export function makeSounds(THREE, listener) {
   if (!listener) return { play: () => null };

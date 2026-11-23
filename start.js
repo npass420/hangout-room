@@ -3,7 +3,6 @@
 // A black cover with a turning snowflake hides the room while it loads; then the cover fades and the gallery shows,
 // with the name box over it. Type your name (or keep the saved one) and press Enter or ✓ to step in.
 // Testing on this PC: localhost:8080/HangoutRoom/?room=game opens the Game Room instead, until the portals exist.
-// VERSION 2
 // =====================================================================
 const ROOMS = {
   gallery: { name: 'Doodle Gallery', file: './studio/studio.js' },

@@ -3,7 +3,6 @@
 # It starts the Workshop's server (Workshop/workshop.py: one server for both) and opens the gallery at
 # localhost:8080/HangoutRoom/. Leave the black window open; every refresh shows the latest files, so there's nothing
 # to upload while testing. Close the black window to stop it.
-# VERSION 2
 # =====================================================================
 import os, runpy, sys
 

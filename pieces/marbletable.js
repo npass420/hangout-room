@@ -49,6 +49,7 @@ export function build() {
   const circle = plate({ size: CIRCLE });   // (set into its hole, its rim flush with the top)
   circle.position.y = TOP;
   table.add(circle);
+  circle.traverse(o => { o.userData.circle = true; });   // (click it to summon a game: summon.js)
   // a bigger jewel set into the top's surface near each corner, lying flat, its length pointing at the corner
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
     const at = new THREE.Group();

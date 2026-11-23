@@ -20,7 +20,6 @@
 //     restore(): it grows back.  place(): where it stands.
 //   materials: a list to add their materials to (so they reflect the room); update(seconds): call every frame;
 //   dispose(): stops every sound and frees everything the set used.
-// VERSION 2
 // ===================================================================================================================
 import { makeChecker } from './checker.js';
 import { makeSounds } from './sounds.js';

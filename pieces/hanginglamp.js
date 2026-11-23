@@ -10,7 +10,8 @@
 //   no cord: it floats like a flame, drifting up and down and swaying; its top is cut flat with a table corner jewel on it
 // It turns very slowly, so everyone round the table sees a window come by.
 //   makeLamp()   { group, parts, light }: the lamp with its top at y = 0, hanging down (meters, half a meter tall);
-//                parts: its meshes (to click); light: its glow (set .userData.level; it flickers round that)
+//                parts: its meshes (to click); light: its glow (set .userData.level; it flickers round that);
+//                shine(0..1): how much the porcelain glows of its own (1 under the curtain's sky)
 //   build()      the Workshop's look: the lamp floating above the stand
 // =====================================================================================================================
 import * as THREE from 'three';
@@ -28,6 +29,7 @@ const OVAL = { x: JEWEL.width / 2 + 0.0015, z: JEWEL.height / 2 + 0.0015 };   //
 const TOP_AT = 0.452, OVAL_FROM = 0.37;   // (how high the flat top sits, and where the cone starts turning into its oval)
 const SEG = 180, ROWS = 140;          // (round, and up)
 const SIZE = 0.9;                     // (the whole lamp's scale: 10% smaller than first built)
+const SHINE = [0.1, 0.42];                 // (the porcelain's own soft glow: out in the room, and under the curtain's sky)
 const THICK = 0.006;                  // (the porcelain's thickness)
 const CORE = { r: 0.042, y0: 0.035, y1: 0.36 };   // (the glass core: its radius, and its bottom and top up from the lamp's bottom)
 
@@ -123,6 +125,9 @@ function surface(inset) {
 export function makeLamp() {
   const group = new THREE.Group();
   const porcelain = make('Porcelain, gold kintsugi');
+  // (a soft glow of its own, from its own picture, so it stays white porcelain in a dark room or under the curtain's
+  // sky, where no light reaches it; shine() turns it up)
+  porcelain.emissive = new THREE.Color(1, 1, 1); porcelain.emissiveMap = porcelain.map; porcelain.emissiveIntensity = SHINE[0];
   porcelain.alphaMap = cutouts(); porcelain.alphaTest = 0.5; porcelain.side = THREE.DoubleSide;
   const outer = new THREE.Mesh(surface(0), porcelain);
   // (the inside face: warm, lit only by the core's glow; real lights would blow it white this close)
@@ -218,7 +223,9 @@ export function makeLamp() {
     body.rotation.z = 0.025 * Math.sin(t * 0.81 + 2.1) + 0.01 * Math.sin(t * 1.71 + 0.3);
     light.intensity = (light.userData.level ?? base) * (0.9 + 0.06 * Math.sin(t * 7.3) * Math.sin(t * 3.1 + 1.0) + 0.04 * Math.sin(t * 13.7));
   };
-  return { group, parts, light };
+  const shineMats = [porcelain, edgeMat, lidMat];
+  const shine = k => { for (const m of shineMats) m.emissiveIntensity = SHINE[0] + (SHINE[1] - SHINE[0]) * k; };
+  return { group, parts, light, shine };
 }
 
 export function build() {   // (the Workshop's look: the lamp floating above the stand, like over the table)

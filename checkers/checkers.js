@@ -15,7 +15,6 @@
 // Rules (classic American checkers): crimson moves first; captures are a must, and you keep jumping while you can; a piece
 // that reaches the far row becomes a king (and that ends its move); kings move one square, in any diagonal direction.
 // The game is shared through the database (tables/checkers, where the old checkers game kept its board), so everyone in the room sees the same board.
-// VERSION 7
 // =====================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';

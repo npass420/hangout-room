@@ -4,7 +4,6 @@
 //   corners very slightly rounded, meeting itself in a clean line at each corner. The checkerboard's top and border
 //   and the table's top are made this way.
 // wrapStone: lays a picture over a piece like a wrapping, so the pattern carries on over every edge and corner.
-// VERSION 1
 // ===================================================================================================================
 
 // corners: [[out from the middle, height, how much to round this corner], ...], in order across the shape.

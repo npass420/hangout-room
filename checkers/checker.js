@@ -23,7 +23,6 @@
 // square on the game table is about 10 cm). light: a real light spilling onto the onyx (true), or a drawn glow there
 // instead (false: what the game uses, as a light per piece would slow the room). cache: an object shared by a set of
 // pieces, so they make their pictures once between them. ORB: the crowned orb's radius; HEIGHT: the piece's height.
-// VERSION 7
 // ===================================================================================================================
 const GEMS = {   // each jewel's colors: the glass's depth color, the floor inside, the glitter, the chips, the core, its glow and light
   crimson: { deep: 0xb0101c, floor: ['#6a0710', '#2c0306', '#0c0102'], speck: [255, 50, 40], speckLift: 120,
