@@ -1,8 +1,8 @@
 // ===================================================================================================================
 // >>>>> START OF FILE 1 of 1: Workshop/pieces/checkerset.js <<<<<
 // Workshop/pieces/checkerset.js: a set of checkers (checker.js) that move, capture and get crowned, for the game.
-// makeCheckerSet(THREE, { materials, glowLayer, listener, lite }) gives back { piece, group, update, dispose } (lite: the
-// lighter pieces, for phones in a busy room; see checker.js):
+// makeCheckerSet(THREE, { materials, glowLayer, listener, lite, light }) gives back { piece, group, update, dispose } (lite: the
+// lighter pieces, for phones in a busy room; light: each jewel's own real light, as in the Workshop; see checker.js):
 //   piece(x, z, y, size, gem): a checker standing at x, z on a surface at height y; size its width; gem 'crimson' or
 //     'violet' (both on onyx discs). It gives back:
 //     setKing(on, now): crowned, the whole piece melts into a glowing glass orb (a black onyx band round its middle)
@@ -24,7 +24,7 @@
 import { makeChecker } from './checker.js';
 import { makeSounds } from './sounds.js';
 
-export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener = null, lite = false } = {}) {
+export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener = null, lite = false, light = false } = {}) {
   const group = new THREE.Group(), pieces = [], cache = {};
   const sfx = makeSounds(THREE, listener);
   const FLOAT = 0.0254;     // (a king floats an inch off the surface)
@@ -41,7 +41,7 @@ export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener 
   }
 
   function piece(x, z, y, size, gem = 'crimson') {
-    const look = makeChecker(THREE, { glowLayer }, { size, stone: 'onyx', gem, light: false, cache, lite });
+    const look = makeChecker(THREE, { glowLayer }, { size, stone: 'onyx', gem, light, cache, lite });   // (light: each jewel's own real light on its onyx, the Workshop look)
     materials.push(...look.materials);
     const d = look.group, color = look.color, ORB = look.ORB;
     const radius = size * 0.38;   // (the effects' measure: the laser, the marks, the sparks)

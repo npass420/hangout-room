@@ -11,7 +11,8 @@ export const OBJECTS = {
     'Summoning circle': 'summoningplate.js',
     'Marble throne': 'throne.js',
     'Game curtain (cycles by itself)': 'curtain.js',
-    'Hanging lamp': 'hanginglamp.js'
+    'Hanging lamp': 'hanginglamp.js',
+    'Checkerboard, set for a game': 'gameboard.js'
   }
 };
 // >>>>> END OF FILE: HangoutRoom/pieces/catalog.js <<<<<

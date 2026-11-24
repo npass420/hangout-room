@@ -14,7 +14,7 @@ import { squareSweep, wrapStone } from './shapes.js';
 
 // the whole board is raised by the slope's own height (from the flat top at 3 cm down to the 4 mm lip), with a straight
 // upright side under the slope; SQUARES_TOP is the height of the playing squares' top above the board's bottom
-export const LIFT = 0.03 - 0.004;
+export const LIFT = (0.03 - 0.004) / 2;   // (the upright side cut down by half: a slimmer profile)
 export const SQUARES_TOP = 0.011 + 0.012 + LIFT;
 
 export function makeCheckerboard(THREE, { loader, anisotropy = 8, folder = 'textures/checker/', onReady = () => {}, size = 1.5 } = {}) {

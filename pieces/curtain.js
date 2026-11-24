@@ -13,6 +13,8 @@
 //     .group                       add it to the scene (it stands centered on x = 0, z = 0)
 //     .close() / .open()           drop it and fade in the sky / fade the sky out and lift it
 //     .toggle()                    whichever of those it isn't doing
+//     .lampDown(on)                the lamp floats down over the table (someone's sitting), or back up
+//     onRoom(on)                   (option) called when the room should switch off (sky in) or back on
 //     .nextSky()                   the next background (deep space, your lantern lagoon)
 //     .update(dt)                  every frame
 // =====================================================================================================================
@@ -195,7 +197,7 @@ const SKY_SHADER = `
     #include <colorspace_fragment>
   }`;
 
-export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lampLow = 1.75, hide = [] } = {}) {
+export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lampLow = 1.75, hide = [], onRoom = null } = {}) {
   const group = new THREE.Group();
   group.position.y = top;
   const hang = new THREE.Group();   // (everything that drops: scaled from 0 to full height, from the top down)
@@ -253,7 +255,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   const lampTop = 0.0, lampBottom = lampLow - top;   // (where the orb hangs: up in the ring, or low over the table)
   const ceil = ceiling - top;
 
-  let drop = 0, fade = 0, closing = false, skyIndex = 0;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky)
+  let drop = 0, fade = 0, closing = false, skyIndex = 0, lampWant = 0, lampK = 0, lastRoom = true;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky)
   const ease = k => k * k * (3 - 2 * k);
   function show() {
     const d = ease(drop);
@@ -263,10 +265,12 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     edge.visible = drop > 0.001 && drop < 0.999;
     uniforms.reveal.value = ease(fade);
     lid.visible = floor.visible = fade > 0.001;
-    for (const o of hide) o.visible = fade < 0.5;   // (the room's own things inside the curtain, like the ring light, gone while the sky is in)
-    const ly = lampTop + (lampBottom - lampTop) * ease(fade);   // (the light lowers as the sky comes in)
+    const roomOn = fade < 0.5;   // (with the sky in, the room's own things are switched off: not drawn at all)
+    if (roomOn !== lastRoom) { lastRoom = roomOn; for (const o of hide) o.visible = roomOn; if (onRoom) onRoom(roomOn); }
+    const low = ease(Math.max(lampK, fade));   // (the lamp comes down when someone sits, and stays down while the sky is in)
+    const ly = lampTop + (lampBottom - lampTop) * low;
     lamp.position.y = ly + 0.5;   // (the lamp's top; it hangs half a meter down from there)
-    glow.userData.level = 0.8 + 2.4 * ease(fade);
+    glow.userData.level = 0.8 + 2.4 * low;
     shine(ease(fade));   // (the porcelain glows softly under the sky, where the room's lights don't reach)   // (the lamp flickers around this itself)
   }
   function applySky() {
@@ -286,6 +290,8 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     close() { closing = true; },
     open() { closing = false; },
     toggle() { closing = !closing; },
+    lampDown(on) { lampWant = on ? 1 : 0; },
+    lampShown(on) { lamp.visible = on; },   // (hidden in the game view, so nothing hangs over the board)   // (someone sitting at the table: the lamp floats down over it)
     nextSky() {
       skyIndex = (skyIndex + 1) % SKIES.length;
       applySky();
@@ -293,6 +299,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     lamp: lampParts,   // (what to click to change the sky)
     update(dt) {
       uniforms.time.value += dt;
+      lampK += Math.sign(lampWant - lampK) * Math.min(Math.abs(lampWant - lampK), dt / 2.2);
       if (closing) {   // (down first, then the sky fades in)
         if (drop < 1) drop = Math.min(1, drop + dt / DROP);
         else fade = Math.min(1, fade + dt / FADE);

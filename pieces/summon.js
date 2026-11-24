@@ -6,23 +6,23 @@
 //      together in a slow turning cluster over the table, with "Checkers" glowing above them in gold letters
 //   2  click the pieces or the word: the pieces burst into sparks, a cloud of glowing motes streams up out of the
 //      portal and settles flat over the table into the shape of a board, first a white glowing silhouette, which fades
-//      into the real marble checkerboard; then the checkers pop up onto their starting squares
+//      into the real marble checkerboard (nearly to the corner jewels); then the game's checkers grow up onto it
 //   3  click the circle again (with the pieces floating), or press Esc: they sink back into the portal.
 //      Esc with the board out: it fades back to white, breaks into motes, and they pour back down into the portal.
-// For now it's only on your own screen (the game itself, shared and played, comes next).
-//   makeSummon({ top, glowLayer })   top: the table top's height (the circle's middle is at x = 0, z = 0)
+//   makeSummon({ top, glowLayer, onChoose, onBoard })   top: the table top's height (the circle at x = 0, z = 0);
+//                                  onChoose(): you chose the game; onBoard(on): the board has arrived, or is leaving
 //     .group                          add it to the scene
-//     .circleClicked()  .choose()  .back()   what clicks and Esc do
+//     .circleClicked()  .choose()  .back()   what clicks and Esc do;  .buildNow() / .dismiss(): someone else did
+//     .CELL, .TOP                     one square across, and the squares' top above the table
 //     .update(dt)                     every frame
 //     .state                          'idle', 'menu', 'board' (or 'busy' while something is happening)
 // Anything clickable in it carries userData.summonPick.
 // =====================================================================================================================
 import * as THREE from 'three';
 import { makeChecker } from '../checkers/checker.js';
-import { makeCheckerSet } from '../checkers/checkerset.js';
 import { makeCheckerboard, SQUARES_TOP } from '../checkers/checkerboard.js';
 
-const BOARD = 0.9;                    // the checkerboard across (the table is 1.4)
+const BOARD = 1.15;                   // the checkerboard across: nearly to the table's corner jewels (the table is 1.4)
 const RING_R = 0.4 * 0.912;           // the circle's burning ring (its ridge)
 const PORTAL_R = 0.17;                // the portal's well, where things come up out of
 const FLOAT_Y = 0.36;                 // how high the floating pieces hang over the table
@@ -49,7 +49,7 @@ function wordSprite(text) {   // ("Checkers" in glowing gold)
   return s;
 }
 
-export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
+export function makeSummon({ top = 0.85, glowLayer = 1, onChoose = () => {}, onBoard = () => {} } = {}) {
   const group = new THREE.Group();
   group.position.y = top;
   const dot = glowTexture();
@@ -114,6 +114,7 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
   const loader = new THREE.TextureLoader();
   const built = makeCheckerboard(THREE, { loader, folder: new URL('../checkers/textures/checker/', import.meta.url).href, size: BOARD });
   board.add(built.group);
+  built.group.traverse(o => { o.userData.boardPick = true; });   // (a click anywhere on the board counts as the board)
   const boardMats = built.materials;
   const silhouette = new THREE.Mesh(new THREE.BoxGeometry(BOARD, SQUARES_TOP + 0.004, BOARD).translate(0, (SQUARES_TOP + 0.004) / 2, 0),
     new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.5, 1.35), transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
@@ -148,17 +149,8 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
     motesGeo.attributes.position.needsUpdate = true;
   }
 
-  // the pieces: a fresh set each time the board comes out, popping up onto their starting squares
-  let set = null, spots = [], placed = 0;
+  // (the pieces on it are the game's: checkers.js sets them out once the board is here)
   const PLAY = (BOARD / 2 - 0.0254) / (0.5 + 0.151), SQ = PLAY / 8;
-  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++)   // (the starting squares: the dark ones of the first three rows each side)
-    if ((r + c) % 2 === 1 && (r < 3 || r > 4)) spots.push({ x: (c - 3.5) * SQ, z: (r - 3.5) * SQ, gem: r < 3 ? 'crimson' : 'violet' });
-  function setOut() { set = makeCheckerSet(THREE, { glowLayer }); board.add(set.group); placed = 0; }
-  function popIn() {   // (the next checker grows up onto its square)
-    const s = spots[placed++];
-    set.piece(s.x, s.z, SQUARES_TOP, SQ * 0.8, s.gem).restore();
-  }
-  function setAway() { if (set) { board.remove(set.group); set.dispose(); set = null; placed = 0; } }
 
   function fadeBoard(o) {
     for (const m of boardMats) { m.transparent = o < 0.999; m.opacity = o; m.depthWrite = o > 0.5; m.needsUpdate = true; }
@@ -170,7 +162,9 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
     if (state === 'idle') { state = 'busy'; go('rise'); }
     else if (state === 'menu') { state = 'busy'; go('sink'); }
   }
-  function choose() { if (state === 'menu') { state = 'busy'; go('build'); } }
+  function choose() { if (state === 'menu') { state = 'busy'; go('build'); onChoose(); } }
+  function buildNow() { if (state === 'idle' || state === 'menu') { cluster.visible = state === 'menu'; state = 'busy'; go('build'); } }   // (someone else summoned it)
+  function dismiss() { if (state === 'board') { state = 'busy'; go('unbuild'); } }
   function back() {
     if (state === 'menu') { state = 'busy'; go('sink'); }
     else if (state === 'board') { state = 'busy'; go('unbuild'); }
@@ -187,7 +181,6 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
       f.c.update(t);
     });
     word.position.set(0, 0.16 + 0.008 * Math.sin(t * 1.1), 0);
-    if (set) set.update(t);
     const u = shimmer.material.uniforms;
     u.flare.value *= Math.exp(-dt * 1.6);
 
@@ -221,16 +214,14 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
       silhouette.material.opacity = 0.9 * ease((pt - 1.2) / 0.6) * (1 - ease((pt - 2.2) / 1.0));
       if (pt > 1.9 && !board.visible) { board.visible = true; fadeBoard(0); }
       if (board.visible) fadeBoard(ease((pt - 1.9) / 1.0));
-      if (pt > 2.7 && !set) setOut();
-      while (set && placed < spots.length && pt > 2.8 + placed * 0.045) popIn();
       if (pt > 4.2) {
         floaters.forEach(f => f.c.setHeat(0)); cluster.scale.setScalar(1);
         column.visible = false; motes.visible = false; silhouette.visible = false; fadeBoard(1);
-        phase = null; state = 'board'; u.sweep.value = -1;
+        phase = null; state = 'board'; u.sweep.value = -1; onBoard(true);
       }
     } else if (phase === 'unbuild') {   // the board goes white, breaks into motes, and they pour back into the portal
       if (pt < 0.05) u.flare.value = 1.0;
-      if (pt < 0.1) setAway();
+      if (pt < 0.05) onBoard(false);
       silhouette.visible = pt < 1.6;
       silhouette.material.opacity = 0.9 * ease(pt / 0.4) * (1 - ease((pt - 0.6) / 0.8));
       fadeBoard(1 - ease(pt / 0.5)); if (pt > 0.5) board.visible = false;
@@ -242,6 +233,6 @@ export function makeSummon({ top = 0.85, glowLayer = 1 } = {}) {
     }
   }
 
-  return { group, update, circleClicked, choose, back, get state() { return state; } };
+  return { group, update, circleClicked, choose, back, buildNow, dismiss, CELL: SQ, TOP: SQUARES_TOP, get state() { return state; } };
 }
 // >>>>> END OF FILE: HangoutRoom/pieces/summon.js <<<<<
