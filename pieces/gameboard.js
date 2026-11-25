@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { makeCheckerboard, SQUARES_TOP } from '../checkers/checkerboard.js';
 import { makeCheckerSet } from '../checkers/checkerset.js';
+import { softEnv } from '../checkers/pieceenv.js';
 
 const BOARD = 1.15;
 export function build() {
@@ -15,7 +16,8 @@ export function build() {
   const board = makeCheckerboard(THREE, { loader: new THREE.TextureLoader(), folder: new URL('../checkers/textures/checker/', import.meta.url).href, size: BOARD });
   g.add(board.group);
   const PLAY = (BOARD / 2 - 0.0254) / (0.5 + 0.151), SQ = PLAY / 8;
-  const set = makeCheckerSet(THREE, { glowLayer: 1, light: false });   // (as in the game)
+  const mats = [];
+  const set = makeCheckerSet(THREE, { materials: mats, glowLayer: 1, light: false });   // (as in the game)
   g.add(set.group);
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++)
     if ((r + c) % 2 === 1 && (r < 3 || r > 4)) set.piece((r - 3.5) * SQ, (3.5 - c) * SQ, SQUARES_TOP, SQ * 0.82, r > 4 ? 'crimson' : 'violet');
@@ -23,7 +25,15 @@ export function build() {
   ticker.frustumCulled = false;   // (drawn every frame: it keeps the pieces' glitter and glow alive)
   g.add(ticker);
   const t0 = performance.now();
-  ticker.onBeforeRender = () => set.update((performance.now() - t0) / 1000);
+  let lit = false;
+  ticker.onBeforeRender = (renderer) => {
+    if (!lit) {   // (the first time it's drawn: the pieces reflect the same soft round lights as in the game, not the Workshop's)
+      lit = true;
+      const env = softEnv(renderer);
+      for (const m of mats) if ('envMap' in m) { m.envMap = env; m.envMapIntensity = 0.8; m.needsUpdate = true; }
+    }
+    set.update((performance.now() - t0) / 1000);
+  };
   return g;
 }
 // >>>>> END OF FILE: HangoutRoom/pieces/gameboard.js <<<<<

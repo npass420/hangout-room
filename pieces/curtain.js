@@ -6,16 +6,19 @@
 // all the way round and closing overhead, so the gallery is gone and the players are somewhere else. When the game
 // ends, the sky fades back to black glass and the curtain rises back into the ring.
 // A fine glowing line runs round its bottom edge as it moves.
+// Holodeck: once the sky is in, the curtain spreads outward from the table, its glowing line sweeping out across the
+// floor, until the sky fills the whole room and beyond (the floor too), and then it's a sky all round you, far off like
+// a real one. Going back, it pulls in to the table first, then fades back to glass and rises.
 // The floating lamp (hanginglamp.js), no cord: it waits up in the ring and lowers over the
 // table once the sky is in; clicking it changes the sky.
 //   makeCurtain({ radius, top, hide })   radius: the curtain's (meters), top: where it hangs from (the ring's height);
 //                                  hide: the room's things inside it to hide while the sky is in (the ring light)
 //     .group                       add it to the scene (it stands centered on x = 0, z = 0)
-//     .close() / .open()           drop it and fade in the sky / fade the sky out and lift it
-//     .toggle()                    whichever of those it isn't doing
+//     .close() / .open()           drop it, fade in the sky, spread it out / pull it in, fade it out, lift it
+//     .closed                      it's closing (or closed); .down: all the way down; .skyIn: the sky is in
 //     .lampDown(on)                the lamp floats down over the table (someone's sitting), or back up
 //     onRoom(on)                   (option) called when the room should switch off (sky in) or back on
-//     .nextSky()                   the next background (deep space, your lantern lagoon)
+//     .setSky(i) / .skyIndex / .SKY_COUNT   which background (deep space, your lantern lagoon)
 //     .update(dt)                  every frame
 // =====================================================================================================================
 import * as THREE from 'three';
@@ -23,6 +26,8 @@ import { makeLamp } from './hanginglamp.js';
 
 const DROP = 2.6;                     // seconds for the curtain to come down (and to go up)
 const FADE = 1.8;                     // seconds for the sky to fade in (and out)
+const SPREAD = 2.4;                   // seconds for the sky to spread out to the whole room and beyond (and back in)
+const FAR = 19;                       // how far it spreads: 19 times the curtain's size (about 37 m out, past the walls)
 const SKIES = [                       // the backgrounds
   { a: [0.32, 0.12, 0.55], b: [0.08, 0.16, 0.45], c: [0.05, 0.42, 0.3], belt: 'textures/sky_belt.jpg',      // deep space: stars,
     stars: [0.85, 0.95, 1.0], aurora: 1 },                                                                   //   clouds, the star ring, aurora
@@ -57,7 +62,7 @@ function picture(file) {
 }
 
 const SKY_SHADER = `
-  uniform float time, reveal, usePic, aurora, water, picLow, picSpan, horizon;
+  uniform float time, reveal, usePic, aurora, water, picLow, picSpan, horizon, floorR;
   uniform vec3 colA, colB, colC, starTint, topCol; uniform sampler2D pic, picB, belt;
   varying vec3 vDir;
   float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -183,7 +188,7 @@ const SKY_SHADER = `
         vec3 live = mix(deep, refl, clamp(fres * 1.3, 0.0, 1.0));
         float spark = stars(vec3(wp.x * 2.0, time * 0.02, wp.z * 2.0), 40.0, 0.93) + stars(vec3(wp.x * 2.0 + 5.0, time * 0.015, wp.z * 2.0), 70.0, 0.92) * 0.7;
         live += vec3(0.25, 0.9, 1.0) * spark * 1.4;   // (the blue glow, sparkling in the water)
-        col = mix(live, col, smoothstep(1.25, 1.9, r));   // (out by the curtain, the picture's own water takes over)
+        col = mix(live, col, smoothstep(1.25 * floorR, 1.9 * floorR, r));   // (out by the curtain, the picture's own water takes over)
         starAmt = 0.0;
       }
       #endif
@@ -214,7 +219,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   const sky = SKIES[0];
   const uniforms = {
     time: { value: 0 }, reveal: { value: 0 }, usePic: { value: 0 }, aurora: { value: 0 }, water: { value: 0 },
-    picLow: { value: 0 }, picSpan: { value: 1 }, horizon: { value: 0.4 }, pic: { value: null }, picB: { value: null },
+    picLow: { value: 0 }, picSpan: { value: 1 }, horizon: { value: 0.4 }, pic: { value: null }, picB: { value: null }, floorR: { value: 1 },
     topCol: { value: new THREE.Vector3() },
     colA: { value: new THREE.Vector3(...sky.a) }, colB: { value: new THREE.Vector3(...sky.b) }, colC: { value: new THREE.Vector3(...sky.c) },
     starTint: { value: new THREE.Vector3(...sky.stars) }, belt: { value: null }
@@ -241,6 +246,11 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   floor.position.y = -top + 0.003;  // (a hair above the room's floor)
   floor.visible = false;
   group.add(floor);
+  // the holodeck's sky, all the way round (once the curtain has spread out): far off, like a real sky
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(radius * FAR * 1.15, 96, 48), skyMat);
+  dome.position.y = 1.4 - top;      // (centered where the sky is seen from)
+  dome.visible = false;
+  group.add(dome);
   // the fine glowing line round the bottom edge
   const edge = new THREE.Mesh(new THREE.TorusGeometry(radius, 0.008, 8, 200),
     new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.82, 0.5).multiplyScalar(2.2) }));
@@ -255,18 +265,24 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   const lampTop = 0.0, lampBottom = lampLow - top;   // (where the orb hangs: up in the ring, or low over the table)
   const ceil = ceiling - top;
 
-  let drop = 0, fade = 0, closing = false, skyIndex = 0, lampWant = 0, lampK = 0, lastRoom = true;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky)
+  let drop = 0, fade = 0, spread = 0, closing = false, skyIndex = 0, lampWant = 0, lampK = 0, lastRoom = true;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky; spread: 0 at the table .. 1 the whole room)
   const ease = k => k * k * (3 - 2 * k);
   function show() {
     const d = ease(drop);
-    hang.scale.y = Math.max(0.0001, d);
-    hang.visible = drop > 0.001;
+    const S = 1 + (FAR - 1) * ease(spread);   // (how far out the curtain has spread)
+    hang.scale.set(S, Math.max(0.0001, d), S);
+    hang.visible = drop > 0.001 && spread < 0.999;
+    lid.scale.set(S, S, 1); floor.scale.set(S, S, 1);
+    uniforms.floorR.value = S;
+    dome.visible = spread >= 0.999;
+    edge.scale.set(S, S, 1);
     edge.position.y = -H * d;
-    edge.visible = drop > 0.001 && drop < 0.999;
+    edge.visible = (drop > 0.001 && drop < 0.999) || (spread > 0.001 && spread < 0.999);   // (as it drops, and sweeping out across the floor)
     uniforms.reveal.value = ease(fade);
-    lid.visible = floor.visible = fade > 0.001;
+    lid.visible = fade > 0.001 && spread < 0.999;
+    floor.visible = fade > 0.001;
     const roomOn = fade < 0.5;   // (with the sky in, the room's own things are switched off: not drawn at all)
-    if (roomOn !== lastRoom) { lastRoom = roomOn; for (const o of hide) o.visible = roomOn; if (onRoom) onRoom(roomOn); }
+    if (roomOn !== lastRoom) { lastRoom = roomOn; for (const o of hide) o.visible = roomOn; if (onRoom) onRoom(roomOn); }   // (studio.js does this itself now: only for those inside)
     const low = ease(Math.max(lampK, fade));   // (the lamp comes down when someone sits, and stays down while the sky is in)
     const ly = lampTop + (lampBottom - lampTop) * low;
     lamp.position.y = ly + 0.5;   // (the lamp's top; it hangs half a meter down from there)
@@ -287,9 +303,19 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   return {
     group,
     get closed() { return closing; },
+    get down() { return drop >= 0.999; },
+    get skyIn() { return fade >= 0.5; },
+    get spreadOut() { return spread > 0.001; },   // (spread out past the table: from outside, it has to stay hidden)
+    get skyIndex() { return skyIndex; },
+    SKY_COUNT: SKIES.length,
     close() { closing = true; },
     open() { closing = false; },
     toggle() { closing = !closing; },
+    setSky(i) {
+      i = Number.isInteger(i) ? ((i % SKIES.length) + SKIES.length) % SKIES.length : 0;
+      if (i === skyIndex) return;
+      skyIndex = i; applySky();
+    },
     lampDown(on) { lampWant = on ? 1 : 0; },
     lampShown(on) { lamp.visible = on; },   // (hidden in the game view, so nothing hangs over the board)   // (someone sitting at the table: the lamp floats down over it)
     nextSky() {
@@ -300,11 +326,13 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     update(dt) {
       uniforms.time.value += dt;
       lampK += Math.sign(lampWant - lampK) * Math.min(Math.abs(lampWant - lampK), dt / 2.2);
-      if (closing) {   // (down first, then the sky fades in)
+      if (closing) {   // (down first, then the sky fades in, then it spreads out)
         if (drop < 1) drop = Math.min(1, drop + dt / DROP);
-        else fade = Math.min(1, fade + dt / FADE);
-      } else {         // (the sky fades out first, then up)
-        if (fade > 0) fade = Math.max(0, fade - dt / FADE);
+        else if (fade < 1) fade = Math.min(1, fade + dt / FADE);
+        else spread = Math.min(1, spread + dt / SPREAD);
+      } else {         // (it pulls back in first, then the sky fades out, then up)
+        if (spread > 0) spread = Math.max(0, spread - dt / SPREAD);
+        else if (fade > 0) fade = Math.max(0, fade - dt / FADE);
         else drop = Math.max(0, drop - dt / DROP);
       }
       show();

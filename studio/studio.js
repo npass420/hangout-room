@@ -17,7 +17,10 @@ import { build as buildTable } from '../pieces/marbletable.js';
 import { throne } from '../pieces/throne.js';
 import { makeCurtain } from '../pieces/curtain.js';
 import { makeSummon } from '../pieces/summon.js';
+import { makePortalNode } from '../pieces/portalnode.js';
+import { makeDenVanish } from '../pieces/denvanish.js';
 import { startCheckers } from '../checkers/checkers.js';
+import { startOthello } from '../checkers/othello.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -64,13 +67,13 @@ marbleImg.onload = () => {
     t.offset.set(flip ? 1 : 0, y);
     m.map = t; m.color.setHex(0xffffff); m.needsUpdate = true;
   });
-  // Floor: the whole picture, with thin gold seams every 1.5 meters (6 by 6 tiles)
+  // Floor: the whole picture, with thin gold seams every 1.5 meters (8 by 8 tiles)
   const SZ = src.width, fc = document.createElement('canvas');
   fc.width = fc.height = SZ;
   const g = fc.getContext('2d');
   g.drawImage(src, 0, 0, SZ, SZ);
-  const step = SZ / 6, lw = Math.max(2, SZ / 900);
-  for (let i = 0; i <= 6; i++) {
+  const TILES = Math.round(ROOM / 1.5), step = SZ / TILES, lw = Math.max(2, SZ / 900);
+  for (let i = 0; i <= TILES; i++) {
     const p = Math.round(i * step);
     g.fillStyle = 'rgba(0,0,0,0.55)';          // a dark groove
     g.fillRect(p - lw, 0, lw * 2, SZ); g.fillRect(0, p - lw, SZ, lw * 2);
@@ -110,6 +113,7 @@ let roomEnv = null, snapTimer = 0;
 function snapRoom() {
   clearTimeout(snapTimer);
   snapTimer = setTimeout(() => {
+    if (roomIsOff) { snapRoom(); return; }   // (the room's switched off for the den: wait until it's back)
     const hide = [floor, marker, ...Object.values(avatars).map(a => a.g)];   // not the floor itself, or people (they'd freeze in it)
     const was = hide.map(o => o.visible);
     hide.forEach(o => { o.visible = false; });
@@ -124,16 +128,35 @@ function snapRoom() {
 // White marble, its jewels, and the summoning circle set into its top, where games will be summoned.
 const gameTable = buildTable();
 scene.add(gameTable);
-// Summoning: click the circle and checkers rise out of it, with their name; click them and the board assembles out of
-// glowing motes onto the table (pieces/summon.js). Esc sends it all back.
-const summon = makeSummon({ top: 0.85,
-  onChoose: () => set(ref(db, 'tables/board'), 1).catch(() => {}),   // (everyone's board comes out)
+// Summoning: click the circle and the games rise out of it side by side, Checkers and Othello, each with its name;
+// click one and its board assembles out of glowing motes onto the table (pieces/summon.js). Esc sends it all back.
+const summon = makeSummon({ top: 0.85, renderer,
+  onChoose: g => set(ref(db, 'tables/board'), g).catch(() => {}),   // (everyone's board comes out: which game's)
   onBoard: on => game.show(on) });
 scene.add(summon.group);
-// The game on the board (checkers/checkers.js): its pieces stand on the summoned board; Start locks your view onto it.
-const game = startCheckers({ center: { x: 0, z: 0 }, top: summon.TOP, cell: summon.CELL, parent: summon.group, onView: side => gameView(side) });
-onValue(ref(db, 'tables/board'), s => {   // (the board is shared: out for everyone, or away for everyone)
-  if (s.val() === 1) { if (summon.state === 'idle' || summon.state === 'menu') summon.buildNow(); }
+// The games on the board (checkers/checkers.js, checkers/othello.js): their pieces stand on the summoned board; Start
+// locks your view onto it. `game` is whichever game's board is out.
+const gameHooks = {
+  onView: (side, watching) => gameView(side, watching),
+  seated: () => chair != null,
+  onStart: () => update(denRef, { closed: 1 }).catch(() => {}) };   // (a game starting brings the den's curtain down for everyone)
+const checkersGame = startCheckers({ center: { x: 0, z: 0 }, top: summon.topOf('checkers'), cell: summon.cellOf('checkers'), parent: summon.group, ...gameHooks });
+const othelloGame = startOthello({ center: { x: 0, z: 0 }, top: summon.topOf('othello'), cell: summon.cellOf('othello'), parent: summon.group, board: summon.board, ...gameHooks });
+const curGame = () => (summon.game === 'othello' ? othelloGame : checkersGame);
+const game = {
+  show(on) { const c = curGame(); for (const g of [checkersGame, othelloGame]) if (g !== c || !on) g.show(false); if (on) c.show(true); },
+  refresh() { checkersGame.refresh(); othelloGame.refresh(); },
+  deselect: () => curGame().deselect(),
+  busy: () => curGame().busy(),
+  shown: () => curGame().shown(),
+  tap: p => curGame().tap(p),
+  canTap: p => curGame().canTap(p),
+  leave: () => curGame().leave(),
+  update: t => { checkersGame.update(t); othelloGame.update(t); }
+};
+onValue(ref(db, 'tables/board'), s => {   // (the board is shared: out for everyone, or away for everyone; 1 was checkers)
+  const v = s.val(), g = v === 1 ? 'checkers' : v;
+  if (g === 'checkers' || g === 'othello') { if (summon.state === 'idle' || summon.state === 'menu') summon.buildNow(g); }
   else if (summon.state === 'board' && !game.busy()) summon.dismiss();
 });
 // and a white marble throne at each side, facing in (made in the Workshop: pieces/throne.js), pulled back so its base
@@ -149,21 +172,43 @@ for (let k = 0; k < 4; k++) {
   THRONES.push({ x: t.position.x, z: t.position.z, a, mesh: t });
 }
 
-// The game curtain: black glass that drops from the ring round the table when a game starts (pieces/curtain.js).
-// For now G drops it and lifts it again; while it's down, click the hanging light (or B) to change its sky.
-const curtainHide = [];   // (the ring light goes in here once it's made: hidden while the curtain's sky is in)
-// With the curtain's sky in, the room outside it is switched off (not drawn at all): only the table, its thrones, the
-// lamp, the summoning, the sky and the people stay.
-let roomOff = [];
-function setRoom(on) {
+// ---------- The game den: the curtain, the holodeck, and the crystals ----------
+// Someone sits: the lamp floats down. Anyone sitting clicks the lamp: the black glass curtain drops from the ring for
+// everyone (pieces/curtain.js), its sky fades in and spreads out into a holodeck filling the whole room, floor and
+// all; each click on the lamp after that changes the sky, for everyone. Those sitting are in the den: for them the
+// gallery is gone. For everyone else the gallery stays, and once the curtain is down gold glitter creeps up the black
+// glass and the column dissolves from the top into a rising plume of gold dust (pieces/denvanish.js), leaving a
+// floating portal node (pieces/portalnode.js) at each open throne: click one to port into it. Once nobody is sitting,
+// the curtain lifts again. Shared through the database: tables/den { closed, sky }.
+let roomOff = [], roomIsOff = false;
+function setRoom(on) {   // (for those in the den with the sky in: the room's own things switched off, not drawn at all)
+  if (!on === roomIsOff) return;
+  roomIsOff = !on;
   if (!on) {
-    const keep = new Set([gameTable, summon.group, curtain.group, marker, ...THRONES.map(t => t.mesh)]);
-    roomOff = scene.children.filter(o => o.visible && !keep.has(o) && !o.isLight && !o.userData.avatar && !curtainHide.includes(o));
+    const keep = new Set([gameTable, summon.group, curtain.group, marker, nodeGroup, vanish.group, ...THRONES.map(t => t.mesh)]);
+    roomOff = scene.children.filter(o => o.visible && !keep.has(o) && !o.isLight && !o.userData.avatar);
     for (const o of roomOff) o.visible = false;
   } else { for (const o of roomOff) o.visible = true; roomOff = []; }
 }
-const curtain = makeCurtain({ radius: 1.97, top: HEIGHT - 0.72, ceiling: HEIGHT, lampLow: 1.75, hide: curtainHide, onRoom: setRoom });
+const curtain = makeCurtain({ radius: 1.97, top: HEIGHT - 0.72, ceiling: HEIGHT, lampLow: 1.75 });
 scene.add(curtain.group);
+const denRef = ref(db, 'tables/den');
+let den = { closed: 0, sky: 0 };
+onValue(denRef, s => {
+  den = s.val() || { closed: 0, sky: 0 };
+  if (den.closed) curtain.close(); else curtain.open();
+  curtain.setSky(den.sky | 0);
+});
+function lampClicked() {
+  if (chair == null) { showBanner('Sit at the table first', 2); return; }
+  if (!curtain.closed) update(denRef, { closed: 1 }).catch(() => {});
+  else update(denRef, { sky: (curtain.skyIndex + 1) % curtain.SKY_COUNT }).catch(() => {});
+}
+// the portal nodes (one where each throne is) and the vanishing
+const nodeGroup = new THREE.Group();
+scene.add(nodeGroup);
+const vanish = makeDenVanish({ radius: 1.97, height: HEIGHT - 0.72 });
+scene.add(vanish.group);
 
 // Gold baseboards along the bottom of every wall, all the way across
 for (const [x, z, w, d] of [[0, -R2 + 0.01, ROOM, 0.02], [0, R2 - 0.01, ROOM, 0.02], [-R2 + 0.01, 0, 0.02, ROOM], [R2 - 0.01, 0, 0.02, ROOM]]) {
@@ -190,7 +235,6 @@ function neonMat(opacity, core, map) {
 const RING_R = 2.0, RING_Y = HEIGHT - 0.7;   // 4 m across: big enough to hang over a table for four with its chairs
 const ring = new THREE.Group();
 scene.add(ring);
-curtainHide.push(ring);
 const LID_W = 0.075;                                   // how far the lid reaches past the tube on each side
 const lidMat = std(0x0d0c0b, 0.35, { envMap, envMapIntensity: 0.25, side: THREE.DoubleSide });
 const lid = new THREE.Mesh(new THREE.RingGeometry(RING_R - LID_W, RING_R + LID_W, 180), lidMat);   // the flat top
@@ -254,7 +298,7 @@ function setNeon(i) {
 }
 
 // The light switch on the right-hand picture wall, in the gap past its last column of frames (by the back wall corner),
-// level with the middle of the second row up: click it to change the neon color for everyone
+// level with the middle of the bottom row: click it to change the neon color for everyone
 const switchGroup = new THREE.Group();
 const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: false });
 (function lightSwitch() {
@@ -262,7 +306,7 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   const toggle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.05, 0.02), switchGlow);
   toggle.position.z = 0.015;
   switchGroup.add(plate, toggle);
-  switchGroup.position.set(R2 - 0.015, 1.39, R2 - 0.25);   // halfway between the last frame's edge and the back wall
+  switchGroup.position.set(R2 - 0.015, 1.16, R2 - 0.45);   // between the last frame's edge and the back wall
   switchGroup.rotation.y = -Math.PI / 2;                    // facing into the room
   switchGroup.traverse(o => { if (o.isMesh) o.userData.lightSwitch = true; });
   scene.add(switchGroup);
@@ -524,8 +568,14 @@ let yaw = 0, pitch = -0.05;                   // facing the doodle board
 let anim = null;                              // a camera move in progress (walking up to the board and back)
 const boardSaved = { x: 0, z: 0, yaw: 0, pitch: 0 };
 const boardSpot = { x: 0, z: 0 };            // where your snowman stands while you're at the board
-function clampSpot(x, z) {   // (inside the walls, and not in the table)
+const DEN_KEEP = 2.35;                        // with the den's curtain down: how far from the middle you have to stay
+function clampSpot(x, z) {   // (inside the walls, and not in the table, or in the den with its curtain down)
   x = Math.max(-LIMIT, Math.min(LIMIT, x)); z = Math.max(-LIMIT, Math.min(LIMIT, z));
+  if (curtain.closed) {
+    const r = Math.hypot(x, z);
+    if (r < DEN_KEEP) { if (r < 0.001) { x = DEN_KEEP; z = 0; } else { x *= DEN_KEEP / r; z *= DEN_KEEP / r; } }
+    return [x, z];
+  }
   if (Math.abs(x) < TABLE_KEEP && Math.abs(z) < TABLE_KEEP) {   // (pushed out the nearest side)
     if (TABLE_KEEP - Math.abs(x) < TABLE_KEEP - Math.abs(z)) x = Math.sign(x || 1) * TABLE_KEEP; else z = Math.sign(z || 1) * TABLE_KEEP;
   }
@@ -604,6 +654,7 @@ function sitThrone(k) {
   yaw = Math.atan2(t.x, t.z); pitch = -0.3;   // (facing the table, looking down at it a little)
   moveCamera(new THREE.Vector3(x, CHAIR_EYE, z), viewQuat(yaw, pitch), () => { seat.y = CHAIR_EYE; });
   sendSpot(true);
+  game.refresh();
 }
 function leaveThrone() {
   if (anim || chair == null) return;
@@ -613,6 +664,7 @@ function leaveThrone() {
   pitch = -0.05;
   moveCamera(new THREE.Vector3(me.x, EYE, me.z), viewQuat(yaw, pitch), () => { seat.y = EYE; });
   sendSpot(true);
+  game.refresh();
 }
 
 // A soft gold ring on the floor showing where you'll walk
@@ -669,8 +721,6 @@ window.addEventListener('keydown', e => {
     return;
   }
   const k = e.key.toLowerCase();
-  if (k === 'g' && !e.repeat && !S.atSketch && !S.galleryOpen) { curtain.toggle(); return; }
-  if (k === 'b' && !e.repeat && curtain.closed) { curtain.nextSky(); return; }
   if (k === 'z' && !e.repeat && !S.atSketch && !S.galleryOpen && !anim) { toggleSit(); return; }
   if (k === 'r' && !S.atSketch && !S.galleryOpen && !anim) { setFov(BASE_FOV); pitch = -0.05; return; }   // R: look straight ahead again, zoomed back out
   if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
@@ -702,8 +752,35 @@ function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right t
 canvas.addEventListener('wheel', e => {
   if (S.atSketch) return;
   e.preventDefault();
+  if (gameCam && gameCam.view === 'free') { if (!gameCam.lock) gameCam.od = Math.max(0.45, Math.min(4, gameCam.od * Math.exp(e.deltaY * 0.001))); return; }
   setFov(camera.fov + e.deltaY * 0.03);
 }, { passive: false });
+
+// ---------- Porting in: a portal node takes you straight into its throne, in a flash of white ----------
+const whiteout = document.createElement('div');
+whiteout.style.cssText = 'position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; transition:opacity 0.2s; z-index:5;';
+document.body.appendChild(whiteout);
+let porting = false;
+function portIn(k) {
+  if (porting || chair != null || anim) return;
+  if (throneTaken(k)) { showBanner('Someone just sat there', 2); return; }
+  porting = true;
+  whiteout.style.transition = 'opacity 0.22s'; whiteout.style.opacity = '1';
+  setTimeout(() => {
+    if (throneTaken(k)) { porting = false; whiteout.style.transition = 'opacity 0.6s'; whiteout.style.opacity = '0'; showBanner('Someone just sat there', 2); return; }
+    const t = THRONES[k];
+    seat.sitting = seat.settling = false; seat.y = CHAIR_EYE;
+    me.tx = me.tz = null; marker.visible = false;
+    chair = k;
+    me.x = t.x - Math.sin(t.a) * 0.06; me.z = t.z - Math.cos(t.a) * 0.06;
+    yaw = Math.atan2(t.x, t.z); pitch = -0.3;
+    setFov(BASE_FOV);
+    camera.position.set(me.x, CHAIR_EYE, me.z); camera.quaternion.copy(viewQuat(yaw, pitch));
+    sendSpot(true); game.refresh();
+    whiteout.style.transition = 'opacity 0.8s'; whiteout.style.opacity = '0';
+    porting = false;
+  }, 240);
+}
 
 // ---------- Mouse / touch ----------
 const raycaster = new THREE.Raycaster();
@@ -720,13 +797,14 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (!hit) return null;
   const u = hit.object.userData;
   if (u.curtainLamp) return { lamp: true };
+  if (u.portal != null) return { portal: u.portal };
   // anything on the summoned board (the board, its pieces, their glows): the board, at the point straight under the
   // pointer on the squares' level (so a click on a tall piece or a king's orb counts for the square it stands on)
   if (u.boardPick || (game.shown() && underSummon(hit.object))) {
     const y = TABLE_TOP + summon.TOP, p = new THREE.Vector3();
     return { board: raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), p) || hit.point };
   }
-  if (u.summonPick) return { summon: true };
+  if (u.summonPick) return { summon: u.summonPick };   // (the game picked)
   if (u.circle) return { circle: true };
   if (u.throne != null) return { throne: u.throne };
   if (u.sketch) return { sketch: true };
@@ -756,7 +834,12 @@ window.addEventListener('pointermove', e => {
     pinchDist = d;
     return;
   }
-  if (down && !S.atSketch && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+  if (down && gameCam) {   // in the game, free view: drag turns you round the board (unless it's locked)
+    if (gameCam.view === 'free' && !gameCam.lock) {
+      gameCam.oy -= (e.clientX - lastX) * 0.006;
+      gameCam.op = Math.max(0.12, Math.min(1.5, gameCam.op + (e.clientY - lastY) * 0.005));
+    }
+  } else if (down && !S.atSketch && !anim) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
     const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
     yaw -= (e.clientX - lastX) * k;
     pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
@@ -764,7 +847,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
-    canvas.style.cursor = p && (p.lamp || p.summon || p.circle || (p.board && game.canTap(p.board)) || p.throne != null || p.sketch || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
+    canvas.style.cursor = p && (p.lamp || p.portal != null || p.summon || p.circle || (p.board && game.canTap(p.board)) || p.throne != null || p.sketch || p.lightSwitch || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
 window.addEventListener('pointerup', e => {
@@ -776,8 +859,9 @@ window.addEventListener('pointerup', e => {
   if (!p) return;
   if (p.board) game.tap(p.board);
   else if (gameCam) return;   // (in the game, only the board)
-  else if (p.lamp) { if (!curtain.closed) curtain.close(); else curtain.nextSky(); }   // (the lamp: first the curtain comes down, then each click a new sky)
-  else if (p.summon) summon.choose();
+  else if (p.portal != null) portIn(p.portal);
+  else if (p.lamp) lampClicked();   // (the lamp: first the curtain comes down, then each click a new sky)
+  else if (p.summon) summon.choose(p.summon);
   else if (p.circle) summon.circleClicked();
   else if (p.throne != null) { if (chair == null) sitThrone(p.throne); }
   else if (p.sketch) enterSketch();
@@ -802,13 +886,32 @@ document.body.appendChild(leaveBtn);
 leaveBtn.addEventListener('click', () => {
   leaveBtn.blur();
   if (gameCam) { game.leave(); return; }   // (in the game: out of it, back to the den)
-  if (chair != null) leaveThrone(); curtain.open();
+  if (chair != null) leaveThrone();         // (out of your throne, back to the gallery; the den stays for anyone still in it)
 });
-const topBtn = document.createElement('button');   // (in the game: straight down over the board, or your angled view)
-topBtn.className = 'corner'; topBtn.textContent = '⬒ Top view';
+// In the game: the view button steps Isometric (close, angled down from your side) → Overhead (straight down) → Free (drag round the board,
+// scroll in and out), and in Free a lock button holds the view where it is
+const VIEWS = { angled: '◩ View: Isometric', top: '⬒ View: Overhead', free: '✥ View: Free' };
+const topBtn = document.createElement('button');
+topBtn.className = 'corner'; topBtn.textContent = VIEWS.angled;
 topBtn.style.cssText = 'left:16px; top:64px; width:auto; padding:0 16px; border-radius:20px; font-size:15px; display:none;';
 document.body.appendChild(topBtn);
-topBtn.addEventListener('click', () => { topBtn.blur(); if (gameCam) { gameCam.top = !gameCam.top; topBtn.textContent = gameCam.top ? '◩ Angled view' : '⬒ Top view'; } });
+const lockBtn = document.createElement('button');
+lockBtn.className = 'corner'; lockBtn.textContent = '🔓 Lock view';
+lockBtn.style.cssText = 'left:16px; top:112px; width:auto; padding:0 16px; border-radius:20px; font-size:15px; display:none;';
+document.body.appendChild(lockBtn);
+topBtn.addEventListener('click', () => {
+  topBtn.blur();
+  if (!gameCam) return;
+  if (gameCam.view === 'angled') gameCam.view = 'top';
+  else if (gameCam.view === 'top') {   // (free starts from wherever you're looking from now)
+    gameCam.view = 'free'; gameCam.lock = false;
+    const off = camera.position.clone().sub(BOARD_MID), d = off.length();
+    gameCam.od = d; gameCam.op = Math.max(0.12, Math.min(1.5, Math.asin(off.y / d))); gameCam.oy = Math.atan2(off.x, off.z);
+  } else gameCam.view = 'angled';
+  topBtn.textContent = VIEWS[gameCam.view];
+  lockBtn.textContent = '🔓 Lock view';
+});
+lockBtn.addEventListener('click', () => { lockBtn.blur(); if (gameCam) { gameCam.lock = !gameCam.lock; lockBtn.textContent = gameCam.lock ? '🔒 View locked' : '🔓 Lock view'; } });
 
 // ---------- The game view: Start locks you onto the board ----------
 // Your view glides over the board from your side and stays there; the thrones, the lamp and everyone else go, the
@@ -817,31 +920,24 @@ const vignette = document.createElement('div');
 vignette.style.cssText = 'position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity 1.2s; z-index:1;' +
   'background:radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 85%, rgba(0,0,0,0.85) 100%);';
 document.body.appendChild(vignette);
-let gameCam = null;   // { side, top, pos, quat } while in the game view
+let gameCam = null;   // { side, view: 'angled' | 'top' | 'free', lock, oy, op, od } while in the game view
 const TABLE_TOP = 0.85;
 const GAME_FOV = 46;   // (a slightly longer lens in the game: the board big, no edge stretch)
-function gameView(side) {
-  const hideAll = on => {
-    for (const t of THRONES) t.mesh.visible = on;
-    for (const a of Object.values(avatars)) a.g.visible = on;
-    curtain.lampShown(on);
-  };
+const BOARD_MID = new THREE.Vector3(0, TABLE_TOP + summon.TOP, 0);
+// The game: just the board, floating in the den's sky (the table, thrones, lamp and everyone else go: studio's loop)
+function gameView(side, watching) {
   if (side) {
+    fitBoard();
     anim = null;   // (any camera glide in progress gives way to the game view)
-    curtain.close();
-    const k = side === 1 ? 1 : 3;   // (your throne: crimson's at +x, violet's at -x)
-    chair = k; me.tx = me.tz = null; marker.visible = false; seat.sitting = seat.settling = false;
-    sendSpot(true);
-    gameCam = { side, top: false, pos: camera.position.clone(), quat: camera.quaternion.clone() };
-    topBtn.textContent = '⬒ Top view';
-    hideAll(false);
+    me.tx = me.tz = null; marker.visible = false; seat.sitting = seat.settling = false;
+    gameCam = { side, watching: !!watching, view: 'angled', lock: false, oy: 0, op: 0.9, od: 1.6 };
+    topBtn.textContent = VIEWS.angled; lockBtn.textContent = '🔓 Lock view';
     vignette.style.opacity = '1';
-    leaveBtn.textContent = '⤺ Leave game';
+    leaveBtn.textContent = watching ? '⤺ Stop watching' : '⤺ Leave game';
     setFov(GAME_FOV);
   } else if (gameCam) {
     setFov(BASE_FOV);
     gameCam = null;
-    hideAll(true);
     vignette.style.opacity = '0';
     leaveBtn.textContent = '⤺ Leave the den';
     camera.up.set(0, 1, 0);
@@ -859,15 +955,99 @@ composer.addPass(new RenderPass(scene, camera));
 composer.addPass(new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.75, 0.55, 0.95));
 composer.addPass(new OutputPass());
 const camGoal = new THREE.PerspectiveCamera();   // (a camera, so lookAt points it the way a camera looks)
+// Fitting the board to the screen: the closest the camera can come along a direction with the whole board (its frame
+// and the pieces standing on it) still on screen, a little in from the edges
+const boardCorners = [];
+function fitBoard() {   // (the game's board: its middle and corners, for whichever game is out)
+  BOARD_MID.y = TABLE_TOP + summon.TOP;
+  const half = summon.CELL * 4 * (summon.game === 'othello' ? 1.2 : 1.12);
+  boardCorners.length = 0;
+  for (const y of [0, 0.07]) for (const [cx, cz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) boardCorners.push(new THREE.Vector3(cx * half, y, cz * half).add(BOARD_MID));
+}
+fitBoard();
+const fitCam = new THREE.PerspectiveCamera(), fitP = new THREE.Vector3();
+function fitDistance(dir, up) {
+  fitCam.fov = GAME_FOV; fitCam.aspect = camera.aspect; fitCam.near = 0.01; fitCam.far = 100; fitCam.updateProjectionMatrix();
+  fitCam.up.copy(up);
+  let lo = 0.2, hi = 8;
+  for (let i = 0; i < 22; i++) {
+    const d = (lo + hi) / 2;
+    fitCam.position.copy(BOARD_MID).addScaledVector(dir, d); fitCam.lookAt(BOARD_MID); fitCam.updateMatrixWorld();
+    let fits = true;
+    for (const c of boardCorners) { fitP.copy(c).project(fitCam); if (fitP.z > 1 || Math.abs(fitP.x) > 0.97 || Math.abs(fitP.y) > 0.94) { fits = false; break; } }   // (close: the board fills the screen)
+    if (fits) hi = d; else lo = d;
+  }
+  return hi;
+}
+const ANGLED = 0.87;   // (the angled view's height: about 50 degrees up, from your side)
+const UP = new THREE.Vector3(0, 1, 0), camDir = new THREE.Vector3(), camUp = new THREE.Vector3();
 function steerGameCam(dt) {
-  const s = gameCam.side === 1 ? 1 : -1, target = new THREE.Vector3(0, TABLE_TOP, 0);
-  if (gameCam.top) { camGoal.position.set(s * 0.001, TABLE_TOP + 1.38, 0); camGoal.up.set(-s, 0, 0); camGoal.lookAt(target); }
-  else { camGoal.position.set(s * 1.0, TABLE_TOP + 0.46, 0); camGoal.up.set(0, 1, 0); camGoal.lookAt(new THREE.Vector3(-s * 0.22, TABLE_TOP, 0)); }   // (low across the board from your side, as in the Workshop)
+  const s = gameCam.side === 2 ? -1 : 1;
+  if (gameCam.view === 'top') { camDir.set(s * 0.0001, 1, 0).normalize(); camUp.set(-s, 0, 0); }
+  else if (gameCam.view === 'free') { camDir.set(Math.cos(gameCam.op) * Math.sin(gameCam.oy), Math.sin(gameCam.op), Math.cos(gameCam.op) * Math.cos(gameCam.oy)); camUp.copy(UP); }
+  else { camDir.set(s * Math.cos(ANGLED), Math.sin(ANGLED), 0); camUp.copy(UP); }
+  const d = gameCam.view === 'free' ? gameCam.od : fitDistance(camDir, camUp);
+  camGoal.position.copy(BOARD_MID).addScaledVector(camDir, d);
+  camGoal.up.copy(camUp); camGoal.lookAt(BOARD_MID);
   const k = 1 - Math.exp(-dt * 3.5);
   camera.position.lerp(camGoal.position, k);
   camera.quaternion.slerp(camGoal.quaternion, k);
 }
-let wasSitting = false;
+// Every frame: who sees what. In the den (sitting at the table): with the sky in, the room is off and only those
+// sitting show; in the game, just the board in the sky. Out in the gallery with the curtain down: the table, the
+// curtain and everyone at it gone (blazing up and breaking into sparkles), a portal node at each open throne.
+const nodes = THRONES.map((t, k) => {
+  const n = makePortalNode({ floorDrop: 1.15 });
+  n.group.position.set(t.x, 1.15, t.z);
+  n.group.traverse(o => { o.userData.portal = k; });
+  n.group.visible = false;
+  nodeGroup.add(n.group);
+  return { n, k: 0 };
+});
+let denWasHidden = false, denGone = false, goneFor = 0, emptyFor = 0;
+function denFrame(dt) {
+  const seatedIds = new Set(Object.entries(S.presence).filter(([id, p]) => id !== myId && Number.isInteger(p.ch)).map(([id]) => id));
+  const sitting = chair != null || seatedIds.size > 0;
+  curtain.lampDown(sitting);
+  // nobody sitting for a couple of seconds: the curtain lifts (whoever's here sends it; only once the room has loaded)
+  if (den.closed && !sitting && S.myName && S.presence[myId]) {
+    emptyFor += dt;
+    if (emptyFor > 2) { emptyFor = -1e9; update(denRef, { closed: 0 }).catch(() => {}); }
+  } else if (!den.closed || sitting) emptyFor = 0;
+  const inside = chair != null;
+  // (out in the gallery, curtain down: the den's gone, until it lifting has pulled the sky back in round the table)
+  const hidden = !inside && (curtain.closed ? curtain.down : curtain.spreadOut);
+  if (hidden !== denWasHidden) {   // (it blazes up and breaks into sparkles, or gathers back; the den goes or comes at the blaze's height)
+    denWasHidden = hidden;
+    if (inside) denGone = false;
+    else if (hidden) vanish.out({ onStart: () => { denGone = true; goneFor = -1e9; }, onGone: () => { goneFor = 0; } });
+    else vanish.in({ onDone: () => { denGone = false; } });
+  }
+  if (inside) denGone = false;   // (ported in: it's all there at once)
+  goneFor += dt;
+  const skyRoom = inside && curtain.skyIn;
+  setRoom(!(skyRoom || gameCam));
+  gameTable.visible = !denGone && !gameCam;
+  for (const t of THRONES) t.mesh.visible = !denGone && !gameCam;
+  summon.group.visible = !denGone;
+  curtain.group.visible = !denGone;
+  curtain.lampShown(!gameCam);
+  for (const [id, a] of Object.entries(avatars)) {
+    const atTable = seatedIds.has(id);
+    a.g.visible = gameCam ? false : skyRoom ? atTable : denGone ? !atTable : true;
+  }
+  const t = clock.elapsedTime;
+  nodes.forEach((o, k) => {   // (each swells in a moment after the sparkles break away, and shrinks away when taken or the den comes back)
+    const want = denGone && hidden && !throneTaken(k) && goneFor > 0.3 ? 1 : 0;
+    o.k += Math.sign(want - o.k) * Math.min(Math.abs(want - o.k), dt / (want ? 0.6 : 0.3));
+    o.n.group.visible = o.k > 0.001;
+    if (o.n.group.visible) { o.n.appear(o.k); o.n.update(t); }
+  });
+  vanish.update(dt);
+  leaveBtn.style.display = gameCam || (inside && curtain.closed) ? 'block' : 'none';
+  topBtn.style.display = gameCam ? 'block' : 'none';
+  lockBtn.style.display = gameCam && gameCam.view === 'free' ? 'block' : 'none';
+}
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
@@ -887,6 +1067,7 @@ renderer.setAnimationLoop(() => {
       if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; }
       [me.x, me.z] = clampSpot(me.x, me.z);   // (round the table, not through it)
     }
+    if (chair == null && curtain.closed) [me.x, me.z] = clampSpot(me.x, me.z);   // (the den's curtain coming down: out you step)
     settle(dt);
     camera.position.set(me.x, seat.y, me.z);
     camera.rotation.set(pitch, yaw, 0);
@@ -897,14 +1078,7 @@ renderer.setAnimationLoop(() => {
     if (markerFade <= 0) marker.visible = false;
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt);
-  {   // someone sitting at the table: the lamp floats down; once nobody is, the curtain (if down) lifts again
-    const sitting = chair != null || Object.entries(S.presence).some(([id, p]) => id !== myId && Number.isInteger(p.ch));
-    curtain.lampDown(sitting);
-    if (!sitting && wasSitting && curtain.closed) curtain.open();
-    wasSitting = sitting;
-    leaveBtn.style.display = curtain.closed || gameCam ? 'block' : 'none';
-    topBtn.style.display = gameCam ? 'block' : 'none';
-  }
+  denFrame(dt);
   curtain.update(dt);
   summon.update(dt);
   game.update(clock.elapsedTime);

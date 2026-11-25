@@ -2,51 +2,25 @@
 // >>>>> START OF FILE: HangoutRoom/checkers/checkers.js <<<<<
 // Checkers in the game den: played on the board summoned onto the marble table (pieces/summon.js), with the checkers
 // made in the Workshop (checkerset.js): black onyx discs with a glowing glass jewel, crimson and violet.
-// Click the board: a panel over it lets you play 1 Player (both sides yourself) or 2 Players (you take crimson and wait;
-// anyone else who clicks the board can join as violet). Then Start: the room locks onto the board (studio.js does the
-// view). Click one of your pieces (its square lights up, and the squares it can go to, with hints on), then a square.
+// Sitting at the table, click the board: it's yours while you set up (anyone else who clicks it is told you're setting
+// up a game). Pick how many players: 1 goes straight into the game; 2 and you wait, and everyone else sitting at the
+// table gets a Join box on their screen. When someone joins, you're asked to Start; Start takes you both into the game
+// (studio.js does the view). Anyone else sitting at the table can click the board during a game to watch it. Click one of your pieces (its square lights up, and the squares it can go to, with hints on), then a square.
 // A capture flies the piece over to blast the other with its laser; a piece reaching the far side is crowned into a
 // floating glowing orb. Rules: classic American checkers (crimson first; captures are a must and you keep jumping).
 // Shared through the database (tables/checkers, where the old Table Room's game was kept), so everyone sees the same board and the same game.
-//   startCheckers({ center, top, cell, parent, glowLayer, onView })
+//   startCheckers({ center, top, cell, parent, glowLayer, onView, seated })
 //     center: the board's middle (x, z); top: the squares' top height; cell: one square; parent: where the pieces go;
-//     onView(side): called with your side (1 crimson, 2 violet) when you press Start, and 0 when you leave the game
+//     onView(side, watching): called with your side (1 crimson, 2 violet) when the game starts, and 0 when you leave it;
+//       watching: you're only watching (side 1's view)
+//     seated(): whether you're sitting at the table (only those can set up, join or watch a game)
 //   gives back { pick, tap(point), canTap(point), deselect(), openPanel(), show(on), playing(), leave(), update(t, dt) }
 // =====================================================================================================================
 import * as THREE from 'three';
 import { ref, set, get, update, onValue, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { db, myId, S, hooks, PHONE, renderer } from '../core.js';
 
-// what the pieces' polish reflects: a dark room with a few soft round lights (the room's own reflection picture has
-// square light panels, which showed as square glares on the pieces); made once
-let pieceEnv = null;
-function softEnv() {
-  if (pieceEnv) return pieceEnv;
-  const c = document.createElement('canvas'); c.width = 1024; c.height = 512;
-  const g = c.getContext('2d');
-  const sky = g.createLinearGradient(0, 0, 0, 512);
-  sky.addColorStop(0, '#2a2630'); sky.addColorStop(0.45, '#0e0c12'); sky.addColorStop(1, '#030304');
-  g.fillStyle = sky; g.fillRect(0, 0, 1024, 512);
-  const blob = (x, y, r, rgb, a) => {
-    for (const dx of [-1024, 0, 1024]) {
-      const s = g.createRadialGradient(x + dx, y, 0, x + dx, y, r);
-      s.addColorStop(0, `rgba(${rgb},${a})`); s.addColorStop(0.35, `rgba(${rgb},${a * 0.45})`); s.addColorStop(1, `rgba(${rgb},0)`);
-      g.fillStyle = s; g.fillRect(x + dx - r, y - r, r * 2, r * 2);
-    }
-  };
-  blob(512, 40, 170, '255,246,235', 0.9);   // (a soft round light overhead)
-  blob(180, 150, 70, '255,240,225', 0.8);   // (smaller round lights round about, for round glints)
-  blob(760, 170, 60, '235,225,255', 0.7);
-  blob(930, 120, 40, '255,255,255', 0.6);
-  blob(330, 230, 120, '120,40,60', 0.35);    // (faint warm and violet color low down)
-  blob(640, 240, 120, '70,40,120', 0.35);
-  const t = new THREE.CanvasTexture(c);
-  t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace;
-  const gen = new THREE.PMREMGenerator(renderer);
-  pieceEnv = gen.fromEquirectangular(t).texture;
-  gen.dispose(); t.dispose();
-  return pieceEnv;
-}
+import { softEnv } from './pieceenv.js';
 import { makeCheckerSet } from './checkerset.js';
 
 // ---------- The rules ----------
@@ -110,14 +84,25 @@ function play(st, m) {   // the next state after a legal move
 const count = (b, who) => [...b].filter(ch => owner(ch) === who).length;
 const fresh = () => ({ board: START, turn: 1, chain: -1, over: 0, winner: 0, last: { f: -1, t: -1, cap: -1 } });
 const SIDES = { 1: 'Crimson', 2: 'Violet' };
+const MAX_PLAYERS = 2;   // (the player count buttons: 1 up to this)
 
 // ---------- The game ----------
 // The board's rows run along x (crimson's end at +x), its columns along z.
-export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView = () => {} }) {
+export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView = () => {}, seated = () => true, onStart = () => {} }) {
   const HALF = cell * 4, SIZE = cell * 0.82;   // (a piece fits well inside its square)
   const cellPos = sq => { const [r, c] = rc(sq); return [center.x - HALF + cell * (r + 0.5), center.z - HALF + cell * ((7 - c) + 0.5)]; };
   const G = { st: null, sel: -1, targets: [], ref: ref(db, 'tables/checkers'), pieces: {}, J: null, queue: Promise.resolve(), shown: false };
-  let viewing = false;   // (you pressed Start: the room is locked onto the board)
+  let viewing = false;   // (in the game view: the room is locked onto the board)
+  let watching = false;  // (in it only to watch)
+  const ctrlRef = ref(db, 'tables/control');   // who's setting up a game at the board right now: { id, name }
+  let ctrl = null;
+  onValue(ctrlRef, s => { ctrl = s.val(); refreshPanel(); });
+  const holding = () => !!(ctrl && ctrl.id === myId);
+  function claim() {   // the board is yours while you set up (if nobody else has it)
+    return runTransaction(ctrlRef, c => (!c || !here(c.id) || c.id === myId ? { id: myId, name: S.myName } : undefined))
+      .then(r => r.committed && r.snapshot.val() && r.snapshot.val().id === myId).catch(() => false);
+  }
+  function release() { runTransaction(ctrlRef, c => (c && c.id === myId ? null : undefined)).catch(() => {}); }
 
   // the pieces: the Workshop's checkers with their own light (phones: the lighter ones), set out fresh when needed
   function setOut(st) {
@@ -125,8 +110,7 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     G.pieces = {};
     if (!G.shown) return;
     const mats = [];
-    G.J = makeCheckerSet(THREE, { materials: mats, glowLayer, lite: PHONE, light: false });   // (a drawn glow, not 24 real lights: those overwork the computer)
-    for (const m of mats) if ('envMap' in m && !m.envMap) { m.envMap = softEnv(); m.envMapIntensity = 1.3; m.needsUpdate = true; }   // (something bright to reflect: the onyx polish and the glass)
+    G.J = makeCheckerSet(THREE, { materials: mats, glowLayer, lite: PHONE, light: false, envMap: softEnv(renderer) });   // (each piece made reflecting the soft round lights)   // (a drawn glow, not 24 real lights: those overwork the computer)
     parent.add(G.J.group);
     for (let sq = 0; sq < 64; sq++) {
       const ch = st.board[sq];
@@ -178,22 +162,27 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
 
   const tx = f => runTransaction(G.ref, st => f(st || { ...fresh(), moveNo: 0, p1: '', p2: '' })).catch(e => console.warn('checkers', e));
   const othersIn = st => (here(st.p1) && st.p1 !== myId) || (here(st.p2) && st.p2 !== myId);
-  function onePlayer() { tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: myId, moveNo: (st.moveNo || 0) + 1 })); }
-  function twoPlayers() {   // you take crimson and wait for someone to join as violet
-    tx(st => {
-      if (othersIn(st)) return;
-      return { ...st, ...fresh(), p1: myId, p2: '', moveNo: (st.moveNo || 0) + 1 };
-    });
+  function players(n) {   // 1: straight into the game, both sides yours; 2: you take crimson and wait for someone to join
+    if (n === 1) { tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: myId, go: 1, moveNo: (st.moveNo || 0) + 1 })); release(); onStart(); }
+    else tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: '', go: 0, moveNo: (st.moveNo || 0) + 1 }));
+    panelOpen = false;
   }
   function join() {   // the open side of someone's game
     tx(st => {
       const open = here(st.p1) && !here(st.p2) ? 2 : here(st.p2) && !here(st.p1) ? 1 : 0;
       if (!open || st.p1 === myId || st.p2 === myId) return;
-      return { ...st, ['p' + open]: myId };
+      return { ...st, ['p' + open]: myId, go: 0 };
     });
   }
+  function begin() {   // the one who set it up: Start, and you both go in
+    tx(st => (st['p1'] === myId && here(st.p1) && here(st.p2) ? { ...st, go: 1 } : undefined));
+    release(); onStart();
+  }
+  function watch() { if (viewing) return; viewing = watching = true; panelOpen = false; onView(1, true); refreshPanel(); }
   function leave() {   // out of the game (your side opens up; playing alone, the whole game ends)
     if (viewing) { viewing = false; onView(0); }
+    if (watching) { watching = false; refreshPanel(); return; }   // (only watching: nothing else changes)
+    release();
     tx(st => {
       if (st.p1 === myId && st.p2 === myId) return { ...st, p1: '', p2: '' };
       if (st.p1 === myId) return { ...st, p1: '' };
@@ -202,7 +191,7 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     });
     G.sel = -1; G.targets = []; refreshMarks(); panelOpen = false; refreshPanel();
   }
-  function start() { const side = mySide(); if (!side || !bothIn()) return; viewing = true; panelOpen = false; onView(side); refreshPanel(); }
+  function enter() { const side = mySide(); if (!side || !bothIn() || viewing) return; viewing = true; panelOpen = false; if (holding()) release(); onView(side, false); refreshPanel(); }
 
   // ---------- Moves ----------
   function sendMove(m) {
@@ -228,8 +217,8 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     return best;
   }
   const mine = (st, sq) => sq >= 0 && owner(st.board[sq]) === st.turn && !(st.chain >= 0 && sq !== st.chain);
-  function tap(point) {   // a click on the board: in the game, a move; otherwise, the panel
-    if (!viewing) { openPanel(); return; }
+  function tap(point) {   // a click on the board: in the game, a move; otherwise, setting one up (or watching one)
+    if (!viewing) { boardClicked(); return; }
     if (!G.st || !myTurn()) return;
     const st = G.st, sq = squareAt(point);
     if (mine(st, sq)) {
@@ -245,7 +234,22 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     }
     refreshMarks(); refreshPanel();
   }
+  function boardClicked() {
+    const say = t => { if (hooks.banner) hooks.banner(t, 2); };
+    if (!seated()) { say('Sit at the table to play'); return; }
+    const st = G.st;
+    if (!st) return;
+    if (mySide()) { panelOpen = true; refreshPanel(); return; }                   // (your own game: its panel)
+    if (bothIn() && st.go) { watch(); return; }                                  // (a game going on: watch it)
+    if (here(st.p1) || here(st.p2)) { panelOpen = true; refreshPanel(); return; }   // (someone waiting: the join box)
+    if (ctrl && ctrl.id !== myId && here(ctrl.id)) { say(`${ctrl.name} is setting up a game`); return; }
+    claim().then(ok => {
+      if (ok) { panelOpen = true; refreshPanel(); }
+      else if (ctrl && ctrl.id !== myId) say(`${ctrl.name} is setting up a game`);
+    });
+  }
   function canTap(point) {
+    if (watching) return false;
     if (!viewing) return true;
     if (!G.st || !myTurn()) return false;
     const sq = squareAt(point);
@@ -253,7 +257,7 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     return G.sel >= 0 && !!(G.targets.find(x => x.t === sq) || nearestMove(point));
   }
   function deselect() {
-    if (panelOpen && !viewing) { panelOpen = false; refreshPanel(); return true; }
+    if (panelOpen && !viewing) { closePanel(); return true; }
     if (G.sel < 0 || (G.st && G.st.chain >= 0)) return false;
     G.sel = -1; G.targets = []; refreshMarks();
     return true;
@@ -287,7 +291,8 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
       if (hooks.banner) hooks.banner(text, 3.5);
       if (hooks.addSys) hooks.addSys('Checkers: ' + text);
     }
-    if (viewing && !mySide()) { viewing = false; onView(0); }   // (your side was taken away: out of the game view)
+    if (viewing && !watching && !mySide()) { viewing = false; onView(0); }   // (your side was taken away: out of the game view)
+    if (watching && !(bothIn() && st.go)) { viewing = watching = false; onView(0); }   // (the game you were watching is over and done)
     refreshPanel();
   }
 
@@ -301,7 +306,13 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     #gamePanel .gpStatus { font-size: 15px; margin-bottom: 4px; }
     #gamePanel .gpPlayers { font-size: 13px; opacity: 0.8; margin-bottom: 8px; }
     #gamePanel button { margin: 0 4px 6px; }
-    #gamePanel button.big { font-size: 16px; padding: 8px 18px; }`;
+    #gamePanel button.big { font-size: 16px; padding: 8px 18px; }
+    #gameOffer { left: 50%; top: 22%; transform: translateX(-50%); min-width: 260px; max-width: 92vw; text-align: center; display: none;
+      background: rgba(14,11,20,0.88); backdrop-filter: blur(6px); box-shadow: 0 4px 18px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(201,162,39,0.7); }
+    #gameOffer.on { display: block; }
+    #gameOffer .goText { font-size: 17px; color: #ffe0a8; margin-bottom: 10px; }
+    #gameOffer button { margin: 0 4px 6px; }
+    #gameOffer button.big { font-size: 16px; padding: 8px 22px; }`;
   document.head.appendChild(css);
   const panel = document.createElement('div');
   panel.id = 'gamePanel'; panel.className = 'panel';
@@ -309,7 +320,30 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
   document.body.appendChild(panel);
   const el = { status: panel.querySelector('.gpStatus'), players: panel.querySelector('.gpPlayers'), buttons: panel.querySelector('.gpButtons') };
   let panelOpen = false;
-  function openPanel() { panelOpen = true; refreshPanel(); }
+  function openPanel() { boardClicked(); }
+  function closePanel() { panelOpen = false; if (holding() && !mySide()) release(); refreshPanel(); }
+  // the Join box: everyone sitting at the table (not in the game) gets it when someone's waiting for a partner
+  const offer = document.createElement('div');
+  offer.id = 'gameOffer'; offer.className = 'panel';
+  document.body.appendChild(offer);
+  const said = {};   // (offers you said no to)
+  function refreshOffer() {
+    const st = G.st;
+    const open = st ? (here(st.p1) && !here(st.p2) ? 2 : here(st.p2) && !here(st.p1) ? 1 : 0) : 0;
+    const key = st ? `${st.p1}|${st.p2}|${st.moveNo}` : '';
+    const show = !!(st && open && !mySide() && seated() && !viewing && !panelOpen && !said[key]);
+    offer.classList.toggle('on', show);
+    if (!show) return;
+    offer.textContent = '';
+    const t = document.createElement('div'); t.className = 'goText';
+    t.textContent = `${name(3 - open)} wants to play Checkers`;
+    offer.appendChild(t);
+    const yes = document.createElement('button'); yes.className = 'big'; yes.textContent = 'Join';
+    yes.addEventListener('click', () => { yes.blur(); join(); });
+    const no = document.createElement('button'); no.textContent = 'No thanks';
+    no.addEventListener('click', () => { no.blur(); said[key] = true; refreshOffer(); });
+    offer.append(yes, no);
+  }
   const armed = {};
   function button(label, action, big = false, ask = false) {   // (buttons that end a game ask twice)
     const b = document.createElement('button');
@@ -323,25 +357,31 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     el.buttons.appendChild(b);
   }
   function refreshPanel() {
+    if (!viewing && G.shown && G.st && G.st.go && mySide() && bothIn()) { enter(); return; }   // (Start was pressed: in you both go)
+    refreshOffer();
     const show = G.shown && G.st && (panelOpen || viewing || (mySide() && !viewing));
     panel.classList.toggle('on', !!show);
     if (!show) return;
     const st = G.st, side = mySide(), alone = solo();
     el.buttons.textContent = '';
     let s = '';
-    if (!side) {
+    if (watching) {
+      s = st.over ? `${SIDES[st.winner]} wins!` : `Watching · ${SIDES[st.turn]} to move`;
+    } else if (!side) {
       const open = here(st.p1) && !here(st.p2) ? 2 : here(st.p2) && !here(st.p1) ? 1 : 0;
-      if (!here(st.p1) && !here(st.p2)) { s = 'How many players?'; button('1 Player', onePlayer, true); button('2 Players', twoPlayers, true); }
+      if (!here(st.p1) && !here(st.p2)) {
+        s = 'How many players?';
+        for (let n = 1; n <= MAX_PLAYERS; n++) button(`${n} Player${n > 1 ? 's' : ''}`, () => players(n), true);
+      }
       else if (open) { s = `${name(3 - open)} is waiting for a partner`; button(`Join as ${SIDES[open]}`, join, true); }
       else s = alone ? `${name(1)} is playing` : `${name(1)} and ${name(2)} are playing`;
-      button('Close', () => { panelOpen = false; refreshPanel(); });
+      button('Close', closePanel);
     } else if (!bothIn()) {
-      s = 'Waiting for another player… (they click the board to join)';
+      s = 'Waiting for someone to join…';
       button('Cancel', leave);
     } else if (!viewing) {
-      s = alone ? 'Playing both sides' : `You're ${SIDES[side]}`;
-      button('Start', start, true);
-      button('Leave game', leave);
+      if (st.p1 === myId) { s = `${name(2)} joined! Start?`; button('Start', begin, true); button('Cancel', leave); }
+      else { s = `Waiting for ${name(1)} to start…`; button('Leave', leave); }
     } else {
       if (st.over) s = `${SIDES[st.winner]} wins!`;
       else if (alone) s = (st.chain >= 0 ? 'Keep jumping! ' : '') + `${SIDES[st.turn]} to move`;
@@ -366,13 +406,14 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     pick, tap, canTap, deselect, openPanel, leave,
     shown: () => G.shown,
     playing: () => viewing,
+    watching: () => watching,
     mySide,
     busy: () => !!(G.st && (here(G.st.p1) || here(G.st.p2))),   // (someone's in a game: the board stays out)
     show(on) {   // the board is out (pieces set out, clicks on) or away
       if (G.shown === on) return;
       G.shown = on; pick.visible = on;
       if (G.st) setOut(G.st);
-      if (!on) { panelOpen = false; if (viewing) leave(); }
+      if (!on) { panelOpen = false; if (holding()) release(); if (viewing) leave(); }
       refreshMarks(); refreshPanel();
     },
     refresh: refreshPanel,

@@ -4,7 +4,8 @@
 //   the disc: a thick round disc of black onyx with a softly rounded edge, its top polished near to a mirror (it
 //     faintly reflects the jewel's glowing insides, a true mirror image that moves as you look round) and its sides
 //     duller and finely grained
-//   the seat: a thin black ring the jewel is set into
+//   the seat: a thin dark ring the jewel is set into, glowing gently in the jewel's own color, with a faint pool of
+//     that glow on the board round the piece's foot
 //   the jewel: a dome of smoky dark glass (real see-through glass, deeper colored the thicker it is), a little taller
 //     than half a ball, with inside it: a glowing core (a hot white heart), a dense cloud of fine glitter round the
 //     core, crystal chips floating at different depths, and dark smoky patches below
@@ -33,8 +34,11 @@ const GEMS = {   // each jewel's colors: the glass's depth color, the floor insi
 export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = 'crimson', light = true, cache = null, lite = false } = {}) {
   const C = GEMS[gem] || GEMS.crimson;
   const group = new THREE.Group(), materials = [], glowLayer = show.glowLayer ?? 1;
-  const R = size / 2, DH = size * 0.2;                 // the disc: its radius and height
-  const JR = R * 0.44, JH = JR * 1.08;                 // the jewel: its radius and height
+  const DH = size * 0.2;                               // the disc's height
+  const JR = size / 2 * 0.44, JH = JR * 1.08;          // the jewel: its radius and height
+  const R = JR + DH * 0.42;                            // the disc's radius: just the rounded edge round the orb, no flat top showing
+  const FOOT = size * 0.004;   // (the half orb's flat bottom, just off the board)
+  const RIM = JR * 0.03;       // (the tiny black rim round its foot)
   const ORB = size * 0.3, OC = ORB, BAND = ORB * 0.14; // crowned: the orb's radius, its middle's height, its band's thickness
   const lerp = (a, b, e) => a + (b - a) * e;
   let seed = 17;
@@ -110,8 +114,8 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   const veins = (g, w, h, n, wrap) => {
     for (let i = 0; i < n; i++) {
       let x = rnd() * w, y = rnd() * h, a = rnd() * Math.PI * 2;
-      const len = 40 + rnd() * 90, v = 70 + rnd() * 90, wide = 0.6 + rnd() * 1.4;
-      g.strokeStyle = `rgba(${v},${v},${v + 6},${0.25 + rnd() * 0.35})`; g.lineWidth = wide;
+      const len = 40 + rnd() * 90, v = 120 + rnd() * 100, wide = 0.7 + rnd() * 1.6;
+      g.strokeStyle = `rgba(${v},${v},${v + 6},${0.4 + rnd() * 0.45})`; g.lineWidth = wide;
       g.beginPath(); g.moveTo(x, y);
       for (let k = 0; k < len; k++) {
         a += (rnd() - 0.5) * 0.5; x += Math.cos(a) * 4; y += Math.sin(a) * 4;
@@ -124,7 +128,7 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   const stoneBase = (g, w, h) => {
     g.fillStyle = '#050506'; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 26; i++) {   // smoky bands, a little lighter and a little darker
-      const x = rnd() * w, y = rnd() * h, r = 60 + rnd() * 220, v = rnd() < 0.5 ? 18 + rnd() * 14 : 0;
+      const x = rnd() * w, y = rnd() * h, r = 60 + rnd() * 220, v = rnd() < 0.5 ? 28 + rnd() * 22 : 0;
       const s = g.createRadialGradient(x, y, 0, x, y, r);
       s.addColorStop(0, `rgba(${v},${v},${v + 3},0.35)`); s.addColorStop(1, `rgba(${v},${v},${v + 3},0)`);
       g.fillStyle = s; g.fillRect(x - r, y - r, r * 2, r * 2);
@@ -133,15 +137,15 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   };
   const grain = keep('grain', () => canvasTex(W, Hh, (g, w, h) => {
     stoneBase(g, w, h);
-    g.filter = 'blur(1.2px)'; veins(g, w, h, 10, true); g.filter = 'none'; veins(g, w, h, 14, true);
+    g.filter = 'blur(1.5px)'; veins(g, w, h, 16, true); g.filter = 'none'; veins(g, w, h, 24, true);
   }));
   const topGrain = keep('topgrain', () => canvasTex(1024, 1024, (g, w, h) => {
     stoneBase(g, w, h);
-    g.filter = 'blur(1.5px)'; veins(g, w, h, 16, false); g.filter = 'none'; veins(g, w, h, 22, false);
+    g.filter = 'blur(2px)'; veins(g, w, h, 24, false); g.filter = 'none'; veins(g, w, h, 34, false);
   }));
   const rough = keep('rough', () => canvasTex(W, Hh, (g, w, h) => {   // (green is roughness: low on the polished top, higher down the side)
     const grd = g.createLinearGradient(0, 0, 0, h);
-    grd.addColorStop(0, 'rgb(0,18,0)'); grd.addColorStop(TOP_END * 0.9, 'rgb(0,18,0)');
+    grd.addColorStop(0, 'rgb(0,70,0)'); grd.addColorStop(TOP_END * 0.9, 'rgb(0,70,0)');
     grd.addColorStop(SIDE_START, 'rgb(0,140,0)'); grd.addColorStop(1, 'rgb(0,160,0)');
     g.fillStyle = grd; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 6000; i++) {   // fine grain in the duller side
@@ -151,51 +155,69 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   }, false));
   const onyx = new THREE.MeshPhysicalMaterial({
     color: 0xffffff, map: grain, roughness: 1, roughnessMap: rough, metalness: 0,
-    clearcoat: 0.8, clearcoatRoughness: 0.06, envMapIntensity: 1, side: THREE.DoubleSide
+    clearcoat: 0.3, clearcoatRoughness: 0.2, envMapIntensity: 1, side: THREE.DoubleSide   // (a little soft: sharp glints came out square)
   });
   materials.push(onyx);
   const disc = new THREE.Mesh(discGeo, onyx);
+  disc.visible = false;   // (the half orb lies straight on the board now: no onyx base)
   group.add(disc);
   // the polished top: jet black glass-smooth onyx you can faintly see a mirror image through (the reflection below it)
   const MIRROR = 0.16;   // how strong the reflection is
   const top = new THREE.MeshPhysicalMaterial({
-    color: 0xffffff, map: topGrain, roughness: 0.08, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1,
+    color: 0xffffff, map: topGrain, roughness: 0.3, metalness: 0, clearcoat: 0.35, clearcoatRoughness: 0.18, envMapIntensity: 1,
     transparent: true, opacity: 1 - MIRROR
   });
   materials.push(top);
   const cap = new THREE.Mesh(new THREE.CircleGeometry(R - E + 0.0005, 128).rotateX(-Math.PI / 2), top);
   cap.position.y = DH;
+  cap.visible = false;
   cap.userData.noShadow = true;
   group.add(cap);
 
   // ---------- The seat: a thin black ring round the jewel's foot ----------
-  const seatMat = new THREE.MeshPhysicalMaterial({ color: 0x020203, roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.05 });
+  const seatMat = new THREE.MeshPhysicalMaterial({ color: 0x020203, roughness: 0.25, clearcoat: 1, clearcoatRoughness: 0.05,
+    emissive: new THREE.Color(C.deep), emissiveIntensity: 0.7 });   // (dark, glowing gently in its own color)
   materials.push(seatMat);
-  const seat = new THREE.Mesh(new THREE.TorusGeometry(JR * 1.01, JR * 0.045, 12, 96).rotateX(Math.PI / 2), seatMat);
-  const SEAT_Y = DH + JR * 0.03;
+  const seat = new THREE.Mesh(new THREE.TorusGeometry(JR * 1.0, RIM * 1.6, 12, 96).rotateX(Math.PI / 2), seatMat);
+  const SEAT_Y = RIM * 1.6;
   seat.position.y = SEAT_Y;
   group.add(seat);
+  // the rim's glow on the board round the piece's foot: a faint ring of its color, fading out from the rim
+  const rimGlowMat = new THREE.ShaderMaterial({
+    uniforms: { uC: { value: new THREE.Color(C.spill) }, uK: { value: 0.55 } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
+    vertexShader: 'varying vec2 vP; void main() { vP = position.xz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform vec3 uC; uniform float uK; varying vec2 vP;
+      void main() { float d = (length(vP) - ${(JR * 1.0).toFixed(5)}) / ${(JR * 0.38).toFixed(5)};
+        float a = exp(-d * d * 2.2) * (d < 0.0 ? 0.5 : 1.0) * uK;
+        gl_FragColor = vec4(uC * a, a); }`
+  });
+  const rimGlow = new THREE.Mesh(new THREE.RingGeometry(JR * 0.7, JR * 1.55, 96, 1).rotateX(-Math.PI / 2), rimGlowMat);
+  rimGlow.position.y = 0.0005;
+  rimGlow.userData.noShadow = true;
+  group.add(rimGlow);
 
   // ---------- The jewel: a smoky dark glass dome (crowned: a whole glass ball) ----------
   // a whole glass orb set down into the onyx, its middle a little above the stone's top: the top of the ball shows,
   // its lower half glints up through the polished top; the light at the orb's very middle
-  const JC = JR * 0.18;   // (how far the orb's middle sits above the stone's top)
-  const jprof = [];
-  for (let i = 0; i <= 41; i++) { const a = -Math.PI / 2 + Math.PI * i / 41; jprof.push(new THREE.Vector2(Math.max(1e-4, Math.cos(a) * JR), DH + JC + Math.sin(a) * JR)); }
+  // the orb cut in half: a dome of glass laid flat on the board, its flat bottom closed
+  const JC = 0;   // (the ball's middle is at the dome's flat bottom)
+  const jprof = [new THREE.Vector2(1e-4, FOOT)];
+  for (let i = 0; i <= 40; i++) { const a = Math.PI / 2 * i / 40; jprof.push(new THREE.Vector2(Math.max(1e-4, Math.cos(a) * JR), FOOT + Math.sin(a) * JR)); }
   const ball = jprof.map((_, i) => {   // (the bottom pole first, then up round the side to the top)
     const a = -Math.PI / 2 + Math.PI * i / (jprof.length - 1);
     return new THREE.Vector2(Math.max(1e-4, Math.cos(a) * ORB), OC + Math.sin(a) * ORB);
   });
   const domeShape = bender(jprof, ball);
-  const DEPTH = 1.1;   // how deep its color gets (in jewel heights): smoky and dark
+  const DEPTH = 0.9;   // how deep its color gets (in jewel heights): clear glowing red, like the reference orb
   const glass = lite
     ? new THREE.MeshPhysicalMaterial({   // (lite: a tinted glossy shell, blended over the insides)
         color: new THREE.Color(C.deep).multiplyScalar(0.6), transparent: true, opacity: 0.5, depthWrite: false,
         roughness: 0.03, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 1 })
     : new THREE.MeshPhysicalMaterial({
-        color: 0xffffff, transmission: 1, thickness: JR * 2, ior: 1.6,
+        color: 0xffffff, transmission: 1, thickness: JR * 1.2, ior: 1.6,
         attenuationColor: new THREE.Color(C.deep), attenuationDistance: JH * DEPTH,
-        roughness: 0.02, metalness: 0, specularIntensity: 1, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 1,
+        roughness: 0.02, metalness: 0, specularIntensity: 0.7, clearcoat: 1, clearcoatRoughness: 0.12, envMapIntensity: 1,
         depthWrite: false   // (the insides are drawn after the glass, over it, so they stay as crisp as in the onyx's mirror)
       });
   materials.push(glass);
@@ -205,9 +227,9 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   if (lite) dome.renderOrder = 2;   // (drawn over the insides)
   group.add(dome);
   const inside = new THREE.Group();   // everything in the jewel, measured from its foot
-  inside.position.y = DH;
+  inside.position.y = FOOT;
   group.add(inside);
-  const inDome = (x, y, z, m = 0.08) => x * x + (y - JC) * (y - JC) + z * z < (JR * (1 - m)) ** 2;   // (inside the orb)
+  const inDome = (x, y, z, m = 0.08) => y > JR * 0.03 && x * x + y * y + z * z < (JR * (1 - m)) ** 2;   // (inside the half orb)
 
   // the floor inside: dark smoky color, with fine glitter and darker smoke (seen down through the glass)
   const floorTex = keep('floor-' + gem, () => canvasTex(512, 512, (g, w, h) => {
@@ -231,7 +253,7 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
   inside.add(floor);
 
   // the core: a hot white heart in a small glow, a little above the middle of the jewel's foot
-  const CORE = new THREE.Vector3(0, JC, 0);   // (the orb's very middle)
+  const CORE = new THREE.Vector3(0, JR * 0.36, 0);   // (the light: in the middle of the half orb's body)
   const haloColor = new THREE.Color(C.halo), white = new THREE.Color(1, 1, 1);
   // (the light: a tiny hot point fading smoothly out into its color, no hard edges, so no rings)
   const glowTex = keep('glow', () => { const t = canvasTex(128, 128, (g) => {
@@ -239,42 +261,122 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
     for (let i = 0; i <= 16; i++) { const d = i / 16; r.addColorStop(d, `rgba(255,255,255,${Math.exp(-d * d * 9) * (1 - d)})`); }
     g.fillStyle = r; g.fillRect(0, 0, 128, 128);
   }); t.wrapS = THREE.ClampToEdgeWrapping; return t; });
-  const HEART = JR * 0.32, HALO = JR * 1.0;   // (how wide the hot point and its colored glow are)
-  const heart = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: C.heart, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: haloColor.clone(), blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, opacity: 0.7 }));
+  const HEART = JR * 1.1, HALO = JR * 0.9;   // (how wide the hot point and its colored glow are)
+  // (the heart is a starburst: a white hot point with fine rays shooting out all round)
+  const burstTex = keep('burst', () => { const t = canvasTex(256, 256, (g) => {
+    const c = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    for (let i = 0; i <= 16; i++) { const d = i / 16; c.addColorStop(d, `rgba(255,255,255,${Math.exp(-d * d * 30)})`); }
+    g.fillStyle = c; g.fillRect(0, 0, 256, 256);
+    g.translate(128, 128);
+    for (let k = 0; k < 90; k++) {
+      const a = rnd() * Math.PI * 2, l = 30 + Math.pow(rnd(), 2) * 95, w = 0.4 + rnd() * 1.1;
+      const ray = g.createLinearGradient(0, 0, Math.cos(a) * l, Math.sin(a) * l);
+      ray.addColorStop(0, `rgba(255,255,255,${0.35 + rnd() * 0.5})`); ray.addColorStop(1, 'rgba(255,255,255,0)');
+      g.strokeStyle = ray; g.lineWidth = w; g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(a) * l, Math.sin(a) * l); g.stroke();
+    }
+  }); t.wrapS = THREE.ClampToEdgeWrapping; return t; });
+  const heart = new THREE.Sprite(new THREE.SpriteMaterial({ map: burstTex, color: C.heart, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color: haloColor.clone(), blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, opacity: 0.35 }));
   heart.scale.setScalar(HEART); halo.scale.setScalar(HALO);
-  for (const m of [heart, halo]) { m.position.copy(CORE); m.layers.enable(glowLayer); inside.add(m); }
+  for (const m of [heart, halo]) { m.position.copy(CORE); inside.add(m); }   // (not in the room's glow pass: its blur washed red over the base and the orb's bottom; the game has no glow pass anyway)
   heart.renderOrder = 1;
   // (seen through real glass, the insides went soft and cloudy; drawn after the glass instead, over it, they stay
   // crisp, the same sharp sparkles you see in the onyx's mirror. Phones' lighter glass is blended over them already.)
   const crisp = o => { if (lite) return; o.material.transparent = true; o.material.depthWrite = false; o.renderOrder = Math.max(o.renderOrder, 2); };
   crisp(heart); crisp(halo); heart.renderOrder = 3;
 
-  // the glitter: a dense cloud of fine specks round the core, thinning out toward the glass
-  // (fewer specks than at first, so each stays a clear point instead of a haze)
-  const COUNT = lite ? 200 : 700, pos = new Float32Array(COUNT * 3), col = new Float32Array(COUNT * 3), bright = new Float32Array(COUNT), phase = new Float32Array(COUNT);
+  // the glitter, after the reference orb: fine sharp specks filling the whole ball (thicker toward the middle), a
+  // scatter of bigger bright sparks, some going gold or white; each twinkles on its own beat. Drawn by the screen's
+  // graphics chip (its own little program), so two dozen pieces cost the computer next to nothing.
+  const FINE = lite ? 260 : 1100, SPARK = lite ? 40 : 110, COUNT = FINE + SPARK;
+  const pos = new Float32Array(COUNT * 3), col = new Float32Array(COUNT * 3), siz = new Float32Array(COUNT), phase = new Float32Array(COUNT);
+  const glintC = new THREE.Color().setRGB(C.glint[0], C.glint[1], C.glint[2]), gold = new THREE.Color(1, 0.72, 0.35), tmpC = new THREE.Color();
   for (let n = 0; n < COUNT;) {
-    const g = () => (rnd() + rnd() + rnd() - 1.5) / 1.5;   // (bunched toward the middle)
-    const x = CORE.x + g() * JR * 0.9, y = CORE.y + g() * JR * 0.9, z = CORE.z + g() * JR * 0.9;
-    if (!inDome(x, y, z)) continue;
+    // (a point in the ball: mostly spread evenly, some pulled in toward the core)
+    const u = rnd() * 2 - 1, a = rnd() * Math.PI * 2, rr = JR * 0.93 * Math.pow(rnd(), n % 3 === 0 ? 1.6 : 0.45);
+    const x = Math.sqrt(1 - u * u) * Math.cos(a) * rr, y = CORE.y + u * rr, z = Math.sqrt(1 - u * u) * Math.sin(a) * rr;
+    if (!inDome(x, y, z, 0.05)) continue;
     pos.set([x, y, z], n * 3);
-    const d = Math.hypot(x - CORE.x, (y - CORE.y) * 1.3, z - CORE.z) / JR;
-    bright[n] = (0.3 + Math.pow(rnd(), 3) * 1.3) * (1.4 - Math.min(1, d));
+    const spark = n >= FINE, d = rr / JR;
+    const b = (spark ? 0.55 + rnd() * 0.45 : 0.22 + Math.pow(rnd(), 2) * 0.55) * (1.25 - 0.5 * d);
+    tmpC.copy(glintC).lerp(spark && rnd() < 0.45 ? gold : white, spark ? 0.25 + rnd() * 0.35 : rnd() * rnd() * 0.25).multiplyScalar(b);
+    col.set([tmpC.r, tmpC.g, tmpC.b], n * 3);
+    siz[n] = JR * (spark ? 0.04 + rnd() * 0.03 : 0.016 + rnd() * 0.02);
     phase[n] = rnd() * Math.PI * 2;
     n++;
   }
   const dustGeo = new THREE.BufferGeometry();
   dustGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   dustGeo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const dot = keep('dot', () => {   // (a crisp round point: a solid disc, no soft fade, no blurring when small)
-    const t = canvasTex(32, 32, (g) => { g.fillStyle = '#fff'; g.beginPath(); g.arc(16, 16, 14, 0, Math.PI * 2); g.fill(); });
-    t.generateMipmaps = false; t.minFilter = THREE.LinearFilter;
-    return t;
-  });
-  const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ size: JR * 0.045, map: dot, alphaTest: 0.5, vertexColors: true }));
+  dustGeo.setAttribute('size', new THREE.BufferAttribute(siz, 1));
+  dustGeo.setAttribute('phase', new THREE.BufferAttribute(phase, 1));
+  const dustU = { uTime: { value: 0 }, uLift: { value: 1 }, uPx: { value: 500 } };
+  const dust = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
+    uniforms: dustU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `
+      attribute float size; attribute float phase; attribute vec3 color;
+      uniform float uTime, uLift, uPx; varying vec3 vC;
+      void main() {
+        float tw = 0.45 + 0.55 * sin(uTime * (1.2 + fract(phase * 3.7) * 2.2) + phase);
+        vC = min(color * uLift * max(tw, 0.08), vec3(1.0));   // (never blown out past full color)
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float sc = length(modelMatrix[0].xyz);
+        gl_PointSize = max(1.5, size * sc * uPx / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying vec3 vC;
+      void main() {
+        float d = length(gl_PointCoord - 0.5) * 2.0;
+        float a = smoothstep(1.0, 0.45, d);
+        gl_FragColor = vec4(vC * a, a);
+        #include <colorspace_fragment>
+      }`
+  }));
+  dust.frustumCulled = false;
+  dust.onBeforeRender = (r, sc, cam) => { r.getDrawingBufferSize(dustPx); dustU.uPx.value = dustPx.y * 0.5 * cam.projectionMatrix.elements[5]; };
+  const dustPx = new THREE.Vector2();
   crisp(dust);
-  const swirl = new THREE.Group();   // (the cloud turns slowly round the jewel's middle, so it stays inside the dome)
+  const swirl = new THREE.Group();   // (the cloud turns slowly round the orb's middle)
   swirl.add(dust);
+  // a few star sparkles: little four-pointed flares that flash now and then
+  const flareTex = keep('flare', () => { const t = canvasTex(128, 128, (g) => {
+    const c = g.createRadialGradient(64, 64, 0, 64, 64, 22);
+    c.addColorStop(0, 'rgba(255,255,255,1)'); c.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = c; g.fillRect(0, 0, 128, 128);
+    for (const [w, l] of [[3, 62], [1.5, 40]]) for (let k = 0; k < 4; k++) {
+      g.save(); g.translate(64, 64); g.rotate(k * Math.PI / 2 + (w < 2 ? Math.PI / 4 : 0));
+      const ray = g.createLinearGradient(0, 0, l, 0);
+      ray.addColorStop(0, 'rgba(255,255,255,0.95)'); ray.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = ray; g.beginPath(); g.moveTo(0, -w); g.lineTo(l, 0); g.lineTo(0, w); g.fill(); g.restore();
+    }
+  }); t.wrapS = THREE.ClampToEdgeWrapping; return t; });
+  const flares = [];
+  for (let i = 0; i < (lite ? 2 : 6); i++) {
+    const f = new THREE.Sprite(new THREE.SpriteMaterial({ map: flareTex, color: new THREE.Color().copy(glintC).lerp(white, 0.45),
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    for (let k = 0; k < 40; k++) {
+      const x = (rnd() - 0.5) * 1.7 * JR, y = CORE.y + (rnd() - 0.5) * 1.7 * JR, z = (rnd() - 0.5) * 1.7 * JR;
+      if (inDome(x, y, z, 0.15) && Math.hypot(x, y - CORE.y, z) > JR * 0.3) { f.position.set(x, y, z); break; }
+    }
+    f.userData.size = JR * (0.3 + rnd() * 0.25); f.userData.beat = 0.4 + rnd() * 0.5; f.userData.off = rnd() * 10;
+    f.scale.setScalar(1e-4);
+    crisp(f); f.renderOrder = 3;
+    flares.push(f); swirl.add(f);
+  }
+  // the orb filled with its color's light: brightest through the middle, where you look through the most of it
+  const bodyMat = new THREE.ShaderMaterial({
+    uniforms: { uC: { value: new THREE.Color(C.halo) }, uK: { value: 0.3 } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `varying vec3 vN, vV;
+      void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform vec3 uC; uniform float uK; varying vec3 vN, vV;
+      void main() { float f = pow(max(dot(normalize(vN), normalize(vV)), 0.0), 3.5);   // (black at the edge, deepening to red in the middle) gl_FragColor = vec4(uC * f * uK, 1.0);
+        #include <colorspace_fragment>
+      }`
+  });
+  const body = new THREE.Mesh(new THREE.SphereGeometry(JR * 0.95, 48, 16, 0, Math.PI * 2, 0, Math.PI / 2), bodyMat);   // (a half ball, filling the dome)
+  if (!lite) { body.renderOrder = 2; inside.add(body); }
   inside.add(swirl);
 
   // the chips: crystal fragments floating at different depths, circling slowly
@@ -313,26 +415,28 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
     if (o === drift) mirrorDrift = c;
     mirror.add(c);
   }
+  mirror.visible = false;
   group.add(mirror);
   // a smooth dark floor under the reflection (light falling into the stone finds nothing there to show): in solid onyx
   // just under the reflection, so only the reflection shows in the top; in obsidian right at the bottom, so you still
   // see down into it
   const fill = new THREE.Mesh(new THREE.CircleGeometry(R - E + 0.0005, 96).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0x020203 }));
   fill.position.y = stone === 'onyx' ? DH * 0.04 : 0.0004;
+  fill.visible = false;
   group.add(fill);
 
   // the glow: the core's light spilling softly onto the onyx round the jewel (a real light, or drawn)
   let spill = null, spillGlow = null;
-  const SPILL = 0.5;   // (how strong the drawn glow is)
+  const SPILL = 0.22;   // (how strong the drawn glow is)
   if (light) {
     spill = new THREE.PointLight(C.spill, 0.05, size * 1.5, 2);
-    spill.position.copy(CORE).add(new THREE.Vector3(0, DH, 0));
+    spill.position.copy(CORE).add(new THREE.Vector3(0, FOOT, 0));
     group.add(spill);
   } else {
-    spillGlow = new THREE.Mesh(new THREE.PlaneGeometry(JR * 4.2, JR * 4.2).rotateX(-Math.PI / 2),
+    spillGlow = new THREE.Mesh(new THREE.PlaneGeometry(R * 1.7, R * 1.7).rotateX(-Math.PI / 2),
       new THREE.MeshBasicMaterial({ map: soft(), color: new THREE.Color(C.spill).multiplyScalar(0.6), transparent: true, opacity: SPILL,
         blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }));
-    spillGlow.position.y = DH + 0.0002;
+    spillGlow.position.y = 0.0003;   // (a soft glow on the board round it)
     spillGlow.userData.noShadow = true;
     group.add(spillGlow);
   }
@@ -346,16 +450,18 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
     crown = e;
     discShape.bend(e); domeShape.bend(e);
     inside.scale.setScalar(lerp(1, GROW, e));
-    inside.position.y = lerp(DH, OC - JC * GROW, e);   // (the light stays at the orb's middle)
+    inside.position.y = lerp(FOOT, OC, e);   // (crowned, the ball's middle at the orb's middle)
+    heart.position.y = halo.position.y = lerp(CORE.y, 0, e);   // (and the light drifting to its very middle)
     floor.scale.setScalar(Math.max(1e-4, 1 - e));
-    seat.visible = e < 0.6; seat.position.y = lerp(SEAT_Y, OC, e); seat.scale.setScalar(lerp(1, ORB / JR, e));
-    cap.visible = e < 0.97; cap.position.y = lerp(DH, OC + BAND, e);
+    seat.position.y = lerp(SEAT_Y, OC, e); seat.scale.setScalar(lerp(1, ORB / JR, e));
+    rimGlow.visible = e < 0.99; rimGlow.scale.setScalar(Math.max(1e-4, 1 - e));
+    cap.position.y = lerp(DH, OC + BAND, e);
     cap.scale.setScalar(lerp(1, ORB * 0.85 / (R - E), e));
     top.opacity = (1 - MIRROR) * (1 - e) ** 2;
-    mirror.visible = e < 0.25; mirror.scale.y = MIRROR_Y * Math.max(1e-4, 1 - e * 4);
-    fill.visible = e < 0.3; fill.scale.setScalar(Math.max(1e-4, 1 - e / 0.3));
-    if (spillGlow) { spillGlow.position.y = lerp(DH, OC + BAND, e) + 0.0002; spillGlow.material.opacity = SPILL * (1 - e); spillGlow.visible = e < 0.99; }
-    if (spill) spill.position.y = lerp(DH + CORE.y, OC, e);
+    mirror.scale.y = MIRROR_Y * Math.max(1e-4, 1 - e * 4);
+    fill.scale.setScalar(Math.max(1e-4, 1 - e / 0.3));
+    if (spillGlow) { spillGlow.position.y = 0.0003; spillGlow.material.opacity = SPILL * (1 - e); spillGlow.visible = e < 0.99; }
+    if (spill) spill.position.y = lerp(FOOT + CORE.y, OC, e);
     halo.scale.setScalar(HALO * (1 + 0.6 * e));
     thick = lerp(JH, ORB * 1.4, e);
     glass.thickness = lerp(JR * 2, ORB * 1.6, e);
@@ -375,23 +481,25 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
     for (const m of [disc, cap]) { if (h > 0.02) m.layers.enable(glowLayer); else m.layers.disable(glowLayer); }   // (white hot, it glows out into the room)
   }
 
-  const tone = new THREE.Color(), grown = new THREE.Vector3();
+  const grown = new THREE.Vector3();
   function update(t) {
     group.getWorldScale(grown);   // (made bigger or smaller, its color stays just as deep)
     glass.attenuationDistance = thick * DEPTH * grown.x;
     const lift = (1 + 0.6 * crown) * (1 + 1.5 * heat);   // (brighter crowned, and brighter still struck)
-    for (let i = 0; i < COUNT; i++) {   // the glitter twinkling, each speck on its own beat
-      const b = bright[i] * lift * (0.55 + 0.45 * Math.sin(t * (1.1 + (i % 9) * 0.31) + phase[i]));
-      const hot = 0.25 * Math.max(0, b - 0.9);   // (the brightest go a little toward white)
-      tone.setRGB(C.glint[0] * b + C.hot[0] * hot, C.glint[1] * b + C.hot[1] * hot, C.glint[2] * b + C.hot[2] * hot);
-      col[i * 3] = tone.r; col[i * 3 + 1] = tone.g; col[i * 3 + 2] = tone.b;
+    dustU.uTime.value = t; dustU.uLift.value = lift;   // (the glitter twinkling, worked out by the graphics chip)
+    for (const f of flares) {   // (a star sparkle flashing now and then)
+      const k = Math.max(0, Math.sin(t * f.userData.beat + f.userData.off)) ** 6;
+      f.scale.setScalar(Math.max(1e-4, f.userData.size * k)); f.material.rotation = t * 0.2 + f.userData.off;
     }
-    dustGeo.attributes.color.needsUpdate = true;
+    heart.material.rotation = t * 0.05;
+    bodyMat.uniforms.uK.value = 0.3 * lift;
     const turn = t * 0.12, back = -t * 0.05, bob = Math.sin(t * 0.7) * JH * 0.03;   // (the inside moving, slowly)
     swirl.rotation.y = turn; drift.rotation.y = back; drift.position.y = bob;
     if (mirrorSwirl) { mirrorSwirl.rotation.y = turn; mirrorDrift.rotation.y = back; mirrorDrift.position.y = bob; }
     const breath = 0.9 + 0.1 * Math.sin(t * 1.3);   // (the core breathing, gently)
     heart.scale.setScalar(HEART * breath * (1 + 0.5 * crown) * (1 + heat));
+    seatMat.emissiveIntensity = 0.7 * breath * (1 + 0.6 * crown) + heat * 2.5;   // (the rim's gentle glow, breathing with the core)
+    rimGlowMat.uniforms.uK.value = 0.55 * breath;
   }
   function dispose() {   // (taken away for good: frees what it used, but not pictures shared with other pieces)
     const done = new Set();
@@ -402,7 +510,7 @@ export function makeChecker(THREE, show, { size = 0.086, stone = 'onyx', gem = '
     for (const t of own) t.dispose();
   }
   update(0);
-  return { group, materials, update, setMorph, setHeat, color: spillColor.clone(), ORB, HEIGHT: DH + JC + JR, dispose };
+  return { group, materials, update, setMorph, setHeat, color: spillColor.clone(), ORB, HEIGHT: FOOT + JR, dispose };
 }
 // ===================================================================================================================
 // >>>>> END OF FILE 1 of 1: Workshop/pieces/checker.js <<<<<

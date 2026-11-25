@@ -18,13 +18,13 @@
 //     blast(): it heats up to glowing white, then explodes in a burst of sparks of its own color.
 //     smash(): it flashes white and shatters at once into glitter that lies on the board twinkling.
 //     restore(): it grows back.  place(): where it stands.
-//   materials: a list to add their materials to (so they reflect the room); update(seconds): call every frame;
+//   materials: a list to add their materials to (so they reflect the room); envMap: what every piece reflects (set on each as it's made); update(seconds): call every frame;
 //   dispose(): stops every sound and frees everything the set used.
 // ===================================================================================================================
 import { makeChecker } from './checker.js';
 import { makeSounds } from './sounds.js';
 
-export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener = null, lite = false, light = false } = {}) {
+export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener = null, lite = false, light = false, envMap = null } = {}) {
   const group = new THREE.Group(), pieces = [], cache = {};
   const sfx = makeSounds(THREE, listener);
   const FLOAT = 0.0254;     // (a king floats an inch off the surface)
@@ -43,6 +43,7 @@ export function makeCheckerSet(THREE, { materials = [], glowLayer = 1, listener 
   function piece(x, z, y, size, gem = 'crimson') {
     const look = makeChecker(THREE, { glowLayer }, { size, stone: 'onyx', gem, light, cache, lite });   // (light: each jewel's own real light on its onyx, the Workshop look)
     materials.push(...look.materials);
+    if (envMap) for (const m of look.materials) if ('envMap' in m) { m.envMap = envMap; m.envMapIntensity = 0.8; m.needsUpdate = true; }   // (what the polish and the glass reflect)
     const d = look.group, color = look.color, ORB = look.ORB;
     const radius = size * 0.38;   // (the effects' measure: the laser, the marks, the sparks)
     d.position.set(x, y, z);

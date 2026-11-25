@@ -12,7 +12,12 @@ export const OBJECTS = {
     'Marble throne': 'throne.js',
     'Game curtain (cycles by itself)': 'curtain.js',
     'Hanging lamp': 'hanginglamp.js',
-    'Checkerboard, set for a game': 'gameboard.js'
+    'Checkerboard, set for a game': 'gameboard.js',
+    'Portal node (2.5x close-up)': 'portalnode.js',
+    'Den vanish (loops, with nodes)': 'denvanish.js',
+    'Board forming (loops)': 'summon.js',
+    'Othello board (crystal and gold)': 'othelloboard.js',
+    'Othello game (plays itself)': 'othellodisc.js'
   }
 };
 // >>>>> END OF FILE: HangoutRoom/pieces/catalog.js <<<<<

@@ -25,7 +25,7 @@ export function serverNow() { return Date.now() + S.timeOffset; }
 export const hooks = { refreshAll() {}, addSys() {} };
 
 // ---------- Settings ----------
-export const ROOM = 9;         // room width and depth (meters)
+export const ROOM = 12;        // room width and depth (meters)
 export const HEIGHT = 4;       // ceiling height
 export const EYE = 1.55;       // how high your eyes are when standing
 
