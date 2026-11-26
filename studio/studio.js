@@ -339,12 +339,32 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 
-// The portals, small framed pictures hung side by side in the middle of the back wall: the Maker on the left, the Game
-// Room in the middle, the Scene Room on the right (as you face the wall). There's room for five along the wall
+// The portals, small framed pictures hung side by side in the middle of the back wall: the Maker on the left (gold),
+// Blocks, the Game Room, in the middle (purple), the Scene Room on the right (blue) (as you face the wall). There's room for five along the wall
 // (centers about x = -4.6, -2.3, 0, 2.3, 4.6). Click one: it flares, a golden flash, and you're in that room.
-const PORTALS = [['maker', 2.3, 'Maker'], ['game', 0, 'Game Room'], ['scene', -2.3, 'Scene Room']];   // (x is the wall's own: + is on your left as you face it)
-const portalFrames = PORTALS.map(([room, x, name]) => {
-  const f = makePortalFrame();
+// Point at one and its name glows above it in its own color, fading in, and fades away when you look off it.
+const PORTALS = [['maker', 2.3, 'Maker', 'gold', '#ffc35a'], ['game', 0, 'Blocks', 'purple', '#c08aff'], ['scene', -2.3, 'Scene', 'blue', '#6fb6ff']];   // (x is the wall's own: + is on your left as you face it)
+function glowWords(text, color) {   // (a name in glowing letters: a bright core with a soft halo of its color, for the bloom)
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const g = c.getContext('2d');
+  g.font = '600 64px Georgia'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = color; g.shadowBlur = 26; g.fillStyle = color;
+  g.fillText(text, 256, 64); g.fillText(text, 256, 64);
+  g.shadowBlur = 6; g.fillStyle = '#fff8ec'; g.fillText(text, 256, 64);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+  sp.scale.set(1.2, 0.3, 1);
+  sp.userData.want = 0;
+  return sp;
+}
+let pointedPortal = null;   // (which portal you're pointing at, for its name)
+const portalWords = [];
+const portalFrames = PORTALS.map(([room, x, name, swirl, color]) => {
+  const f = makePortalFrame({ swirl });
+  const words = glowWords(name, color);
+  words.position.set(x, 2.62, R2 - 0.2);   // (just over the picture lamp)
+  scene.add(words);
+  portalWords.push([room, words]);
   f.group.position.set(x, 1.75, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
   f.group.rotation.y = Math.PI;   // facing into the room
   f.group.traverse(o => { if (o.userData.portalFrame) { o.userData.portalFrame = room; o.userData.portalName = name; } });
@@ -977,7 +997,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
-    canvas.title = p && p.portalName ? p.portalName : '';   // (a portal says where it goes when you hover it)
+    pointedPortal = p && p.portalFrame ? p.portalFrame : null;   // (its name glows above it)
     canvas.style.cursor = p && (p.lamp || p.portal != null || p.summon || p.circle || (p.board && game.canTap(p.board)) || p.throne != null || p.sketch || p.lightSwitch || p.portalFrame || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
@@ -1309,6 +1329,11 @@ renderer.setAnimationLoop(() => {
   summon.update(dt);
   game.update(clock.elapsedTime);
   for (const f of portalFrames) f.update(clock.elapsedTime);
+  for (const [room, w] of portalWords) {   // (the pointed portal's name fades in; the others fade out)
+    const want = room === pointedPortal ? 1 : 0;
+    w.material.opacity += (want - w.material.opacity) * Math.min(1, dt * 6);
+    w.visible = w.material.opacity > 0.01;
+  }
   updateSketch(dt);
   renderer.render(scene, camera);   // (no extra glow pass: it only cost the computer without making the pieces better)
 });

@@ -3,10 +3,13 @@
 // The portal frame (from your Kindroid pictures, refs/portal_frame and refs/portal_swirl): a tall frame of chunky
 // glossy black stone blocks, a little rough-hewn, with gold running through every seam and a few cracks across them,
 // a stepped inner edge, a thin gold trim round the opening, gold caps on the four corners and a gold keystone on top
-// with a soft glow over it. Inside, the portal: neon rings of hot pink, teal and violet spiraling slowly inward to a
-// bright white core, stardust twinkling through it, the whole thing gently breathing. Its light spills pink onto the
-// gold and the black gloss.
-//   makePortalFrame()   { group (its middle at 0, facing +z, SIZE of the built size, with its picture lamp; hang it with
+// with a soft glow over it. Inside, the portal (from your Kindroid portal picture): a dark void full of drifting,
+// twinkling stars, lined with glow at the opening, a tilted loop of light slowly rocking in it, its strands' bright
+// heads racing round and trailing off, and a little pool of light rippling at the bottom. In gold, purple or blue; its
+// light spills that color onto the gold and the black gloss.
+//   makePortalFrame({ swirl })   swirl: 'gold' (the Maker's), 'purple' (Blocks, the Game Room's) or 'blue' (the
+//                       Scene Room's): the color of the light inside; the frame is the same for all
+//                       { group (its middle at 0, facing +z, SIZE of the built size, with its picture lamp; hang it with
 //                       its middle WALL out from the wall), update(t), flare(k): 0 .. 1 brighter }
 //     everything in it is marked userData.portalFrame, for clicking
 //   build()             the Workshop's look at it, 3x close-up, standing on y = 0 (it runs itself)
@@ -41,48 +44,54 @@ function stone(w, h, d, rand) {
   return g;
 }
 
-// the portal: a spiral of neon rings drawn in its own light
+// the portal: a loop of light in a starry void, drawn in its own light
 const PORTAL_VS = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
 const PORTAL_FS = `
-  uniform float time, flare, aspect; varying vec2 vUv;
+  uniform float time, flare, aspect; uniform vec3 cMain, cHot, cDeep, cDust; varying vec2 vUv;
   float h(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  float n(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(h(i), h(i + vec2(1.0, 0.0)), f.x), mix(h(i + vec2(0.0, 1.0)), h(i + vec2(1.0, 1.0)), f.x), f.y); }
+  mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+  // one strand of the loop: a tilted oval of light whose brightest point runs round it, trailing a fading tail
+  float strand(vec2 p, float rx, float ry, float tilt, float speed, float phase, float width) {
+    vec2 e = (rot(tilt) * p) / vec2(rx, ry);
+    float d = abs(length(e) - 1.0) * min(rx, ry);
+    float behind = mod(time * speed + phase - atan(e.y, e.x), 6.2831853);
+    return exp(-d * d / (width * width)) * (0.15 + 0.85 * exp(-behind * 0.55));
+  }
   void main() {
     vec2 p = (vUv - 0.5) * vec2(aspect, 1.0) * 2.0;
-    float r = length(p), a = atan(p.y, p.x);
-    float breathe = 1.0 + 0.04 * sin(time * 1.1);
-    float rr = r / breathe;
-    // the rings: a spiral pulled slowly inward, each band broken into streaks along its way round
-    float sp = rr * 7.0 + a / 6.2831853 * 2.0 + time * 0.55;
-    float band = pow(abs(sin(sp * 3.14159265)), 18.0);
-    float streak = smoothstep(0.25, 0.75, n(vec2(a * 6.0 - time * 1.6 + rr * 9.0, rr * 14.0)));
-    float rings = band * (0.35 + 0.9 * streak);
-    vec3 pink = vec3(1.0, 0.32, 0.82), teal = vec3(0.25, 0.95, 1.0), violet = vec3(0.6, 0.38, 1.0);
-    vec3 ringCol = mix(teal, pink, smoothstep(0.18, 0.5, rr));
-    ringCol = mix(ringCol, violet, smoothstep(0.75, 1.1, rr) * 0.6);
-    ringCol = mix(ringCol, teal, step(0.5, n(vec2(floor(sp), 3.0))) * smoothstep(0.55, 0.9, rr) * 0.7);   // (some outer rings teal)
-    // the deep glow behind the rings, and the bright core
-    vec3 col = mix(vec3(0.55, 0.22, 0.6), vec3(0.12, 0.05, 0.2), smoothstep(0.0, 1.2, rr)) * 0.75;
-    col += ringCol * rings * 1.9;
-    float core = exp(-rr * rr * 90.0);
-    col += vec3(0.35, 0.95, 1.0) * smoothstep(0.035, 0.0, abs(rr - 0.14)) * 0.9;   // (the teal ring hugging the core)
-    col += vec3(1.0, 0.92, 1.0) * core * 0.95;
-    // stardust, drifting inward and twinkling
-    for (int i = 0; i < 2; i++) {
-      float fi = float(i);
-      vec2 q = vec2(a * (5.0 + fi * 3.0) / 6.2831853 * 6.0, log(rr + 0.05) * (6.0 + fi * 2.0) + time * (0.5 + fi * 0.3));
-      vec2 id = floor(q), f = fract(q) - 0.5;
-      float s = h(id + fi * 7.0);
-      if (s > 0.86) col += vec3(1.0, 0.95, 1.0) * smoothstep(0.12, 0.0, length(f - (vec2(h(id + 1.3), h(id + 4.1)) - 0.5) * 0.6))
-                       * (0.5 + 0.5 * sin(time * (3.0 + s * 6.0) + s * 30.0)) * 1.2;
-    }
+    float edge = max(abs(vUv.x - 0.5), abs(vUv.y - 0.5)) * 2.0;
+    // the dark void, a little brighter toward the frame, and a glow lining the opening
+    vec3 col = cDeep * (0.55 + 0.45 * smoothstep(0.2, 1.0, edge));
+    col += cMain * pow(edge, 10.0) * 1.2;
+    // stars drifting slowly up through it, twinkling
+    vec2 g = p * 22.0 + vec2(0.0, time * 0.05), id = floor(g);
+    float s = h(id);
+    if (s > 0.9) col += cDust * smoothstep(0.18, 0.0, length(fract(g) - 0.5 - (vec2(h(id + 1.3), h(id + 4.1)) - 0.5) * 0.6))
+                     * (0.4 + 0.6 * sin(time * (2.0 + s * 5.0) + s * 40.0)) * 1.1;
+    // the loop of light: a few strands round a tilted oval, slowly rocking, their bright heads racing round
+    float tilt = 0.35 + 0.12 * sin(time * 0.3);
+    float ring = strand(p, 0.42, 0.68, tilt, 1.1, 0.0, 0.018)
+               + strand(p, 0.44, 0.70, tilt + 0.05, 1.1, 0.6, 0.010) * 0.7
+               + strand(p, 0.40, 0.65, tilt - 0.04, 1.1, 2.4, 0.012) * 0.5;
+    float halo = strand(p, 0.42, 0.68, tilt, 1.1, 0.0, 0.08) * 0.35;
+    col *= 1.0 - smoothstep(1.0, 0.6, length((rot(tilt) * p) / vec2(0.42, 0.68))) * 0.35;   // (darker in its heart)
+    col += cMain * (ring * 1.6 + halo) + cHot * ring * 0.9;
+    // a little pool of light rippling at the bottom
+    float br = length((p - vec2(0.0, -0.88)) * vec2(1.0, 4.0));
+    col += cMain * (0.5 + 0.5 * sin(br * 18.0 - time * 3.0)) * smoothstep(0.5, 0.0, br) * 0.6;
     col *= 1.0 + flare * 1.2;
-    col += vec3(1.0, 0.7, 0.35) * pow(max(abs(vUv.x - 0.5) * 2.0, abs(vUv.y - 0.5) * 2.0), 14.0) * 0.7;   // (warm light at the trim)
     gl_FragColor = vec4(col, 1.0);
   }`;
 
-export function makePortalFrame() {
+// The portal's colors: gold (the Maker's), purple (Blocks, the Game Room's) and blue (the Scene Room's)
+const SWIRLS = {
+  gold:   { cMain: [1.0, 0.68, 0.2], cHot: [1.0, 0.95, 0.75], cDeep: [0.08, 0.045, 0.01], cDust: [1.0, 0.9, 0.6], light: 0xffb040 },
+  purple: { cMain: [0.62, 0.3, 1.0], cHot: [0.95, 0.85, 1.0], cDeep: [0.06, 0.02, 0.12], cDust: [0.9, 0.8, 1.0], light: 0xa060ff },
+  blue:   { cMain: [0.25, 0.55, 1.0], cHot: [0.85, 0.95, 1.0], cDeep: [0.02, 0.05, 0.14], cDust: [0.8, 0.9, 1.0], light: 0x4d9fff }
+};
+
+export function makePortalFrame({ swirl = 'purple' } = {}) {
+  const look = SWIRLS[swirl] || SWIRLS.purple;
   const group = new THREE.Group(), rand = seeded(7);
   const solid = [];   // (meshes to merge? kept separate: few enough, and each block needs its own dents)
 
@@ -178,10 +187,11 @@ export function makePortalFrame() {
 
   // the portal itself, and its light spilling out
   const U = { time: { value: 0 }, flare: { value: 0 }, aspect: { value: OW / OH } };
+  for (const k of ['cMain', 'cHot', 'cDeep', 'cDust']) U[k] = { value: new THREE.Vector3(...look[k]) };
   const portal = new THREE.Mesh(new THREE.PlaneGeometry(OW, OH), new THREE.ShaderMaterial({ uniforms: U, vertexShader: PORTAL_VS, fragmentShader: PORTAL_FS, toneMapped: false }));
   portal.position.set(0, H / 2, z2 - d2 / 2 + 0.06);
   group.add(portal);
-  const light = new THREE.PointLight(0xff5fc8, 0.25, 4 * SIZE + 0.4, 1.5);
+  const light = new THREE.PointLight(look.light, 0.25, 4 * SIZE + 0.4, 1.5);
   light.position.set(0, H / 2, 0.6);
   group.add(light);
 

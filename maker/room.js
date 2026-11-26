@@ -186,7 +186,7 @@ export function startRoom({ key, title, HX, HZ, RH, dome: domeSize, bench: makeB
   }
 
   // ---------- The portal home: the gallery's portal frame, on the back wall ----------
-  const portal = makePortalFrame();
+  const portal = makePortalFrame({ swirl: key === 'maker' ? 'gold' : 'blue' });   // (its own room's color)
   portal.group.position.set(0, 1.75, HZ - 0.045);
   portal.group.rotation.y = Math.PI;   // (facing into the room)
   scene.add(portal.group);
