@@ -23,7 +23,16 @@
 //   X-ray (X, or 👁 at the top of the buttons): the blueprint: every block shrinks to a small glowing orb in its color, and a
 //     see-through laser lattice lights up along every floor square, all three ways, so you can see the framework and
 //     what's inside a build. Click an orb to pick up its color and shade. X again and they grow back.
-//   R: clear the whole room, after an "are you sure?" (every block goes, for everyone).
+//   Arrow keys (with a square picked): the picked square hops one floor square that way (up is always away from you),
+//     and you float along with it. Nothing picked: they fly you, like W and S.
+//   Moving sections (M, or ✋ on the tray's corner): click floor squares to pick them (each takes every block on it, all
+//     the way up), Enter lifts them and they float, the arrows carry them a square at a time, Q and E turn them,
+//     Page Up and Down raise and lower them; Enter sets it down (only where nothing's in the way: the outline goes red
+//     if something is), Esc puts it back where it was. Everyone sees it move when it's set down.
+//   R: clear the whole room, after an "are you sure?" (every block goes, for everyone; kept as Unsaved first).
+//   Saved builds (💾 on the tray's left corner): name the room's build and save it; the list shows everyone's saves,
+//     each with Load (asks first; replaces the room's build, which is kept as Unsaved first) and a bin to delete it.
+//     Unsaved is always at the top: whatever was in the room before the last clear or load.
 //   T: the test wall, on the picked square and the one beside it: every color in a column, Dark at the bottom up to
 //     Glowing on top.
 //   Stored as one number per block: the first eight colors are color + 8 x shade code (0 to 39, as before), the next
@@ -35,8 +44,8 @@
 // =====================================================================================================================
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { ref, set, remove, update, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { db } from '../core.js';
+import { ref, set, get, remove, update, onValue } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { db, S } from '../core.js';
 import { sfx } from '../sounds.js';
 
 const COLORS = [   // the swatches: name, color (the soft ones first, then the strong ones)
@@ -109,7 +118,8 @@ const HALO_FS = `
 export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit }) {
   const B = TILE / 3, BASE = 0.12;   // (a block's size, and where the bottom row sits, pressed into the cushion a little)
   const IX0 = Math.ceil(-HX / TILE), IX1 = Math.floor(HX / TILE) - 1, IZ0 = Math.ceil(-HZ / TILE), IZ1 = Math.floor(HZ / TILE) - 1;   // (whole cushions only)
-  let editing = false, color = 0, shade = NORMAL, height = 0, sel = null, hammerOn = false, paintOn = false, xray = false, xk = 0;   // (height 0: Auto)
+  let editing = false, color = 0, shade = NORMAL, height = 0, sel = null, hammerOn = false, paintOn = false, xray = false, xk = 0;
+  let moveOn = false, carry = null;   // (moving sections: on, and what's being carried)   // (height 0: Auto)
   let blocks = {};   // "ix_iz_u_v_level" -> the stored number (color + shade)
   let order = [], orderGlow = [], orderNodes = [];   // (which block each drawn copy is, so the hammer knows which one it hit)
 
@@ -126,42 +136,45 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     m.onBeforeCompile = selfLit;
     return m;
   };
-  const mesh = new THREE.InstancedMesh(geo, softMat(), MAX_BLOCKS);
-  mesh.count = 0; mesh.castShadow = mesh.receiveShadow = true;
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  mesh.setColorAt(0, new THREE.Color());
-  mesh.userData.blocks = true;
-  scene.add(mesh);
-  const glowGeo = geo.clone();
-  const glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(MAX_GLOW), 1);
-  glowGeo.setAttribute('aGlow', glowAttr);
-  const glowMesh = new THREE.InstancedMesh(glowGeo, new THREE.ShaderMaterial({ vertexShader: JELLY_VS, fragmentShader: JELLY_FS, transparent: true, toneMapped: false }), MAX_GLOW);
-  glowMesh.count = 0;
-  glowMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  glowMesh.setColorAt(0, new THREE.Color());
-  glowMesh.userData.blocks = true;
-  scene.add(glowMesh);
   const haloGeo = new THREE.SphereGeometry(B * 0.5, 20, 14);
   const haloMat = (strength) => new THREE.ShaderMaterial({ vertexShader: HALO_VS, fragmentShader: HALO_FS, uniforms: { strength: { value: strength } },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-  const halo = new THREE.InstancedMesh(haloGeo, haloMat(0.55), MAX_GLOW);
-  halo.count = 0; halo.raycast = () => {};
-  halo.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  halo.setColorAt(0, new THREE.Color());
-  scene.add(halo);
+  const jellyMat = new THREE.ShaderMaterial({ vertexShader: JELLY_VS, fragmentShader: JELLY_FS, transparent: true, toneMapped: false });
+  const softShared = softMat(), haloShared = haloMat(0.55);
+  function makeSet(parent, max, maxGlow) {   // (one set of meshes: the soft blocks, the glowing ones and their halos)
+    const mesh = new THREE.InstancedMesh(geo, softShared, max);
+    mesh.count = 0; mesh.castShadow = mesh.receiveShadow = true;
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    mesh.setColorAt(0, new THREE.Color());
+    const glowGeo = geo.clone();
+    const glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(maxGlow), 1);
+    glowGeo.setAttribute('aGlow', glowAttr);
+    const glowMesh = new THREE.InstancedMesh(glowGeo, jellyMat, maxGlow);
+    glowMesh.count = 0;
+    glowMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    glowMesh.setColorAt(0, new THREE.Color());
+    const halo = new THREE.InstancedMesh(haloGeo, haloShared, maxGlow);
+    halo.count = 0; halo.raycast = () => {};
+    halo.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    halo.setColorAt(0, new THREE.Color());
+    parent.add(mesh, glowMesh, halo);
+    return { mesh, glowMesh, glowAttr, halo, max, maxGlow, order: [], orderGlow: [] };
+  }
+  const main = makeSet(scene, MAX_BLOCKS, MAX_GLOW);
+  const { mesh, glowMesh, halo } = main;
+  mesh.userData.blocks = glowMesh.userData.blocks = true;
 
   const keyAt = (ix, iz, u, v, l) => `${ix}_${iz}_${u}_${v}_${l}`;
   const spot = (ix, iz, u, v, l) => new THREE.Vector3(ix * TILE + (u + 0.5) * B, BASE + (l + 0.5) * B, iz * TILE + (v + 0.5) * B);
   const spotOfKey = k => { const [ix, iz, u, v, l] = k.split('_').map(Number); return spot(ix, iz, u, v, l); };
   const hash = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return ((h >>> 0) % 10000) / 10000; };
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e3 = new THREE.Euler(), sc = new THREE.Vector3(), col = new THREE.Color();
-  function rebuild() {
+  function fill(S, entries, shrink = 1) {   // (draw these blocks into this set)
     let n = 0, g = 0;
-    order = []; orderGlow = [];
-    const shrink = 1 - xk * 0.72;   // (x-ray: the blocks shrink toward their nodes)
-    for (const [k, v] of Object.entries(blocks)) {
+    S.order = []; S.orderGlow = [];
+    for (const [k, v] of entries) {
       const glow = glowOf(v);
-      if (glow ? g >= MAX_GLOW : n >= MAX_BLOCKS) continue;
+      if (glow ? g >= S.maxGlow : n >= S.max) continue;
       const p = spotOfKey(k);
       const a = hash(k), b = hash(k + 'b'), d = hash(k + 'c');
       e3.set((b - 0.5) * 0.03, (a - 0.5) * 0.07, (d - 0.5) * 0.03);   // (a touch uneven: each sits a little its own way)
@@ -171,22 +184,27 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       m4.compose(p, q, sc);
       tint(col, v, 0.94 + d * 0.08);
       if (glow) {
-        glowMesh.setMatrixAt(g, m4); glowMesh.setColorAt(g, col); glowAttr.setX(g, glow);
+        S.glowMesh.setMatrixAt(g, m4); S.glowMesh.setColorAt(g, col); S.glowAttr.setX(g, glow);
         sc.setScalar((glow === 2 ? 2.1 : 1.55) * shrink);
-        halo.setMatrixAt(g, m4.compose(p, q.identity(), sc)); halo.setColorAt(g, col.multiplyScalar(glow === 2 ? 1 : 0.6));
-        orderGlow.push(k); g++;
+        S.halo.setMatrixAt(g, m4.compose(p, q.identity(), sc)); S.halo.setColorAt(g, col.multiplyScalar(glow === 2 ? 1 : 0.6));
+        S.orderGlow.push(k); g++;
       } else {
-        mesh.setMatrixAt(n, m4); mesh.setColorAt(n, col);
-        order.push(k); n++;
+        S.mesh.setMatrixAt(n, m4); S.mesh.setColorAt(n, col);
+        S.order.push(k); n++;
       }
     }
-    mesh.count = n; glowMesh.count = g; halo.count = g;
-    for (const m of [mesh, glowMesh, halo]) {
+    S.mesh.count = n; S.glowMesh.count = g; S.halo.count = g;
+    for (const m of [S.mesh, S.glowMesh, S.halo]) {
       m.instanceMatrix.needsUpdate = true;
       if (m.instanceColor) m.instanceColor.needsUpdate = true;
       m.computeBoundingSphere();
     }
-    glowAttr.needsUpdate = true;
+    S.glowAttr.needsUpdate = true;
+  }
+  function rebuild() {
+    const shown = carry ? Object.entries(blocks).filter(([k]) => !carry.from.has(k)) : Object.entries(blocks);   // (what you're carrying isn't where it was)
+    fill(main, shown, 1 - xk * 0.72);   // (x-ray: the blocks shrink toward their nodes)
+    order = main.order; orderGlow = main.orderGlow;
     if (xray || xk > 0) buildNodes();
   }
 
@@ -429,26 +447,203 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     update(ref(db, 'game/blocks'), add).catch(() => {});
   }
 
-  // ---------- R: clear the whole room, once you say you're sure ----------
+  // ---------- Moving sections: pick floor squares (every block on each, all the way up), lift, carry, set down ----------
+  const moveSel = new Set();   // the picked squares, "ix_iz"
+  const carryGroup = new THREE.Group();
+  scene.add(carryGroup);
+  const carrySet = makeSet(carryGroup, 6000, 2000);
+  carrySet.mesh.raycast = carrySet.glowMesh.raycast = () => {};
+  const selMarks = new THREE.Group();
+  scene.add(selMarks);
+  const colGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(TILE, MAX * B, TILE));
+  const goldLine = new THREE.LineBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.75, depthWrite: false, toneMapped: false });
+  const redLine = new THREE.LineBasicMaterial({ color: 0xff4040, transparent: true, opacity: 0.9, depthWrite: false, toneMapped: false });
+  const sqOf = c => [Math.floor(c.gx / 3), Math.floor(c.gz / 3)];
+  const keyOfCell = c => { const [ix, iz] = sqOf(c); return keyAt(ix, iz, c.gx - ix * 3, c.gz - iz * 3, c.l); };
+  function carryFits() {   // (every block lands inside the room, and nowhere a block already is)
+    return carry.cells.every(c => {
+      const [ix, iz] = sqOf(c), k = keyOfCell(c);
+      return ix >= IX0 && ix <= IX1 && iz >= IZ0 && iz <= IZ1 && c.l >= 0 && c.l < MAX && (blocks[k] == null || carry.from.has(k));
+    });
+  }
+  function showMoveMarks() {   // (gold columns round the picked squares; while carrying, where it'll land: red if it can't)
+    for (const m of [...selMarks.children]) selMarks.remove(m);
+    if (!editing || !moveOn) return;
+    let squares, mat = goldLine;
+    if (carry) { squares = new Set(carry.cells.map(c => sqOf(c).join('_'))); mat = carryFits() ? goldLine : redLine; }
+    else squares = moveSel;
+    for (const sq of squares) {
+      const [ix, iz] = sq.split('_').map(Number);
+      const m = new THREE.LineSegments(colGeo, mat);
+      m.position.set(ix * TILE + TILE / 2, BASE + MAX * B / 2, iz * TILE + TILE / 2);
+      m.raycast = () => {};
+      selMarks.add(m);
+    }
+  }
+  function showCarry() {
+    if (carry) fill(carrySet, carry.cells.map(c => [keyOfCell(c), c.v]));
+    else fill(carrySet, []);
+    showMoveMarks();
+  }
+  function lift() {
+    const from = new Set(Object.keys(blocks).filter(k => { const [ix, iz] = k.split('_'); return moveSel.has(ix + '_' + iz); }));
+    if (!from.size) return;
+    carry = { from, cells: [...from].map(k => { const [ix, iz, u, v, l] = k.split('_').map(Number); return { gx: ix * 3 + u, gz: iz * 3 + v, l, v: blocks[k] }; }) };
+    rebuild(); showCarry();
+    try { sfx.bounce(); } catch (e) {}
+  }
+  function putBack() { carry = null; rebuild(); showCarry(); }
+  function drop() {
+    if (!carry) return;
+    if (!carryFits()) { try { sfx.skeeGutter(0.6); } catch (e) {} return; }
+    const changes = {};
+    for (const k of carry.from) { changes[k] = null; delete blocks[k]; }
+    for (const c of carry.cells) { const k = keyOfCell(c); changes[k] = c.v; blocks[k] = c.v; }
+    moveSel.clear();
+    for (const c of carry.cells) moveSel.add(sqOf(c).join('_'));   // (the squares it landed on stay picked, to move again)
+    carry = null;
+    rebuild(); showCarry();
+    update(ref(db, 'game/blocks'), changes).catch(() => {});
+    try { sfx.land(0.8); } catch (e) {}
+  }
+  function turn(dir) {   // (a quarter turn round the middle of the squares being carried; it stays on the squares)
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const c of carry.cells) { const [ix, iz] = sqOf(c); x0 = Math.min(x0, ix); x1 = Math.max(x1, ix); z0 = Math.min(z0, iz); z1 = Math.max(z1, iz); }
+    const cx = (x0 + x1 + 1) * 1.5, cz = (z0 + z1 + 1) * 1.5;
+    const rot = (x, z) => dir > 0 ? [cx - (z - cz), cz + (x - cx)] : [cx + (z - cz), cz - (x - cx)];
+    const box = (ax, az, bx, bz) => { const pts = [rot(ax, az), rot(bx, az), rot(ax, bz), rot(bx, bz)]; return [Math.min(...pts.map(p => p[0])), Math.min(...pts.map(p => p[1]))]; };
+    const [mx, mz] = box(x0 * 3, z0 * 3, (x1 + 1) * 3, (z1 + 1) * 3);
+    const sx = 3 * Math.round(mx / 3) - mx, sz = 3 * Math.round(mz / 3) - mz;   // (lined back up with the squares)
+    for (const c of carry.cells) { const [nx, nz] = box(c.gx, c.gz, c.gx + 1, c.gz + 1); c.gx = Math.round(nx + sx); c.gz = Math.round(nz + sz); }
+    showCarry();
+  }
+  function setMove(on) {
+    if (!on && carry) putBack();
+    moveOn = on;
+    if (on) { hammerOn = paintOn = false; refreshTools(); }
+    if (!on) moveSel.clear();
+    moveBtn.classList.toggle('on', moveOn);
+    moveHelp.style.display = moveOn ? 'block' : 'none';
+    showMoveMarks();
+  }
+  // the arrow keys: a whole floor square at a time, turned to the way you face (up is always away from you); the
+  // picked square (or what you're carrying) moves, and you move with it
+  function arrowStep(key) {
+    const f = [-Math.sin(yawNow), -Math.cos(yawNow)], r = [Math.cos(yawNow), -Math.sin(yawNow)];
+    const snap = ([x, z]) => Math.abs(x) > Math.abs(z) ? [Math.sign(x), 0] : [0, Math.sign(z)];
+    const [dx, dz] = key === 'ArrowUp' ? snap(f) : key === 'ArrowDown' ? snap(f).map(x => -x) : key === 'ArrowRight' ? snap(r) : snap(r).map(x => -x);
+    if (carry) { for (const c of carry.cells) { c.gx += dx * 3; c.gz += dz * 3; } showCarry(); }
+    else {
+      const ix = sel.ix + dx, iz = sel.iz + dz;
+      if (ix < IX0 || ix > IX1 || iz < IZ0 || iz > IZ1) return;
+      sel = { ix, iz }; showMarks();
+    }
+    pos.x += dx * TILE; pos.z += dz * TILE;
+  }
+
+  // ---------- The "are you sure?" box (clearing, loading, deleting a save): Enter says yes, Esc no ----------
   const ask = document.createElement('div');
   ask.id = 'clearAsk';
-  ask.innerHTML = '<div class="q">This will clear the whole room.<br>Are you sure?</div><div class="row"><button class="h yes">Clear it</button><button class="h no">Keep building</button></div>';
-  function clearAll() {
-    const gone = {};
-    for (const k of Object.keys(blocks)) gone[k] = null;
-    blocks = {}; rebuild();
-    if (Object.keys(gone).length) update(ref(db, 'game/blocks'), gone).catch(() => {});
+  ask.innerHTML = '<div class="q"></div><div class="row"><button class="h yes"></button><button class="h no"></button></div>';
+  let onYes = null;
+  function confirmBox(question, yes, no, fn) {
+    ask.querySelector('.q').innerHTML = question;
+    ask.querySelector('.yes').textContent = yes;
+    ask.querySelector('.no').textContent = no;
+    onYes = fn;
+    ask.classList.add('up');
   }
   const askOpen = () => ask.classList.contains('up');
-  function closeAsk() { ask.classList.remove('up'); }
-  ask.querySelector('.yes').addEventListener('click', e => { e.currentTarget.blur(); closeAsk(); clearAll(); });
+  function closeAsk() { ask.classList.remove('up'); onYes = null; }
+  function sayYes() { const fn = onYes; closeAsk(); if (fn) fn(); }
+  ask.querySelector('.yes').addEventListener('click', e => { e.currentTarget.blur(); sayYes(); });
   ask.querySelector('.no').addEventListener('click', e => { e.currentTarget.blur(); closeAsk(); });
+
+  // ---------- Saving and loading builds (shared: anyone can load anyone's) ----------
+  // game/saveList/<id>: { name, by, t, n }   the list (small, so it loads quickly)
+  // game/saveData/<id>: "key:value,key:value,..."   the blocks themselves, only fetched to load one
+  // "unsaved": the build that was in the room, kept automatically just before it's cleared or a save is loaded over it
+  const BLOCK_KEY = /^-?[0-9]+_-?[0-9]+_[0-2]_[0-2]_1?[0-9]$/;
+  const pack = b => Object.entries(b).map(([k, v]) => k + ':' + v).join(',');
+  function unpack(str) {
+    const out = {};
+    for (const part of String(str || '').split(',')) {
+      const [k, v] = part.split(':'), n = Number(v);
+      if (BLOCK_KEY.test(k) && Number.isInteger(n) && n >= 0 && n <= 79) out[k] = n;
+    }
+    return out;
+  }
+  function saveAs(id, name) {
+    const n = Object.keys(blocks).length;
+    return Promise.all([
+      set(ref(db, 'game/saveData/' + id), pack(blocks)),
+      set(ref(db, 'game/saveList/' + id), { name: String(name).slice(0, 30), by: String(S.myName || 'Someone').slice(0, 20), t: Date.now(), n })
+    ]);
+  }
+  const keepUnsaved = () => Object.keys(blocks).length ? saveAs('unsaved', 'Unsaved (kept automatically)').catch(() => {}) : Promise.resolve();
+  function replaceRoom(next) {   // (the room's build becomes this one, for everyone, in one go)
+    const changes = {};
+    for (const k of Object.keys(blocks)) changes[k] = null;
+    for (const [k, v] of Object.entries(next)) changes[k] = v;
+    if (carry) { carry = null; showCarry(); }
+    blocks = { ...next }; rebuild();
+    if (Object.keys(changes).length) update(ref(db, 'game/blocks'), changes).catch(() => {});
+  }
+  function clearAll() { keepUnsaved(); replaceRoom({}); }
+  function loadSave(id) {
+    keepUnsaved().then(() => get(ref(db, 'game/saveData/' + id))).then(s => replaceRoom(unpack(s.val()))).catch(() => {});
+  }
+  let saveList = {};
+  const savesCard = document.createElement('div');
+  savesCard.id = 'savesCard';
+  savesCard.innerHTML = '<div class="top"><b>Saved builds</b><button class="h x" title="Close">✕</button></div>' +
+    '<div class="row"><input id="saveName" maxlength="30" placeholder="Name this build"><button class="h yes" id="saveGo">Save</button></div>' +
+    '<div class="list"></div>';
+  const saveName = savesCard.querySelector('#saveName'), saveListEl = savesCard.querySelector('.list');
+  function drawSaves() {
+    saveListEl.textContent = '';
+    const items = Object.entries(saveList).filter(([, it]) => it && it.name)
+      .sort(([a, x], [b, y]) => (b === 'unsaved') - (a === 'unsaved') || (y.t || 0) - (x.t || 0));   // (the kept one first, then newest)
+    if (!items.length) { const d = document.createElement('div'); d.className = 'none'; d.textContent = 'Nothing saved yet'; saveListEl.appendChild(d); }
+    for (const [id, it] of items) {
+      const row = document.createElement('div'); row.className = 'item';
+      const words = document.createElement('div'); words.className = 'words';
+      const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = it.name;
+      const sub = document.createElement('div'); sub.className = 'sub';
+      sub.textContent = `${it.by || ''} · ${it.n || 0} blocks · ${it.t ? new Date(it.t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : ''}`;
+      words.append(nm, sub);
+      const load = document.createElement('button'); load.className = 'h yes'; load.textContent = 'Load';
+      load.addEventListener('click', () => { load.blur(); confirmBox(`Load “${escapeHtml(it.name)}”?<br>It replaces the room's build (that's kept as Unsaved first).`, 'Load it', 'Cancel', () => loadSave(id)); });
+      row.append(words, load);
+      if (id !== 'unsaved') {
+        const del = document.createElement('button'); del.className = 'h'; del.textContent = '🗑'; del.title = 'Delete this save';
+        del.addEventListener('click', () => { del.blur(); confirmBox(`Delete the save “${escapeHtml(it.name)}”?<br>This can't be undone.`, 'Delete it', 'Keep it',
+          () => { remove(ref(db, 'game/saveList/' + id)).catch(() => {}); remove(ref(db, 'game/saveData/' + id)).catch(() => {}); }); });
+        row.appendChild(del);
+      }
+      saveListEl.appendChild(row);
+    }
+  }
+  function escapeHtml(t) { return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
+  function doSave() {
+    const name = saveName.value.trim();
+    if (!name) { saveName.focus(); return; }
+    if (!Object.keys(blocks).length) return;
+    saveAs('s' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name).then(() => { saveName.value = ''; }).catch(() => {});
+    try { sfx.ping(); } catch (e) {}
+  }
+  savesCard.querySelector('#saveGo').addEventListener('click', e => { e.currentTarget.blur(); doSave(); });
+  saveName.addEventListener('keydown', e => { if (e.key === 'Enter') doSave(); e.stopPropagation(); });
+  savesCard.querySelector('.x').addEventListener('click', () => setSaves(false));
+  function setSaves(on) { savesCard.classList.toggle('up', on); saveBtn.classList.toggle('on', on); if (!on) saveName.blur(); }
 
   // ---------- The tray along the bottom, the build button, the hammer and the x-ray ----------
   const css = document.createElement('style');
   css.textContent = `
     #buildBtn { left: 16px; bottom: 68px; font-size: 20px; }
-    #buildBtn.on, #paintBtn.on, #hammerBtn.on, #xrayBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
+    #moveBtn { position: absolute; right: -14px; top: -14px; width: 38px; height: 38px; font-size: 18px; z-index: 1; }
+    #moveHelp { display: none; color: #f3e6cf; opacity: 0.8; font-size: 12px; text-align: center; }
+    #buildBtn.on, #paintBtn.on, #hammerBtn.on, #xrayBtn.on, #moveBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
     #paintBtn { left: 16px; bottom: 120px; font-size: 20px; display: none; }
     #hammerBtn { left: 16px; bottom: 172px; font-size: 20px; display: none; }
     #xrayBtn { left: 16px; bottom: 224px; font-size: 20px; display: none; }
@@ -472,7 +667,25 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     #clearAsk .row { display: flex; gap: 10px; }
     #clearAsk .h { height: 34px; border-radius: 9px; border: none; cursor: pointer; font: 600 15px inherit; padding: 0 14px;
       color: #f3e6cf; background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(201,162,39,0.45); }
-    #clearAsk .yes { background: rgba(233,201,143,0.92); color: #2a1c10; }`;
+    #clearAsk .yes { background: rgba(233,201,143,0.92); color: #2a1c10; }
+    #saveBtn { position: absolute; left: -14px; top: -14px; width: 38px; height: 38px; font-size: 17px; z-index: 1; }
+    #saveBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
+    #savesCard { position: fixed; left: 50%; bottom: 200px; z-index: 16; transform: translateX(-50%); display: none; width: min(420px, calc(100vw - 32px));
+      max-height: calc(100vh - 280px); flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 16px; color: #f3e6cf;
+      background: rgba(20,16,12,0.92); box-shadow: 0 6px 24px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(201,162,39,0.7); }
+    #savesCard.up { display: flex; }
+    #savesCard .top { display: flex; justify-content: space-between; align-items: center; color: #ffd36a; }
+    #savesCard .row { display: flex; gap: 8px; }
+    #savesCard input { flex: 1; min-width: 0; height: 34px; border-radius: 9px; border: none; padding: 0 10px; font: 15px inherit;
+      background: rgba(255,255,255,0.1); color: #f3e6cf; box-shadow: inset 0 0 0 1px rgba(201,162,39,0.45); }
+    #savesCard .h { height: 34px; min-width: 34px; border-radius: 9px; border: none; cursor: pointer; font: 600 14px inherit; padding: 0 12px;
+      color: #f3e6cf; background: rgba(255,255,255,0.08); box-shadow: inset 0 0 0 1px rgba(201,162,39,0.45); }
+    #savesCard .yes { background: rgba(233,201,143,0.92); color: #2a1c10; }
+    #savesCard .list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    #savesCard .item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 10px; background: rgba(255,255,255,0.05); }
+    #savesCard .words { flex: 1; min-width: 0; }
+    #savesCard .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+    #savesCard .sub, #savesCard .none { font-size: 12px; opacity: 0.65; }`;
   document.head.appendChild(css);
   const corner = (id, title, icon) => {
     const b = document.createElement('button');
@@ -513,7 +726,17 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     heightRow.appendChild(b);
     return b;
   });
-  tray.append(...colorRows, shadeRow, heightRow);
+  const moveBtn = document.createElement('button');
+  moveBtn.id = 'moveBtn'; moveBtn.className = 'corner'; moveBtn.title = 'Move sections (M)'; moveBtn.textContent = '✋';
+  moveBtn.addEventListener('click', () => { moveBtn.blur(); setMove(!moveOn); });
+  const moveHelp = document.createElement('div');
+  moveHelp.id = 'moveHelp';
+  moveHelp.textContent = 'Click squares to pick them · Enter lifts · arrows carry · Q E turn · Page Up/Down raise · Enter sets down · Esc puts back';
+  const saveBtn = document.createElement('button');
+  saveBtn.id = 'saveBtn'; saveBtn.className = 'corner'; saveBtn.title = 'Saved builds'; saveBtn.textContent = '💾';
+  saveBtn.addEventListener('click', () => { saveBtn.blur(); setSaves(!savesCard.classList.contains('up')); });
+  tray.append(saveBtn, moveBtn, moveHelp, ...colorRows, shadeRow, heightRow);
+  document.body.appendChild(savesCard);
   document.body.appendChild(tray);
   document.body.appendChild(ask);
   const css3 = c => `rgb(${Math.min(255, Math.round(c.r * 255))},${Math.min(255, Math.round(c.g * 255))},${Math.min(255, Math.round(c.b * 255))})`;
@@ -528,8 +751,9 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     heights.forEach((b, i) => b.classList.toggle('on', i === height));
   }
   refreshTray();
-  function setHammer(on) { hammerOn = on; if (on) paintOn = false; hammerBtn.classList.toggle('on', hammerOn); paintBtn.classList.toggle('on', paintOn); }
-  function setPaint(on) { paintOn = on; if (on) hammerOn = false; hammerBtn.classList.toggle('on', hammerOn); paintBtn.classList.toggle('on', paintOn); }
+  function refreshTools() { hammerBtn.classList.toggle('on', hammerOn); paintBtn.classList.toggle('on', paintOn); }
+  function setHammer(on) { if (on && moveOn) setMove(false); hammerOn = on; if (on) paintOn = false; refreshTools(); }
+  function setPaint(on) { if (on && moveOn) setMove(false); paintOn = on; if (on) hammerOn = false; refreshTools(); }
   function setXray(on) { xray = on; xrayBtn.classList.toggle('on', xray); }
   hammerBtn.addEventListener('click', () => { hammerBtn.blur(); setHammer(!hammerOn); });
   paintBtn.addEventListener('click', () => { paintBtn.blur(); setPaint(!paintOn); });
@@ -543,42 +767,54 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     tray.classList.toggle('up', editing);
     paintBtn.style.display = hammerBtn.style.display = xrayBtn.style.display = editing ? 'block' : 'none';
     if (editing) pos.copy(camera.position);
-    else { closeAsk(); setHammer(false); setPaint(false); setXray(false); }
-    showMarks();
+    else { closeAsk(); setHammer(false); setPaint(false); setXray(false); setMove(false); setSaves(false); }
+    showMarks(); showMoveMarks();
     if (onEdit) onEdit(editing, pos);
   }
   btn.addEventListener('click', () => { btn.blur(); toggle(); });
 
   const wrap = (x, n) => ((x % n) + n) % n;
+  let bobT = 0;
   return {
     get editing() { return editing; },
     get cursor() { return !editing ? null : hammerOn ? HAMMER_CURSOR : paintOn ? BRUSH_CURSOR : null; },
     toggle,
     start() {
+      onValue(ref(db, 'game/saveList'), s => { saveList = s.val() || {}; drawSaves(); });
       onValue(ref(db, 'game/blocks'), s => {
         const next = s.val() || {};
         const gone = Object.keys(blocks).filter(k => next[k] == null);
-        if (gone.length <= 30) for (const k of gone) pop(k, blocks[k], true);   // (someone else's: it pops for you too; a whole clear just goes)
+        const moved = Object.keys(next).some(k => blocks[k] == null);   // (blocks gone and others come at once: a move, not a smash)
+        if (gone.length <= 30 && !moved) for (const k of gone) pop(k, blocks[k], true);   // (someone else's: it pops for you too; a whole clear just goes)
         blocks = next; rebuild();
       });
     },
     onKey(e) {   // (the numpad builds while in edit mode, and the keys for the tray, the hammer, the x-ray, the clear, the test)
       if (!editing) return false;
       if (askOpen()) {   // (the question is up: Enter says yes, Esc no, everything else waits)
-        if (e.type === 'keydown') { if (e.key === 'Enter') { closeAsk(); clearAll(); } else if (e.key === 'Escape') closeAsk(); }
+        if (e.type === 'keydown') { if (e.key === 'Enter') sayYes(); else if (e.key === 'Escape') closeAsk(); }
         e.preventDefault(); return true;
       }
       if (e.type !== 'keydown') return false;
       if (PAD[e.code]) { e.preventDefault(); if (!e.repeat) build(e.code); return true; }
       if (e.code === 'NumpadMultiply' || e.code === 'NumpadDivide') { e.preventDefault(); color = wrap(color + (e.code === 'NumpadMultiply' ? 1 : -1), COLORS.length); refreshTray(); return true; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (!carry && !sel) return false;   // (nothing picked: the arrows fly you, as before)
+        e.preventDefault(); arrowStep(e.key); return true;
+      }
+      if (carry && (e.key === 'PageUp' || e.key === 'PageDown')) { e.preventDefault(); for (const c of carry.cells) c.l += e.key === 'PageUp' ? 1 : -1; showCarry(); return true; }
+      if (moveOn && e.key === 'Enter') { e.preventDefault(); if (carry) drop(); else lift(); return true; }
+      if (carry && e.key === 'Escape') { putBack(); return true; }
+      if (carry && !e.repeat && (e.key.toLowerCase() === 'q' || e.key.toLowerCase() === 'e')) { turn(e.key.toLowerCase() === 'e' ? 1 : -1); return true; }
       if (e.code === 'NumpadAdd' || e.code === 'NumpadSubtract') { e.preventDefault(); shade = Math.max(0, Math.min(SHADES.length - 1, shade + (e.code === 'NumpadAdd' ? 1 : -1))); refreshTray(); return true; }
       if (e.key === 'PageUp' || e.key === 'PageDown') { e.preventDefault(); height = wrap(height + (e.key === 'PageUp' ? 1 : -1), MAX + 1); refreshTray(); showMarks(); return true; }
       if (e.repeat) return false;
       const k = e.key.toLowerCase();
       if (k === 'h') { setHammer(!hammerOn); return true; }
       if (k === 'p') { setPaint(!paintOn); return true; }
+      if (k === 'm') { setMove(!moveOn); return true; }
       if (k === 'x') { setXray(!xray); return true; }
-      if (k === 'r') { ask.classList.add('up'); return true; }
+      if (k === 'r') { confirmBox('This will clear the whole room.<br>Are you sure? (It\'s kept as Unsaved first.)', 'Clear it', 'Keep building', clearAll); return true; }
       if (k === 't') { testWall(); return true; }
       return false;
     },
@@ -594,6 +830,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       }
       const h = hits.find(x => x.object === mesh || x.object === glowMesh || x.object.userData.floor);
       if (!h) return;
+      if (carry) return;   // (carrying: clicks wait till it's set down)
       if (hammerOn || paintOn) {
         const k = h.instanceId == null ? null : h.object === mesh ? order[h.instanceId] : h.object === glowMesh ? orderGlow[h.instanceId] : null;
         if (k) { if (hammerOn) smash(k); else paint(k); }
@@ -605,6 +842,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       if (ix < IX0 || ix > IX1 || iz < IZ0 || iz > IZ1) return;
       sel = { ix, iz };
       showMarks();
+      if (moveOn && !carry) { const sq = ix + '_' + iz; if (moveSel.has(sq)) moveSel.delete(sq); else moveSel.add(sq); showMoveMarks(); }   // (moving: the square's added to the section, or taken out)
     },
     fly(dt, keys, yaw, pitch) {   // (floating: W A S D along the way you face, Space up, C down, Shift faster)
       yawNow = yaw;
@@ -620,8 +858,10 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       camera.position.copy(pos);
       camera.rotation.set(pitch, yaw, 0);
     },
-    update(dt) {   // (every frame: the hammer swinging, the x-ray, blocks squishing, chunks bouncing)
+    update(dt) {   // (every frame: the hammer swinging, the x-ray, blocks squishing, chunks bouncing, what's carried bobbing)
       swingFrame(dt);
+      bobT += dt;
+      carryGroup.position.y = carry ? 0.32 + Math.sin(bobT * 3) * 0.05 : 0;
       xrayFrame(dt);
       for (let i = squishes.length - 1; i >= 0; i--) {
         const s = squishes[i];

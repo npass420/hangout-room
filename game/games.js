@@ -584,13 +584,22 @@ keysCss.textContent = `
 document.head.appendChild(keysCss);
 const KEYS = [
   ['Walking', [['W A S D / arrows', 'Walk (left and right arrows turn)'], ['Click the floor', 'Walk there (double click to run)'],
-    ['Drag', 'Look around'], ['Space', 'Jump'], ['Shift', 'Sprint'], ['R', 'Look straight ahead again'], ['Scroll', 'Zoom']]],
+    ['Drag', 'Look around'], ['Space', 'Jump'], ['Shift', 'Sprint'], ['R', 'Look straight ahead again'], ['Scroll', 'Zoom'],
+    ['Portal (back wall)', 'Click it to go back to the Doodle Gallery']]],
   ['Building (🧱 button)', [['W A S D', 'Float about'], ['Space / C', 'Float up / down'], ['Shift', 'Faster'],
-    ['Click a cushion', 'Pick that square'], ['Numpad 1 to 9', 'Build on the square\'s nine spots (8 is always the far middle)'],
-    ['Numpad * and /', 'Next and last color'],
-    ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'], ['Page Up / Down', 'Height up and down (Auto, 1 to 15; a taken spot stacks above it)'],
-    ['P', 'Paint: click a block to give it the tray\'s color and shade'], ['H', 'The hammer: click a block to smash it'], ['X', 'X-ray: the blueprint, orbs on a laser lattice (click an orb to pick up its color and shade)'], ['T', 'Test wall on the picked square (every color and shade)'],
-    ['R', 'Clear the whole room (asks first)']]]
+    ['Click a cushion', 'Pick that square'], ['Arrow keys', 'Hop the picked square one over (up is away from you); you float along'],
+    ['Numpad 1 to 9', 'Build on the square\'s nine spots (8 is always the far middle)'],
+    ['Numpad * and /', 'Next and last color'], ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'],
+    ['Page Up / Down', 'Height up and down (Auto, 1 to 15; a taken spot stacks above it)'],
+    ['T', 'Test wall on the picked square and the next (every color and shade)'],
+    ['R', 'Clear the whole room (asks first; kept as Unsaved)']]],
+  ['Tools (buttons up the left)', [['P  🖌', 'Paint: click a block to give it the tray\'s color and shade'],
+    ['H  🔨', 'Hammer: click a block to smash it'], ['X  👁', 'X-ray: orbs on a laser grid (click an orb to pick up its color and shade)']]],
+  ['Moving sections (✋ on the tray)', [['M', 'Move mode on and off'], ['Click squares', 'Pick them (every block on them, all the way up)'],
+    ['Enter', 'Lift them, and again to set them down'], ['Arrow keys', 'Carry them a square at a time'], ['Q / E', 'Turn them a quarter turn'],
+    ['Page Up / Down', 'Raise and lower them'], ['Esc', 'Put them back where they were'], ['Red outline', 'Something\'s in the way: it won\'t set down there']]],
+  ['Saved builds (💾 on the tray)', [['Save', 'Name the room\'s build and save it'], ['Load', 'Put a save in the room (asks first; what was there is kept as Unsaved)'],
+    ['🗑', 'Delete a save (asks first)'], ['Unsaved', 'Always at the top: the build from before the last clear or load']]]
 ];
 const keysBtn = document.createElement('button');
 keysBtn.id = 'keysBtn'; keysBtn.className = 'corner'; keysBtn.title = 'Keys'; keysBtn.textContent = '⌨';
