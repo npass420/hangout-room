@@ -589,7 +589,7 @@ const KEYS = [
     ['Click a cushion', 'Pick that square'], ['Numpad 1 to 9', 'Build on the square\'s nine spots (8 is always the far middle)'],
     ['Numpad * and /', 'Next and last color'],
     ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'], ['Page Up / Down', 'Height up and down (Auto, 1 to 15; a taken spot stacks above it)'],
-    ['H', 'The hammer: click a block to smash it'], ['X', 'X-ray: the blueprint, orbs on a laser lattice'], ['T', 'Test wall on the picked square (every color and shade)'],
+    ['P', 'Paint: click a block to give it the tray\'s color and shade'], ['H', 'The hammer: click a block to smash it'], ['X', 'X-ray: the blueprint, orbs on a laser lattice (click an orb to pick up its color and shade)'], ['T', 'Test wall on the picked square (every color and shade)'],
     ['R', 'Clear the whole room (asks first)']]]
 ];
 const keysBtn = document.createElement('button');

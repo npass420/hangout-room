@@ -16,10 +16,12 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { GOLD as GOLD_SHARED } from './goldjewel.js';
 import { softEnv } from '../checkers/pieceenv.js';
 
-const W = 1.8, H = 2.7, D = 0.3, OW = 1.04, OH = 1.94;   // outside size, depth, the opening (built big, then shrunk)
+const OW = 1.04, OH = 1.94, D = 0.3;   // the opening, and the depth (built big, then shrunk)
+const K = 2 / 3;                        // how chunky the border is (two thirds of its first, chunkier size)
+const W = OW + 0.76 * K, H = OH + 0.76 * K;   // outside size
 export const SIZE = 0.3;   // how big it hangs: 0.3 of the built size, about 54 x 81 cm, a picture on the wall
 const WALL = 0.045;        // how far its middle stands out from the wall it hangs on
-const STONE = new THREE.MeshPhysicalMaterial({ color: 0x0b0b0e, roughness: 0.2, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
+const STONE = new THREE.MeshPhysicalMaterial({ color: 0x17171c, roughness: 0.2, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
 const GOLD = GOLD_SHARED.clone();   // (its own copy: the reflections set on it below stay on this frame)
 const GOLD_DARK = new THREE.MeshPhysicalMaterial({ color: 0x8a5e1c, metalness: 1, roughness: 0.35 });
 
@@ -97,8 +99,8 @@ export function makePortalFrame() {
     const len = Math.hypot(x1 - x0, y1 - y0), horiz = Math.abs(y1 - y0) < 1e-6;
     let at = 0;
     while (at < len - 0.05) {
-      let l = 0.24 + rand() * 0.26;
-      if (len - at - l < 0.18) l = len - at;
+      let l = (0.24 + rand() * 0.26) * K;
+      if (len - at - l < 0.18 * K) l = len - at;
       const mid = at + l / 2, t = mid / len, cx = x0 + (x1 - x0) * t, cy = y0 + (y1 - y0) * t;
       const g = horiz ? stone(l - GAP, thick - GAP, depth, rand) : stone(thick - GAP, l - GAP, depth, rand);
       const m = new THREE.Mesh(g, STONE);
@@ -107,7 +109,7 @@ export function makePortalFrame() {
       at += l;
     }
   }
-  const T1 = (W - OW) / 2 - 0.13, T2 = 0.13;   // (outer ring's thickness, inner ring's)
+  const T2 = 0.13 * K, T1 = (W - OW) / 2 - T2;   // (outer ring's thickness, inner ring's)
   const ix = OW / 2 + T2, iy0 = (H - OH) / 2 - T2, iy1 = (H + OH) / 2 + T2;   // (the inner ring's outside edge)
   run(-W / 2, T1 / 2, W / 2, T1 / 2, T1, D, 0);                       // bottom
   run(-W / 2, H - T1 / 2, W / 2, H - T1 / 2, T1, D, 0);               // top
@@ -125,9 +127,9 @@ export function makePortalFrame() {
     let x, y;
     if (side < 2) { x = -W / 2 + W * along; y = side === 0 ? T1 / 2 : H - T1 / 2; }
     else { y = H * (0.08 + along * 0.84); x = side === 2 ? -W / 2 + T1 / 2 : W / 2 - T1 / 2; }
-    let px = x + (rand() - 0.5) * 0.08, py = y + (rand() - 0.5) * 0.08;
+    let px = x + (rand() - 0.5) * 0.08 * K, py = y + (rand() - 0.5) * 0.08 * K;
     for (let k = 0; k < 3; k++) {   // (a short wandering crack, three little legs)
-      const ang = rand() * Math.PI * 2, len = 0.05 + rand() * 0.07;
+      const ang = rand() * Math.PI * 2, len = (0.05 + rand() * 0.07) * K;
       const c = new THREE.Mesh(new THREE.BoxGeometry(len, 0.008 + rand() * 0.006, 0.012), GOLD);
       c.position.set(px + Math.cos(ang) * len / 2, py + Math.sin(ang) * len / 2, D / 2 + 0.002);
       c.rotation.z = ang;
@@ -137,7 +139,7 @@ export function makePortalFrame() {
   }
 
   // the gold trim round the opening
-  const tr = 0.035, tz = z2 + d2 / 2 + 0.006;
+  const tr = 0.035 * K, tz = z2 + d2 / 2 + 0.006;
   for (const [w, h2, x, y] of [[OW + tr * 2, tr, 0, (H - OH) / 2 - tr / 2], [OW + tr * 2, tr, 0, (H + OH) / 2 + tr / 2], [tr, OH, -OW / 2 - tr / 2, H / 2], [tr, OH, OW / 2 + tr / 2, H / 2]]) {
     const m = new THREE.Mesh(new RoundedBoxGeometry(w, h2, 0.05, 2, 0.01), GOLD);
     m.position.set(x, y, tz);
@@ -145,31 +147,31 @@ export function makePortalFrame() {
   }
   // gold caps on the corners: a little stepped gold triangle over each corner
   for (const sx of [-1, 1]) for (const sy of [0, 1]) {
-    const cap = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(0.24, 0), new THREE.Vector2(0, 0.24)]);
+    const cap = new THREE.Shape([new THREE.Vector2(0, 0), new THREE.Vector2(0.24 * K, 0), new THREE.Vector2(0, 0.24 * K)]);
     const g = new THREE.ExtrudeGeometry(cap, { depth: 0.04, bevelEnabled: true, bevelSize: 0.012, bevelThickness: 0.012, bevelSegments: 2 });
     const m = new THREE.Mesh(g, GOLD);
     m.scale.set(-sx, sy ? -1 : 1, 1);
     m.position.set(sx * (W / 2 - 0.005), sy ? H - 0.005 : 0.005, D / 2 - 0.01);
     solid.push(m);
-    const side = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22, D * 0.9), GOLD);   // (and down the corner's side)
-    side.position.set(sx * (W / 2 + 0.003), sy ? H - 0.12 : 0.12, 0);
+    const side = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.22 * K, D * 0.9), GOLD);   // (and down the corner's side)
+    side.position.set(sx * (W / 2 + 0.003), sy ? H - 0.12 * K : 0.12 * K, 0);
     solid.push(side);
   }
   // the keystone on top: a gold block with a recessed panel and a shield, a soft glow above it
-  const key = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.38, D + 0.12, 3, 0.03), GOLD);
-  key.position.set(0, H - 0.12, 0.04);
+  const key = new THREE.Mesh(new RoundedBoxGeometry(0.3 * K, 0.38 * K, D + 0.12, 3, 0.03 * K), GOLD);
+  key.position.set(0, H - 0.12 * K, 0.04);
   solid.push(key);
-  const panel = new THREE.Mesh(new RoundedBoxGeometry(0.2, 0.27, 0.04, 2, 0.01), GOLD_DARK);
-  panel.position.set(0, H - 0.12, D / 2 + 0.1);
+  const panel = new THREE.Mesh(new RoundedBoxGeometry(0.2 * K, 0.27 * K, 0.04, 2, 0.01), GOLD_DARK);
+  panel.position.set(0, H - 0.12 * K, D / 2 + 0.1);
   solid.push(panel);
   const shield = new THREE.Shape([new THREE.Vector2(-0.055, 0.05), new THREE.Vector2(0.055, 0.05), new THREE.Vector2(0.055, -0.01), new THREE.Vector2(0, -0.075), new THREE.Vector2(-0.055, -0.01)]);
   const sh = new THREE.Mesh(new THREE.ExtrudeGeometry(shield, { depth: 0.02, bevelEnabled: true, bevelSize: 0.008, bevelThickness: 0.008, bevelSegments: 2 }), GOLD);
-  sh.position.set(0, H - 0.11, D / 2 + 0.115);
+  sh.position.set(0, H - 0.11 * K, D / 2 + 0.115); sh.scale.set(K, K, 1);
   solid.push(sh);
   const glowTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 64; const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
     gr.addColorStop(0, 'rgba(255,240,200,1)'); gr.addColorStop(0.3, 'rgba(255,200,120,0.5)'); gr.addColorStop(1, 'rgba(255,180,80,0)'); g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c); })();
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-  glow.scale.set(0.5, 0.5, 1); glow.position.set(0, H + 0.1, 0.06);
+  glow.scale.set(0.5 * K, 0.5 * K, 1); glow.position.set(0, H + 0.1 * K, 0.06);
 
   for (const m of solid) { m.castShadow = true; m.receiveShadow = true; group.add(m); }
   group.add(glow);
@@ -190,7 +192,7 @@ export function makePortalFrame() {
   portal.onBeforeRender = (renderer) => {
     if (envSet) return; envSet = true;
     const e = softEnv(renderer);
-    for (const m of shiny) { m.envMap = e; m.envMapIntensity = m === STONE ? 1.4 : 1.2; m.needsUpdate = true; }
+    for (const m of shiny) { m.envMap = e; m.envMapIntensity = m === STONE ? 2.2 : 2.4; m.needsUpdate = true; }
   };
 
   group.scale.setScalar(SIZE);
@@ -208,21 +210,30 @@ export function makePortalFrame() {
     bulb.position.set(0, ly - 0.02, lz);
     const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.13, 8), GOLD);
     arm.rotation.x = Math.PI / 2; arm.position.set(0, ly, lz - 0.065);
-    const cv = document.createElement('canvas'); cv.width = cv.height = 256;
-    const g = cv.getContext('2d');
-    g.save(); g.scale(0.5, 1);   // (an oval pool, brightest just under the lamp)
-    const grd = g.createRadialGradient(256, 0, 0, 256, 0, 256);
-    grd.addColorStop(0, 'rgb(255,236,200)'); grd.addColorStop(0.35, 'rgb(130,112,85)'); grd.addColorStop(1, 'rgb(0,0,0)');
-    g.fillStyle = grd; g.fillRect(0, 0, 512, 256); g.restore();
+    // the light on the wall: a soft dome of light arching up over the lamp, and a long fall of it down behind the
+    // frame, brightest at the lamp, fading to nothing all the way round (no hard edge anywhere)
+    const UP = 0.32, DOWN = ly + fh / 2 + 0.3, PW = fw * 2.3, ph = UP + DOWN;   // (meters: above the lamp, below it, wide, tall)
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = Math.round(256 * ph / PW);
+    const g = cv.getContext('2d'), cx = cv.width / 2, cy = cv.height * UP / ph, rx = cv.width * 0.48;
+    for (const [top, ry] of [[true, cv.height * UP / ph * 0.95], [false, cv.height * DOWN / ph * 0.97]]) {
+      g.save();
+      g.beginPath(); g.rect(0, top ? 0 : cy, cv.width, top ? cy : cv.height - cy); g.clip();   // (each half its own height)
+      g.translate(cx, cy); g.scale(1, ry / rx);
+      const grd = g.createRadialGradient(0, 0, 0, 0, 0, rx);
+      grd.addColorStop(0, 'rgb(255,236,200)'); grd.addColorStop(0.18, 'rgb(200,175,135)'); grd.addColorStop(0.5, 'rgb(80,68,50)'); grd.addColorStop(1, 'rgb(0,0,0)');
+      g.fillStyle = grd; g.fillRect(-rx, -rx, rx * 2, rx * 2);
+      g.restore();
+    }
     const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-    const ph = ly + fh / 2 + 0.35;
-    const pool = new THREE.Mesh(new THREE.PlaneGeometry(fw * 2.1, ph), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.38,
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(PW, ph), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.4,
       depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
-    pool.position.set(0, ly - ph / 2, -WALL + 0.004);
-    const spot = new THREE.SpotLight(0xffe2b8, 2.2, 2.2, 0.75, 0.8, 1.2);
+    pool.position.set(0, ly + UP - ph / 2, -WALL + 0.004);
+    const spot = new THREE.SpotLight(0xffe2b8, 9, 2.6, 0.8, 0.7, 1);
     spot.position.set(0, ly - 0.03, lz + 0.05);
     spot.target.position.set(0, -fh * 0.15, 0);
-    outer.add(bar, bulb, arm, pool, spot, spot.target);
+    const fill = new THREE.PointLight(0xffe6c8, 0.9, 1.8, 1);   // (and a gentle warm light from the front, so the whole frame reads)
+    fill.position.set(0, 0.1, 0.55);
+    outer.add(bar, bulb, arm, pool, spot, spot.target, fill);
   }
   outer.traverse(o => { o.userData.portalFrame = true; });
   return {

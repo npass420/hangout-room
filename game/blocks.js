@@ -16,11 +16,13 @@
 //       spot above it, so pressing again keeps stacking up from there.
 //   Glow and Glowing blocks are lit from inside like jelly, see-through toward their edges, with a soft halo round
 //     them (Glowing's bigger and brighter).
-//   The hammer (H, or 🔨 over the build button): click a block and a toy mallet swings down on it: the block squishes
+//   The hammer (H, or 🔨 over the paint): click a block and a toy mallet swings down on it: the block squishes
 //     flat and pops into soft chunks that bounce on the cushions. Everyone sees blocks pop when they go.
-//   X-ray (X, or 👁 over the hammer): the blueprint: every block shrinks to a small glowing orb in its color, and a
-//     see-through laser lattice lights up through every spot in the room, so you can see the whole framework and
-//     what's inside a build. X again and they grow back.
+//   The paint (P, or 🖌 over the build button): click a block and it takes the color and shade picked in the tray,
+//     with a little splash of paint drops.
+//   X-ray (X, or 👁 at the top of the buttons): the blueprint: every block shrinks to a small glowing orb in its color, and a
+//     see-through laser lattice lights up along every floor square, all three ways, so you can see the framework and
+//     what's inside a build. Click an orb to pick up its color and shade. X again and they grow back.
 //   R: clear the whole room, after an "are you sure?" (every block goes, for everyone).
 //   T: the test wall, on the picked square and the one beside it: every color in a column, Dark at the bottom up to
 //     Glowing on top.
@@ -62,6 +64,7 @@ function tint(out, v, jitter = 1) {   // a block's color in its shade
   return out;
 }
 const glowOf = v => SHADES[decode(v)[1]][4];
+const BRUSH_CURSOR = `url("data:image/svg+xml,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34'><text x='2' y='28' font-size='26'>🖌</text></svg>")}") 6 26, pointer`;
 const HAMMER_CURSOR = `url("data:image/svg+xml,${encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='34' height='34'><text x='2' y='28' font-size='26'>🔨</text></svg>")}") 8 8, pointer`;
 
 // ---------- The glow shades' look: jelly lit from inside, and the halo round them ----------
@@ -106,9 +109,9 @@ const HALO_FS = `
 export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit }) {
   const B = TILE / 3, BASE = 0.12;   // (a block's size, and where the bottom row sits, pressed into the cushion a little)
   const IX0 = Math.ceil(-HX / TILE), IX1 = Math.floor(HX / TILE) - 1, IZ0 = Math.ceil(-HZ / TILE), IZ1 = Math.floor(HZ / TILE) - 1;   // (whole cushions only)
-  let editing = false, color = 0, shade = NORMAL, height = 0, sel = null, hammerOn = false, xray = false, xk = 0;   // (height 0: Auto)
+  let editing = false, color = 0, shade = NORMAL, height = 0, sel = null, hammerOn = false, paintOn = false, xray = false, xk = 0;   // (height 0: Auto)
   let blocks = {};   // "ix_iz_u_v_level" -> the stored number (color + shade)
-  let order = [], orderGlow = [];   // (which block each drawn copy is, so the hammer knows which one it hit)
+  let order = [], orderGlow = [], orderNodes = [];   // (which block each drawn copy is, so the hammer knows which one it hit)
 
   // ---------- The blocks: one instanced mesh for the soft ones, one for the glowing ones, and the halos ----------
   const geo = new RoundedBoxGeometry(B * 0.97, B * 0.97, B * 0.97, 4, B * 0.2);
@@ -195,11 +198,11 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
   nodes.setColorAt(0, new THREE.Color());
   scene.add(nodes);
   const nodeHalo = new THREE.InstancedMesh(new THREE.SphereGeometry(B * 0.13, 16, 12), haloMat(0.9), MAX_BLOCKS);
-  nodeHalo.count = 0; nodeHalo.raycast = () => {};
+  nodeHalo.count = 0;   // (its soft glow is what a click on an orb hits: bigger than the orb, easy to click)
   nodeHalo.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   nodeHalo.setColorAt(0, new THREE.Color());
   scene.add(nodeHalo);
-  // the laser lattice: hairlines through every spot in the room, all three ways, so the orbs sit on its crossings;
+  // the laser lattice: hairlines along every floor square's edges, all three ways, a cage round each square's spots;
   // faint and see-through, brightest close to you and fading off into the distance so it never turns to a fog
   const LASER_VS = 'varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }';
   const LASER_FS = `uniform float strength; varying vec3 vW;
@@ -210,10 +213,11 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
   const links = new THREE.LineSegments(new THREE.BufferGeometry(), linkMat);
   {
+    // (one line per floor square: along the cushions' edges, every three blocks up, and up from every corner)
     const xs = [], zs = [], ys = [];
-    for (let ix = IX0; ix <= IX1; ix++) for (let u = 0; u < 3; u++) xs.push(ix * TILE + (u + 0.5) * B);
-    for (let iz = IZ0; iz <= IZ1; iz++) for (let v = 0; v < 3; v++) zs.push(iz * TILE + (v + 0.5) * B);
-    for (let l = 0; l < MAX; l++) ys.push(BASE + (l + 0.5) * B);
+    for (let ix = IX0; ix <= IX1 + 1; ix++) xs.push(ix * TILE);
+    for (let iz = IZ0; iz <= IZ1 + 1; iz++) zs.push(iz * TILE);
+    for (let l = 0; l <= MAX; l += 3) ys.push(BASE + l * B);
     const x0 = xs[0], x1 = xs[xs.length - 1], z0 = zs[0], z1 = zs[zs.length - 1], y0 = ys[0], y1 = ys[ys.length - 1];
     const pts = [];
     for (const y of ys) { for (const z of zs) pts.push(x0, y, z, x1, y, z); for (const x of xs) pts.push(x, y, z0, x, y, z1); }
@@ -225,6 +229,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
   nodes.visible = nodeHalo.visible = links.visible = false;
   function buildNodes() {
     let n = 0;
+    orderNodes = [];
     q.identity();
     for (const [k, v] of Object.entries(blocks)) {
       if (n >= MAX_BLOCKS) break;
@@ -235,6 +240,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       nodes.setColorAt(n, col);
       nodeHalo.setMatrixAt(n, m4.compose(p, q, sc.setScalar(3.2)));
       nodeHalo.setColorAt(n, col.multiplyScalar(0.5));
+      orderNodes.push(k);
       n++;
     }
     nodes.count = nodeHalo.count = n;
@@ -251,7 +257,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     const t = Math.max(0, (e - 0.5) * 2);   // (the nodes and lines come up as the blocks finish shrinking)
     nodes.material.opacity = t;
     nodeHalo.material.uniforms.strength.value = 0.9 * t;
-    linkMat.uniforms.strength.value = 0.32 * t;
+    linkMat.uniforms.strength.value = 0.5 * t;
     mesh.castShadow = xk < 0.5;
     if (was === 0 && xk > 0) buildNodes();
     rebuild();
@@ -302,15 +308,15 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     }
     return squishMat.get(v);
   }
-  function burst(p, v, n = 14) {
+  function burst(p, v, n = 14, size = 1, up = 1) {
     tint(col, v);
     if (glowOf(v)) col.multiplyScalar(1 + glowOf(v) * 0.6);   // (glowing chunks stay bright)
     for (let i = 0; i < n && parts.length < MAX_CHUNKS; i++) {
       const a = Math.random() * Math.PI * 2, out = 0.8 + Math.random() * 1.6;
       parts.push({ p: p.clone().add(new THREE.Vector3((Math.random() - 0.5) * B * 0.6, (Math.random() - 0.3) * B * 0.5, (Math.random() - 0.5) * B * 0.6)),
-        v: new THREE.Vector3(Math.cos(a) * out, 1.6 + Math.random() * 2.2, Math.sin(a) * out),
+        v: new THREE.Vector3(Math.cos(a) * out * up, (1.6 + Math.random() * 2.2) * up, Math.sin(a) * out * up),
         r: new THREE.Euler(Math.random() * 6, Math.random() * 6, 0), spin: new THREE.Vector3((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, 0),
-        s: 0.7 + Math.random() * 0.6, life: 0, end: 1.1 + Math.random() * 0.5, c: col.clone().multiplyScalar(0.9 + Math.random() * 0.2) });
+        s: (0.7 + Math.random() * 0.6) * size, life: 0, end: 1.1 + Math.random() * 0.5, c: col.clone().multiplyScalar(0.9 + Math.random() * 0.2) });
     }
   }
   function pop(k, v, quiet) {   // (a block going: a quick squish, then the burst)
@@ -373,6 +379,17 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     if (t > 0.6) { hammer.visible = false; swing = null; }
   }
 
+  // ---------- Painting: the block clicked takes the tray's color and shade ----------
+  function paint(k) {
+    const v = valueOf(color, shade);
+    if (blocks[k] == null || blocks[k] === v) return;
+    blocks[k] = v; rebuild();
+    set(ref(db, 'game/blocks/' + k), v).catch(() => {});
+    const p = spotOfKey(k); p.y += B * 0.45;
+    burst(p, v, 9, 0.35, 0.55);   // (a little splash of paint drops)
+    try { sfx.flip(); } catch (e) {}
+  }
+
   // ---------- Placing (never taking away: that's the hammer's job) ----------
   const PAD = { Numpad7: [0, 0], Numpad8: [1, 0], Numpad9: [2, 0], Numpad4: [0, 1], Numpad5: [1, 1], Numpad6: [2, 1], Numpad1: [0, 2], Numpad2: [1, 2], Numpad3: [2, 2] };
   let yawNow = 0;
@@ -431,9 +448,10 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
   const css = document.createElement('style');
   css.textContent = `
     #buildBtn { left: 16px; bottom: 68px; font-size: 20px; }
-    #buildBtn.on, #hammerBtn.on, #xrayBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
-    #hammerBtn { left: 16px; bottom: 120px; font-size: 20px; display: none; }
-    #xrayBtn { left: 16px; bottom: 172px; font-size: 20px; display: none; }
+    #buildBtn.on, #paintBtn.on, #hammerBtn.on, #xrayBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
+    #paintBtn { left: 16px; bottom: 120px; font-size: 20px; display: none; }
+    #hammerBtn { left: 16px; bottom: 172px; font-size: 20px; display: none; }
+    #xrayBtn { left: 16px; bottom: 224px; font-size: 20px; display: none; }
     #buildTray { position: fixed; left: 50%; bottom: 14px; z-index: 12; transform: translate(-50%, 160%); transition: transform 0.35s cubic-bezier(.2,1.3,.4,1);
       display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 10px 14px; border-radius: 16px; max-width: calc(100vw - 130px);
       background: rgba(20,16,12,0.82); box-shadow: 0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(201,162,39,0.6); }
@@ -463,6 +481,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     return b;
   };
   const btn = corner('buildBtn', 'Build', '🧱');
+  const paintBtn = corner('paintBtn', 'Paint (P)', '🖌');
   const hammerBtn = corner('hammerBtn', 'Hammer (H)', '🔨');
   const xrayBtn = corner('xrayBtn', 'X-ray (X)', '👁');
   const tray = document.createElement('div');
@@ -509,9 +528,11 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     heights.forEach((b, i) => b.classList.toggle('on', i === height));
   }
   refreshTray();
-  function setHammer(on) { hammerOn = on; hammerBtn.classList.toggle('on', hammerOn); }
+  function setHammer(on) { hammerOn = on; if (on) paintOn = false; hammerBtn.classList.toggle('on', hammerOn); paintBtn.classList.toggle('on', paintOn); }
+  function setPaint(on) { paintOn = on; if (on) hammerOn = false; hammerBtn.classList.toggle('on', hammerOn); paintBtn.classList.toggle('on', paintOn); }
   function setXray(on) { xray = on; xrayBtn.classList.toggle('on', xray); }
   hammerBtn.addEventListener('click', () => { hammerBtn.blur(); setHammer(!hammerOn); });
+  paintBtn.addEventListener('click', () => { paintBtn.blur(); setPaint(!paintOn); });
   xrayBtn.addEventListener('click', () => { xrayBtn.blur(); setXray(!xray); });
 
   // ---------- Edit mode: floating ----------
@@ -520,9 +541,9 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
     editing = !editing;
     btn.classList.toggle('on', editing);
     tray.classList.toggle('up', editing);
-    hammerBtn.style.display = xrayBtn.style.display = editing ? 'block' : 'none';
+    paintBtn.style.display = hammerBtn.style.display = xrayBtn.style.display = editing ? 'block' : 'none';
     if (editing) pos.copy(camera.position);
-    else { closeAsk(); setHammer(false); setXray(false); }
+    else { closeAsk(); setHammer(false); setPaint(false); setXray(false); }
     showMarks();
     if (onEdit) onEdit(editing, pos);
   }
@@ -531,7 +552,7 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
   const wrap = (x, n) => ((x % n) + n) % n;
   return {
     get editing() { return editing; },
-    get cursor() { return editing && hammerOn ? HAMMER_CURSOR : null; },
+    get cursor() { return !editing ? null : hammerOn ? HAMMER_CURSOR : paintOn ? BRUSH_CURSOR : null; },
     toggle,
     start() {
       onValue(ref(db, 'game/blocks'), s => {
@@ -555,17 +576,27 @@ export function makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit })
       if (e.repeat) return false;
       const k = e.key.toLowerCase();
       if (k === 'h') { setHammer(!hammerOn); return true; }
+      if (k === 'p') { setPaint(!paintOn); return true; }
       if (k === 'x') { setXray(!xray); return true; }
       if (k === 'r') { ask.classList.add('up'); return true; }
       if (k === 't') { testWall(); return true; }
       return false;
     },
     pick(hits) {   // (a click: with the hammer, the block under the pointer gets smashed; otherwise that square's picked)
+      if (xray) {   // (x-ray: a click on an orb picks up its color and shade, ready to build or paint with)
+        const o = hits.find(x => x.object === nodeHalo && x.instanceId != null && orderNodes[x.instanceId]);
+        if (o) {
+          [color, shade] = decode(blocks[orderNodes[o.instanceId]]);
+          refreshTray();
+          try { sfx.ping(); } catch (e) {}
+          return;
+        }
+      }
       const h = hits.find(x => x.object === mesh || x.object === glowMesh || x.object.userData.floor);
       if (!h) return;
-      if (hammerOn) {
+      if (hammerOn || paintOn) {
         const k = h.instanceId == null ? null : h.object === mesh ? order[h.instanceId] : h.object === glowMesh ? orderGlow[h.instanceId] : null;
-        if (k) smash(k);
+        if (k) { if (hammerOn) smash(k); else paint(k); }
         return;
       }
       const p = h.point.clone();
