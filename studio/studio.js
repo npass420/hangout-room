@@ -647,7 +647,7 @@ camera.rotation.set(pitch, yaw, 0);
 const SIT = 0.9, PLOP = [90, 9], RISE = [30, 11];   // (eye height sitting; how it pulls you down, and back up)
 const seat = { sitting: false, y: EYE, fall: 0, settling: false };
 function toggleSit() {
-  if (chair != null) { leaveThrone(); return; }   // (in a throne: Z gets you up)
+  if (chair != null) { if (curtain.closed) leaveDen(); else leaveThrone(); return; }   // (in a throne: Z gets you up; in the den, out of it)
   if (!seat.sitting) {   // (standing right beside a free throne: Z sits you in it)
     const near = THRONES.findIndex(t => Math.hypot(t.x - me.x, t.z - me.z) < 0.95);
     if (near >= 0 && !throneTaken(near)) { sitThrone(near); return; }
@@ -824,6 +824,58 @@ function portIn(k) {
   }, 640);
 }
 
+// ---------- Leaving the den (Leave the den, or Z): a flash, and you're out in the gallery, facing where the den is ----------
+// Someone's still in it: behind the flash the den's already gone and the portal nodes are there. You were the last one:
+// behind the flash the den clears for everyone, and the black glass column stands a moment (everything getting ready
+// behind it), then lifts, leaving the table.
+function leaveDen() {
+  if (porting || anim || chair == null || gameCam) return;
+  porting = true;
+  const t0 = performance.now();
+  whiteout.style.transition = 'opacity 0.3s'; whiteout.style.opacity = '1';
+  setTimeout(() => {
+    const others = Object.entries(S.presence).some(([id, p]) => id !== myId && Number.isInteger(p.ch));
+    const t = THRONES[chair];
+    chair = null;
+    seat.sitting = seat.settling = false; seat.y = EYE;
+    me.tx = me.tz = null; marker.visible = false;
+    [me.x, me.z] = clampSpot(Math.sin(t.a) * (DEN_KEEP + 0.5), Math.cos(t.a) * (DEN_KEEP + 0.5));
+    yaw = Math.atan2(me.x, me.z); pitch = -0.05;   // (facing the den)
+    setFov(BASE_FOV);
+    camera.position.set(me.x, EYE, me.z); camera.quaternion.copy(viewQuat(yaw, pitch));
+    if (others) {   // (the den's gone, the nodes there at once)
+      denGone = true; denWasHidden = true; goneFor = 1;
+      nodes.forEach((o, k) => { o.glow = 0; o.k = throneTaken(k) ? 0 : 1; });
+    } else { curtain.open(); clearDen(); }   // (the den clears: denFrame stands the glass column, which lifts after a moment)
+    sendSpot(true); game.refresh();
+    try { renderer.compile(scene, camera); } catch (e) {}
+    let good = 0, last = performance.now();
+    (function settle() {
+      const now = performance.now(), smooth = now - last < 40; last = now;
+      good = smooth ? good + 1 : 0;
+      if (good < 6 && now - t0 < 4000) { requestAnimationFrame(settle); return; }
+      whiteout.style.transition = 'opacity 0.9s'; whiteout.style.opacity = '0';
+      porting = false;
+    })();
+  }, 340);
+}
+// ---------- Changing thrones: sitting at the table, click an open throne and you glide round the table into it ----------
+function switchThrone(k) {
+  if (anim || porting || chair == null || k === chair || gameCam) return;
+  if (throneTaken(k)) { showBanner('Someone is sitting there'); return; }
+  const from = THRONES[chair].a, t = THRONES[k];
+  let d = t.a - from;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  chair = k;
+  me.x = t.x - Math.sin(t.a) * 0.06; me.z = t.z - Math.cos(t.a) * 0.06;
+  yaw = Math.atan2(t.x, t.z); pitch = -0.3;
+  anim = { fromPos: camera.position.clone(), fromQuat: camera.quaternion.clone(), toPos: new THREE.Vector3(me.x, CHAIR_EYE, me.z),
+    toQuat: viewQuat(yaw, pitch), t: 0, dur: 0.7 + Math.abs(d) * 0.35, done: () => { seat.y = CHAIR_EYE; },
+    around: { a0: from, d, r: THRONE_AT - 0.06 } };   // (round the table, swinging out behind the thrones on the way)
+  sendSpot(true); game.refresh();
+}
+
 // ---------- Mouse / touch ----------
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
@@ -905,7 +957,7 @@ window.addEventListener('pointerup', e => {
   else if (p.lamp) lampClicked();   // (the lamp: first the curtain comes down, then each click a new sky)
   else if (p.summon) summon.choose(p.summon);
   else if (p.circle) summon.circleClicked();
-  else if (p.throne != null) { if (chair == null) sitThrone(p.throne); }
+  else if (p.throne != null) { if (chair == null) sitThrone(p.throne); else switchThrone(p.throne); }
   else if (p.sketch) enterSketch();
   else if (p.lightSwitch) nextNeon();
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
@@ -928,32 +980,43 @@ document.body.appendChild(leaveBtn);
 leaveBtn.addEventListener('click', () => {
   leaveBtn.blur();
   if (gameCam) { game.leave(); return; }   // (in the game: out of it, back to the den)
-  if (chair != null) leaveThrone();         // (out of your throne, back to the gallery; the den stays for anyone still in it)
+  if (chair != null) leaveDen();            // (a flash, and you're out in the gallery; the den stays for anyone still in it)
 });
-// In the game: the view button steps Isometric (close, angled down from your side) → Overhead (straight down) → Free (drag round the board,
-// scroll in and out), and in Free a lock button holds the view where it is
-const VIEWS = { angled: '◩ View: Isometric', top: '⬒ View: Overhead', free: '✥ View: Free' };
-const topBtn = document.createElement('button');
-topBtn.className = 'corner'; topBtn.textContent = VIEWS.angled;
-topBtn.style.cssText = 'left:16px; top:64px; width:auto; padding:0 16px; border-radius:20px; font-size:15px; display:none;';
-document.body.appendChild(topBtn);
-const lockBtn = document.createElement('button');
-lockBtn.className = 'corner'; lockBtn.textContent = '🔓 Lock view';
-lockBtn.style.cssText = 'left:16px; top:112px; width:auto; padding:0 16px; border-radius:20px; font-size:15px; display:none;';
-document.body.appendChild(lockBtn);
-topBtn.addEventListener('click', () => {
-  topBtn.blur();
+// In the game: four small view buttons down the left, always there: close isometric (angled down from your side), top
+// (straight down), look around (drag round the board, scroll in and out) and lock (holds the view where it is; from
+// the other two it locks wherever you're looking from now)
+const viewBtns = {};
+[['angled', '◩', 'Close isometric'], ['top', '⬒', 'Top'], ['free', '✥', 'Look around'], ['lock', '🔓', 'Lock the view']].forEach(([v, icon, title], i) => {
+  const b = document.createElement('button');
+  b.className = 'corner'; b.textContent = icon; b.title = title;
+  b.style.cssText = `left:16px; top:${68 + i * 50}px; display:none;`;
+  document.body.appendChild(b);
+  b.addEventListener('click', () => { b.blur(); setGameView(v); });
+  viewBtns[v] = b;
+});
+function setGameView(v) {
   if (!gameCam) return;
-  if (gameCam.view === 'angled') gameCam.view = 'top';
-  else if (gameCam.view === 'top') {   // (free starts from wherever you're looking from now)
-    gameCam.view = 'free'; gameCam.lock = false;
-    const off = camera.position.clone().sub(BOARD_MID), d = off.length();
-    gameCam.od = d; gameCam.op = Math.max(0.12, Math.min(1.5, Math.asin(off.y / d))); gameCam.oy = Math.atan2(off.x, off.z);
-  } else gameCam.view = 'angled';
-  topBtn.textContent = VIEWS[gameCam.view];
-  lockBtn.textContent = '🔓 Lock view';
-});
-lockBtn.addEventListener('click', () => { lockBtn.blur(); if (gameCam) { gameCam.lock = !gameCam.lock; lockBtn.textContent = gameCam.lock ? '🔒 View locked' : '🔓 Lock view'; } });
+  if (v === 'lock') {
+    if (gameCam.view !== 'free') setGameView('free');
+    gameCam.lock = !gameCam.lock;
+  } else if (v !== gameCam.view) {
+    if (v === 'free') {   // (free starts from wherever you're looking from now)
+      const off = camera.position.clone().sub(BOARD_MID), d = off.length();
+      gameCam.od = d; gameCam.op = Math.max(0.12, Math.min(1.5, Math.asin(off.y / d))); gameCam.oy = Math.atan2(off.x, off.z);
+    }
+    gameCam.view = v; gameCam.lock = false;
+  }
+  showViewBtns();
+}
+function showViewBtns() {   // (the view you're in, and the lock when it's on, lit gold)
+  for (const [v, b] of Object.entries(viewBtns)) {
+    b.style.display = gameCam ? 'block' : 'none';
+    const on = !!gameCam && (v === 'lock' ? gameCam.lock : gameCam.view === v);
+    b.style.background = on ? 'rgba(233,201,143,0.92)' : '';
+    b.style.color = on ? '#2a1c10' : '';
+  }
+  viewBtns.lock.textContent = gameCam && gameCam.lock ? '🔒' : '🔓';
+}
 
 // ---------- The game view: Start locks you onto the board ----------
 // Your view glides over the board from your side and stays there; the thrones, the lamp and everyone else go, the
@@ -973,15 +1036,16 @@ function gameView(side, watching) {
     anim = null;   // (any camera glide in progress gives way to the game view)
     me.tx = me.tz = null; marker.visible = false; seat.sitting = seat.settling = false;
     gameCam = { side, watching: !!watching, view: 'angled', lock: false, oy: 0, op: 0.9, od: 1.6 };
-    topBtn.textContent = VIEWS.angled; lockBtn.textContent = '🔓 Lock view';
     vignette.style.opacity = '1';
     leaveBtn.textContent = watching ? '⤺ Stop watching' : '⤺ Leave game';
     setFov(GAME_FOV);
+    showViewBtns();
   } else if (gameCam) {
     setFov(BASE_FOV);
     gameCam = null;
     vignette.style.opacity = '0';
     leaveBtn.textContent = '⤺ Leave the den';
+    showViewBtns();
     camera.up.set(0, 1, 0);
     const t = THRONES[chair != null ? chair : 1];
     me.x = t.x - Math.sin(t.a) * 0.06; me.z = t.z - Math.cos(t.a) * 0.06;   // (back in your throne)
@@ -1095,7 +1159,7 @@ pillar.add(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.1, 2.7, 32, 1, true
   sp.frustumCulled = false; sp.userData.px = sp.material.uniforms.pPx;
   pillar.add(sp); pillar.userData.sparks = sp;
 }
-let denWasHidden = false, denGone = false, goneFor = 0, emptyFor = 0, denLoading = true, hadSitters = false;
+let denWasHidden = false, denGone = false, goneFor = 0, emptyFor = 0, denLoading = true, hadSitters = false, wasClosed = false;
 function denFrame(dt) {
   const seatedIds = new Set(Object.entries(S.presence).filter(([id, p]) => id !== myId && Number.isInteger(p.ch)).map(([id]) => id));
   const sitting = chair != null || seatedIds.size > 0;
@@ -1108,6 +1172,14 @@ function denFrame(dt) {
     if (emptyFor > 2) { emptyFor = 0; hadSitters = false; clearDen(); }
   } else emptyFor = 0;
   const inside = chair != null;
+  // the den clearing, seen from out in the gallery: straight to the black glass column, held a moment (everything getting
+  // ready behind it), then it lifts, leaving the table (no glitter, no nodes coming and going)
+  if (wasClosed && !curtain.closed && !inside && !denLoading) {
+    curtain.toGlass(1.2); curtain.glowIn();
+    denGone = false; denWasHidden = false;
+    nodes.forEach(o => { o.k = 0; o.glow = 0; });
+  }
+  wasClosed = curtain.closed;
   // (out in the gallery, curtain down: the den's gone, until it lifting has pulled the sky back in round the table)
   const hidden = !inside && (curtain.closed ? curtain.down : curtain.spreadOut);
   if (denLoading) {   // (just arrived: the den as it is, at once: if it's down, only the nodes, nothing played out)
@@ -1157,8 +1229,6 @@ function denFrame(dt) {
   }
   vanish.update(dt);
   leaveBtn.style.display = gameCam || (inside && curtain.closed) ? 'block' : 'none';
-  topBtn.style.display = gameCam ? 'block' : 'none';
-  lockBtn.style.display = gameCam && gameCam.view === 'free' ? 'block' : 'none';
 }
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
@@ -1167,8 +1237,14 @@ renderer.setAnimationLoop(() => {
   else if (anim) {
     anim.t += dt;
     const e = easeInOut(Math.min(anim.t / anim.dur, 1));
-    camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
-    camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
+    if (anim.around) {   // (changing thrones: round the table, facing it)
+      const a = anim.around, th = a.a0 + a.d * e, out = Math.sin(Math.PI * e), r = a.r + out * 0.85;
+      camera.position.set(Math.sin(th) * r, CHAIR_EYE + out * 0.3, Math.cos(th) * r);
+      camera.quaternion.copy(viewQuat(th, -0.3 - out * 0.12));
+    } else {
+      camera.position.lerpVectors(anim.fromPos, anim.toPos, e);
+      camera.quaternion.slerpQuaternions(anim.fromQuat, anim.toQuat, e);
+    }
     if (anim.t >= anim.dur) { const done = anim.done; anim = null; if (done) done(); }
   } else if (!S.atSketch) {
     keyWalk(dt);

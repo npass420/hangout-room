@@ -15,6 +15,8 @@
 //                                  hide: the room's things inside it to hide while the sky is in (the ring light)
 //     .group                       add it to the scene (it stands centered on x = 0, z = 0)
 //     .close() / .open()           drop it, fade in the sky, spread it out / pull it in, fade it out, lift it
+//     .toGlass(hold)               (seen from outside as the den clears) straight to the plain black glass column, down,
+//                                  waiting hold seconds (while everything gets ready behind it), then it lifts
 //     .closed                      it's closing (or closed); .down: all the way down; .skyIn: the sky is in
 //     .lampDown(on)                the lamp floats down over the table (someone's sitting), or back up
 //     onRoom(on)                   (option) called when the room should switch off (sky in) or back on
@@ -33,8 +35,8 @@ const SKIES = [                       // the backgrounds
     stars: [0.85, 0.95, 1.0], aurora: 1 },                                                                   //   clouds, the star ring, aurora
   { pic: 'textures/sky_island.jpg', picB: 'textures/sky_island_nomoon.jpg', stars: [1.0, 0.95, 0.85],       // your lantern tree lagoon, alive
     low: 0.94, span: 2.29, horizon: 0.41, top: [0.0052, 0.022, 0.067], water: 1 },
-  { pic: 'textures/castle_window.jpg', picB: 'textures/castle_fire.jpg', stars: [1.0, 0.85, 0.8],          // the castle: a real room
-    top: [0.006, 0.004, 0.006], hall: 1 }
+  { pic: 'textures/castle_window.jpg', picB: 'textures/castle_fire.jpg', vault: 'textures/castle_vault.jpg',   // the castle: a real room
+    stars: [1.0, 0.85, 0.8], top: [0.006, 0.004, 0.006], hall: 1 }
 ];
 // The skies:
 //   deep space (aurora): everything in it moves on its own: three layers of twinkling stars each turning its own way,
@@ -45,8 +47,9 @@ const SKIES = [                       // the backgrounds
 //     so you float between two skies with the star ring where they meet.
 //   hall (the castle): a real eight-sided room round the table, traced from wherever you're looking from, so it stands
 //     true from every seat: flat walls (the window bay picture on six, the fireplace on two facing each other), a dark
-//     carved pillar at each corner covering the joins, a dark vault rising to a gold boss with ribs running up from
-//     the pillars, and a polished black marble floor that reflects it all. Its candles and fires flicker.
+//     carved pillar at each corner covering the joins, the vault overhead (your Kindroid castle ceiling picture, seen
+//     from beneath: black carved ribs running up from the pillars to the gold boss right over the table, crimson and
+//     gold panels between), and a polished black marble floor that reflects it all. Its candles and fires flicker.
 //   water (the lagoon): the picture wraps round you twice (the second copy mirrored, so there's no seam, and with its
 //     moon taken out, so there's one moon), horizon at eye level. low and span: how it runs up the curtain. Its water
 //     ripples, the reflections wobble, the blue glow twinkles and the lanterns flicker; overhead it eases into its own
@@ -55,6 +58,16 @@ const SKIES = [                       // the backgrounds
 // The curtain's own stars turn slowly the other way, so the sky lives against them.
 const loader = new THREE.TextureLoader();
 const pictures = {};
+function ceilingPicture(file) {   // (the castle's vault: seen at a slant from far below, so it keeps its mipmaps and stays crisp)
+  if (!pictures[file]) {
+    const t = loader.load(new URL(file, import.meta.url).href);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping;
+    t.anisotropy = 16;
+    pictures[file] = t;
+  }
+  return pictures[file];
+}
 function picture(file) {
   if (!pictures[file]) {
     const t = loader.load(new URL(file, import.meta.url).href);
@@ -164,18 +177,13 @@ const SKY_SHADER = `
       col *= 1.0 + warm * (fl - 0.5) * (fire ? 0.8 : 0.6);
       col *= 0.55 + 0.45 * smoothstep(0.0, 0.4, hp.y);                       // (darker down at the floor)
       col *= 0.7 + 0.3 * smoothstep(0.0, 0.12, min(uv.x, 1.0 - uv.x));        // (and into the corners)
-    } else if (kind < 2.5) {   // the vault: dark, candle warm near the walls, ribs up from the pillars, a gold boss
-      float r = length(hp.xz), phi = atan(hp.x, hp.z);
-      float ca = mod(phi - P8, P4), rd = min(ca, P4 - ca) * r;
-      float rib = smoothstep(0.16, 0.07, rd) * smoothstep(0.3, 0.9, r);
-      float edge = smoothstep(0.03, 0.0, abs(rd - 0.12)) * smoothstep(0.3, 0.9, r);
-      float lit = pow(smoothstep(RA * 0.35, RA, r), 2.5);
-      col = vec3(0.004, 0.003, 0.003) + vec3(0.03, 0.011, 0.005) * lit;
-      col = mix(col, vec3(0.012, 0.008, 0.007) * (1.0 + 2.0 * lit), rib);
-      col += vec3(0.5, 0.33, 0.12) * edge * 0.12 * (0.25 + 0.75 * lit);
-      float boss = smoothstep(0.55, 0.45, r);
-      col = mix(col, vec3(0.16, 0.1, 0.035) * (0.6 + 0.4 * noise(vec3(hp.xz * 30.0, 1.0))), boss);
-      col += vec3(0.5, 0.3, 0.1) * smoothstep(0.06, 0.0, abs(r - 0.6)) * 0.1;   // (a gold ring round the boss)
+    } else if (kind < 2.5) {   // the vault: your castle ceiling picture, seen from beneath, its gold boss right over the table
+      vec2 q = hp.xz / (RA * 2.08) + 0.5;   // (the walls' tops land just inside the picture's edge, the ribs over the pillars)
+      col = texture2D(belt, vec2(q.x, 1.0 - q.y)).rgb * 0.8;
+      float warm = smoothstep(0.2, 0.45, col.r - col.b) * smoothstep(0.3, 0.75, col.r);
+      float fl = noise(vec3(q * 30.0, time * 2.6)) * 0.7 + noise(vec3(q * 8.0, time * 1.2)) * 0.3;
+      col *= 1.0 + warm * (fl - 0.5) * 0.3;   // (the gold catching the flickering candlelight)
+      col *= 1.0 - 0.45 * smoothstep(RA * 0.8, RA * 1.05, length(hp.xz));   // (darker into the rim where it meets the walls)
     } else if (kind < 3.5) {   // the floor (its marble: the reflection is added by the caller)
       col = marble(hp.xz);
       col += vec3(0.09, 0.035, 0.012) * pow(smoothstep(RA * 0.45, RA, length(hp.xz)), 2.0) * 0.6;   // (candlelight pooling by the walls)
@@ -493,7 +501,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     glitches.instanceMatrix.needsUpdate = true;
   }
 
-  let glowAge = 99;
+  let glowAge = 99, hold = 0;
   let drop = 0, fade = 0, spread = 0, closing = false, skyIndex = 0, lampWant = 0, lampK = 0, lastRoom = true;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky; spread: 0 at the table .. 1 the whole room)
   const ease = k => k * k * (3 - 2 * k);
   function show() {
@@ -524,6 +532,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
       u.starTint.value.set(...s.stars);
       u.usePic.value = s.pic ? 1 : 0; u.aurora.value = s.aurora ? 1 : 0; u.water.value = s.water ? 1 : 0; u.hall.value = s.hall ? 1 : 0;
       if (s.belt) u.belt.value = picture(s.belt);
+      if (s.vault) u.belt.value = ceilingPicture(s.vault);   // (the castle has no star ring: its ceiling picture goes there)
       if (s.pic) { u.pic.value = picture(s.pic); u.picB.value = picture(s.picB || s.pic); u.topCol.value.set(...s.top); }
       if (s.water) { u.picLow.value = s.low; u.picSpan.value = s.span; u.horizon.value = s.horizon; }
   }
@@ -537,7 +546,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     get spreadOut() { return spread > 0.001; },   // (spread out past the table: from outside, it has to stay hidden)
     get skyIndex() { return skyIndex; },
     SKY_COUNT: SKIES.length,
-    close() { closing = true; },
+    close() { closing = true; hold = 0; },
     glowIn() { glowAge = 0; },   // (glowing gold and glittering, then cooling to black over a moment)
     // snap(): straight to where it's going, no animation (on load: the den as it was left, without playing it all out)
     snap() { drop = fade = spread = closing ? 1 : 0; sparkAge = 99; stepSparkles(0); show(); },
@@ -548,6 +557,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
       try { renderer.compile(scene, camera); } catch (e) {}
       for (const [o, v] of was) o.visible = v;
     },
+    toGlass(wait = 1.2) { spread = fade = 0; hold = wait; sparkAge = -wait; show(); },
     open() { if (closing) sparkAge = -(SPREAD + FADE) * (spread > 0 ? 1 : fade > 0 ? 0.5 : 0); closing = false; },   // (the sparkles start as the glass begins to rise)
     toggle() { closing = !closing; },
     setSky(i) {
@@ -575,7 +585,8 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
         else if (fade < 1) fade = Math.min(1, fade + dt / FADE);
         else spread = Math.min(1, spread + dt / SPREAD);
       } else {         // (it pulls back in first, then the sky fades out, then up)
-        if (spread > 0) spread = Math.max(0, spread - dt / SPREAD);
+        if (hold > 0) hold = Math.max(0, hold - dt);   // (holding, down, before it lifts)
+        else if (spread > 0) spread = Math.max(0, spread - dt / SPREAD);
         else if (fade > 0) fade = Math.max(0, fade - dt / FADE);
         else drop = Math.max(0, drop - dt / DROP);
       }
