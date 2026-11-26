@@ -339,29 +339,35 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 
-// The portal to the Game Room, a small framed picture hung in the middle of the back wall. There's room for five
-// along the wall (centers about x = -4.6, -2.3, 0, 2.3, 4.6); this one has the center spot. Click it: it flares, a golden flash, and
-// you're in the Game Room.
-const portalFrame = makePortalFrame();
-portalFrame.group.position.set(0, 1.75, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
-portalFrame.group.rotation.y = Math.PI;   // facing into the room
-scene.add(portalFrame.group);
+// The portals, small framed pictures hung side by side in the middle of the back wall: the Maker on the left, the Game
+// Room in the middle, the Scene Room on the right (as you face the wall). There's room for five along the wall
+// (centers about x = -4.6, -2.3, 0, 2.3, 4.6). Click one: it flares, a golden flash, and you're in that room.
+const PORTALS = [['maker', 2.3, 'Maker'], ['game', 0, 'Game Room'], ['scene', -2.3, 'Scene Room']];   // (x is the wall's own: + is on your left as you face it)
+const portalFrames = PORTALS.map(([room, x, name]) => {
+  const f = makePortalFrame();
+  f.group.position.set(x, 1.75, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
+  f.group.rotation.y = Math.PI;   // facing into the room
+  f.group.traverse(o => { if (o.userData.portalFrame) { o.userData.portalFrame = room; o.userData.portalName = name; } });
+  scene.add(f.group);
+  return f;
+});
 let leaving = false;
-function goGameRoom() {
+function goRoom(room) {
   if (leaving || porting || chair != null || anim) return;
   leaving = true;
   me.tx = me.tz = null; marker.visible = false;
+  const frame = portalFrames[Math.max(0, PORTALS.findIndex(p => p[0] === room))];
   const t0 = performance.now();
   (function glowUp() {
     const e = Math.min((performance.now() - t0) / 450, 1);
-    portalFrame.flare(e * e);
+    frame.flare(e * e);
     if (e < 1) requestAnimationFrame(glowUp);
   })();
   setTimeout(() => { whiteout.style.transition = 'opacity 0.35s'; whiteout.style.opacity = '1'; }, 300);
   // (take yourself off this room's list first, so you don't show in both rooms while the server notices you left)
   setTimeout(() => {
     let gone = false;
-    const go = () => { if (!gone) { gone = true; location.href = location.pathname + '?room=game'; } };
+    const go = () => { if (!gone) { gone = true; location.href = location.pathname + '?room=' + room; } };
     remove(ref(db, 'room/presence/' + myId)).catch(() => {}).then(go);
     setTimeout(go, 1200);   // (if the network's slow, go anyway)
   }, 700);
@@ -932,7 +938,7 @@ function pickUnder(e) {   // the first real thing under the pointer (not the neo
   if (u.throne != null) return { throne: u.throne };
   if (u.sketch) return { sketch: true };
   if (u.lightSwitch) return { lightSwitch: true };
-  if (u.portalFrame) return { portalFrame: true };
+  if (u.portalFrame) return { portalFrame: u.portalFrame, portalName: u.portalName };
   if (u.gallery) return { gallery: true };   // the gallery opens its own viewer
   if (u.floor) return { floor: hit.point };
   return null;
@@ -971,6 +977,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = S.atSketch || anim ? null : pickUnder(e);
+    canvas.title = p && p.portalName ? p.portalName : '';   // (a portal says where it goes when you hover it)
     canvas.style.cursor = p && (p.lamp || p.portal != null || p.summon || p.circle || (p.board && game.canTap(p.board)) || p.throne != null || p.sketch || p.lightSwitch || p.portalFrame || p.gallery || p.floor) ? 'pointer' : 'grab';
   }
 });
@@ -990,7 +997,7 @@ window.addEventListener('pointerup', e => {
   else if (p.throne != null) { if (chair == null) sitThrone(p.throne); else switchThrone(p.throne); }
   else if (p.sketch) enterSketch();
   else if (p.lightSwitch) nextNeon();
-  else if (p.portalFrame) goGameRoom();
+  else if (p.portalFrame) goRoom(p.portalFrame);
   else if (p.floor) walkTo(p.floor.x, p.floor.z);
 });
 
@@ -1301,7 +1308,7 @@ renderer.setAnimationLoop(() => {
   curtain.update(dt);
   summon.update(dt);
   game.update(clock.elapsedTime);
-  portalFrame.update(clock.elapsedTime);
+  for (const f of portalFrames) f.update(clock.elapsedTime);
   updateSketch(dt);
   renderer.render(scene, camera);   // (no extra glow pass: it only cost the computer without making the pieces better)
 });

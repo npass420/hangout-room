@@ -3,11 +3,14 @@
 // A cover of falling snow (shaded flakes at every depth, drifting on a gentle wind over a deep night sky) hides the
 // room while it loads; then the cover fades and the gallery shows,
 // with the name box over it. Type your name (or keep the saved one) and press Enter or ✓ to step in.
-// ?room=game opens the Game Room instead (that's where the gallery's portal takes you, and its portal brings you back).
+// ?room=game opens the Game Room instead, ?room=maker the Maker and ?room=scene the Scene Room (that's where the gallery's
+// three portals take you, and each one's own portal brings you back).
 // =====================================================================
 const ROOMS = {
   gallery: { name: 'Doodle Gallery', file: './studio/studio.js' },
-  game:    { name: 'Game Room', file: './game/games.js' }
+  game:    { name: 'Game Room', file: './game/games.js' },
+  maker:   { name: 'Maker', file: './maker/maker.js' },
+  scene:   { name: 'Scene Room', file: './maker/scene.js' }
 };
 const asked = new URLSearchParams(location.search).get('room');
 const room = ROOMS[asked] ? asked : 'gallery';

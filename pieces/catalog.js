@@ -19,6 +19,9 @@ export const OBJECTS = {
     'Othello board (crystal and gold)': 'othelloboard.js',
     'Othello game (plays itself)': 'othellodisc.js',
     'Portal frame (3x close-up)': 'portalframe.js'
+  },
+  'Rooms': {
+    'Holodeck dome (small, forms by itself)': 'holodome.js'
   }
 };
 // >>>>> END OF FILE: HangoutRoom/pieces/catalog.js <<<<<

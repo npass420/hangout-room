@@ -1,6 +1,6 @@
 // =====================================================================
 // world.js — the connection to the online database, and who's online everywhere. Every page shares it.
-// It watches all the places at once (the Doodle Gallery and the Game Room) and lists everyone online,
+// It watches all the places at once (the Doodle Gallery, the Game Room, the Maker and the Scene Room) and lists everyone online,
 // each name with a little icon for where they are. The list is in the room's panel (top right; a 👥 button on phones).
 // =====================================================================
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
@@ -22,7 +22,9 @@ export const myId = 'u' + Math.random().toString(36).slice(2, 10) + Date.now().t
 // ---------- The places, and the little icon for each ----------
 const PLACES = [
   { key: 'gallery', path: 'room/presence',   icon: '🎨', name: 'Doodle Gallery' },
-  { key: 'game',    path: 'game/presence',   icon: '🐸', name: 'Game Room' }
+  { key: 'game',    path: 'game/presence',   icon: '🐸', name: 'Game Room' },
+  { key: 'maker',   path: 'maker/presence',  icon: '🛠', name: 'Maker' },
+  { key: 'scene',   path: 'scene/presence',  icon: '🌌', name: 'Scene Room' }
 ];
 const COLORS = ['#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#3949ab', '#8e24aa'];   // the rooms' rainbow name colors
 function doing(key, p) {   // a few words on what they're up to, where the room says
