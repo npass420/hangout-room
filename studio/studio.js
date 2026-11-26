@@ -339,11 +339,11 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
   scene.add(switchGroup);
 })();
 
-// The portal to the Game Room, hung in the middle of the back wall. The wall is sized for five of these side by side
-// (centers at x = -4.6, -2.3, 0, 2.3, 4.6); this one has the center spot. Click it: it flares, a golden flash, and
+// The portal to the Game Room, a small framed picture hung in the middle of the back wall. There's room for five
+// along the wall (centers about x = -4.6, -2.3, 0, 2.3, 4.6); this one has the center spot. Click it: it flares, a golden flash, and
 // you're in the Game Room.
 const portalFrame = makePortalFrame();
-portalFrame.group.position.set(0, 0, R2 - 0.16);
+portalFrame.group.position.set(0, 1.7, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
 portalFrame.group.rotation.y = Math.PI;   // facing into the room
 scene.add(portalFrame.group);
 let leaving = false;

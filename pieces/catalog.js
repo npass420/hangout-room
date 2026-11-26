@@ -18,7 +18,7 @@ export const OBJECTS = {
     'Board forming (loops)': 'summon.js',
     'Othello board (crystal and gold)': 'othelloboard.js',
     'Othello game (plays itself)': 'othellodisc.js',
-    'Portal frame (to the Game Room)': 'portalframe.js'
+    'Portal frame (4x close-up)': 'portalframe.js'
   }
 };
 // >>>>> END OF FILE: HangoutRoom/pieces/catalog.js <<<<<

@@ -6,16 +6,19 @@
 // with a soft glow over it. Inside, the portal: neon rings of hot pink, teal and violet spiraling slowly inward to a
 // bright white core, stardust twinkling through it, the whole thing gently breathing. Its light spills pink onto the
 // gold and the black gloss.
-//   makePortalFrame()   { group (standing on y = 0, centered, facing +z), update(t), flare(k): 0 .. 1 brighter }
+//   makePortalFrame()   { group (its middle at 0, facing +z, SIZE of the built size), update(t), flare(k): 0 .. 1 brighter }
 //     everything in it is marked userData.portalFrame, for clicking
-//   build()             the Workshop's look at it (it runs itself)
+//   build()             the Workshop's look at it, 4x close-up, standing on y = 0 (it runs itself)
 // =====================================================================================================================
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { GOLD } from './goldjewel.js';
+import { GOLD as GOLD_SHARED } from './goldjewel.js';
+import { softEnv } from '../checkers/pieceenv.js';
 
-const W = 1.8, H = 2.7, D = 0.3, OW = 1.04, OH = 1.94, LIFT = 0.12;   // outside size, depth, the opening, how high it stands
+const W = 1.8, H = 2.7, D = 0.3, OW = 1.04, OH = 1.94;   // outside size, depth, the opening (built big, then shrunk)
+export const SIZE = 0.2;   // how big it hangs: a fifth of the built size, about 36 x 54 cm, a picture on the wall
 const STONE = new THREE.MeshPhysicalMaterial({ color: 0x0b0b0e, roughness: 0.2, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
+const GOLD = GOLD_SHARED.clone();   // (its own copy: the reflections set on it below stay on this frame)
 const GOLD_DARK = new THREE.MeshPhysicalMaterial({ color: 0x8a5e1c, metalness: 1, roughness: 0.35 });
 
 function seeded(n) { let a = n >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
@@ -58,9 +61,9 @@ const PORTAL_FS = `
     // the deep glow behind the rings, and the bright core
     vec3 col = mix(vec3(0.55, 0.22, 0.6), vec3(0.12, 0.05, 0.2), smoothstep(0.0, 1.2, rr)) * 0.75;
     col += ringCol * rings * 1.9;
-    float core = exp(-rr * rr * 26.0);
-    col += vec3(0.75, 0.95, 1.0) * smoothstep(0.17, 0.12, abs(rr - 0.2)) * 0.9;   // (the teal ring hugging the core)
-    col += vec3(1.0, 0.92, 1.0) * core * 1.6;
+    float core = exp(-rr * rr * 90.0);
+    col += vec3(0.35, 0.95, 1.0) * smoothstep(0.035, 0.0, abs(rr - 0.14)) * 0.9;   // (the teal ring hugging the core)
+    col += vec3(1.0, 0.92, 1.0) * core * 0.95;
     // stardust, drifting inward and twinkling
     for (int i = 0; i < 2; i++) {
       float fi = float(i);
@@ -174,17 +177,28 @@ export function makePortalFrame() {
   const portal = new THREE.Mesh(new THREE.PlaneGeometry(OW, OH), new THREE.ShaderMaterial({ uniforms: U, vertexShader: PORTAL_VS, fragmentShader: PORTAL_FS, toneMapped: false }));
   portal.position.set(0, H / 2, z2 - d2 / 2 + 0.06);
   group.add(portal);
-  const light = new THREE.PointLight(0xff5fc8, 1.4, 4, 1.5);
+  const light = new THREE.PointLight(0xff5fc8, 0.25, 4 * SIZE + 0.4, 1.5);
   light.position.set(0, H / 2, 0.6);
   group.add(light);
 
-  group.position.y = LIFT;
+  // the black gloss and the gold need something to reflect, or they read as flat black: the soft dark studio picture
+  // the game pieces use, set the first time it's drawn (that's when the renderer is at hand)
+  const shiny = [STONE, GOLD, GOLD_DARK];
+  let envSet = false;
+  portal.onBeforeRender = (renderer) => {
+    if (envSet) return; envSet = true;
+    const e = softEnv(renderer);
+    for (const m of shiny) { m.envMap = e; m.envMapIntensity = m === STONE ? 1.4 : 1.2; m.needsUpdate = true; }
+  };
+
+  group.scale.setScalar(SIZE);
+  group.position.y = -H * SIZE / 2;   // (centered on its own middle: set the outer group's height where it hangs)
   const outer = new THREE.Group();
   outer.add(group);
   outer.traverse(o => { o.userData.portalFrame = true; });
   return {
     group: outer,
-    update(t) { U.time.value = t; light.intensity = 1.2 + 0.3 * Math.sin(t * 1.1) + U.flare.value * 3; glow.material.opacity = 0.75 + 0.25 * Math.sin(t * 1.7); },
+    update(t) { U.time.value = t; light.intensity = 0.22 + 0.05 * Math.sin(t * 1.1) + U.flare.value * 0.6; glow.material.opacity = 0.75 + 0.25 * Math.sin(t * 1.7); },
     flare(k) { U.flare.value = k; }
   };
 }
@@ -192,6 +206,7 @@ export function makePortalFrame() {
 // ---------- The Workshop's look at it: the portal turning on its own ----------
 export function build() {
   const f = makePortalFrame();
+  f.group.scale.setScalar(4); f.group.position.y = H * SIZE / 2 * 4 + 0.1;
   const ticker = new THREE.Mesh(new THREE.PlaneGeometry(0.001, 0.001), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
   ticker.frustumCulled = false;
   const t0 = performance.now();

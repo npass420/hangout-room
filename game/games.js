@@ -568,6 +568,38 @@ const builder = makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit(on
   }
 } });
 
+// ---------- The keys page: the ⌨ button (top left) opens a card with every key, and closes it again ----------
+const keysCss = document.createElement('style');
+keysCss.textContent = `
+  #keysBtn { left: 16px; top: 16px; font-size: 19px; }
+  #keysBtn.on { background: rgba(233,201,143,0.92); color: #2a1c10; }
+  #keysCard { position: fixed; left: 16px; top: 66px; z-index: 15; display: none; max-height: calc(100vh - 150px); overflow-y: auto;
+    padding: 14px 18px; border-radius: 16px; background: rgba(20,16,12,0.9); color: #f3e6cf; font-size: 14px; line-height: 1.5;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(201,162,39,0.6); }
+  #keysCard.up { display: block; }
+  #keysCard h4 { margin: 8px 0 4px; color: #ffd36a; font-size: 14px; letter-spacing: 0.05em; }
+  #keysCard h4:first-child { margin-top: 0; }
+  #keysCard td { padding: 1px 0; vertical-align: top; }
+  #keysCard td:first-child { padding-right: 14px; white-space: nowrap; color: #ffe6a0; font-weight: 600; }`;
+document.head.appendChild(keysCss);
+const KEYS = [
+  ['Walking', [['W A S D / arrows', 'Walk (left and right arrows turn)'], ['Click the floor', 'Walk there (double click to run)'],
+    ['Drag', 'Look around'], ['Space', 'Jump'], ['Shift', 'Sprint'], ['R', 'Look straight ahead again'], ['Scroll', 'Zoom']]],
+  ['Building (🧱 button)', [['W A S D', 'Float about'], ['Space / C', 'Float up / down'], ['Shift', 'Faster'],
+    ['Click a cushion', 'Pick that square'], ['Numpad 1 to 9', 'Build on the square\'s nine spots (8 is always the far middle)'],
+    ['Numpad 0 + number', 'Take the top block off (Auto height)'], ['Numpad * and /', 'Next and last color'],
+    ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'], ['Page Up / Down', 'Height up and down (Auto, 1 to 9)'],
+    ['H', 'The hammer: click a block to smash it'], ['T', 'Test wall on the picked square (every color and shade)'],
+    ['R', 'Clear the whole room (asks first)']]]
+];
+const keysBtn = document.createElement('button');
+keysBtn.id = 'keysBtn'; keysBtn.className = 'corner'; keysBtn.title = 'Keys'; keysBtn.textContent = '⌨';
+const keysCard = document.createElement('div');
+keysCard.id = 'keysCard';
+keysCard.innerHTML = KEYS.map(([head, rows]) => `<h4>${head}</h4><table>${rows.map(([k, w]) => `<tr><td>${k}</td><td>${w}</td></tr>`).join('')}</table>`).join('');
+document.body.append(keysBtn, keysCard);
+keysBtn.addEventListener('click', () => { keysBtn.blur(); keysBtn.classList.toggle('on', keysCard.classList.toggle('up')); });
+
 // ---------- Keys ----------
 const keys = new Set();
 function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
@@ -612,7 +644,7 @@ canvas.addEventListener('wheel', e => {
 // ---------- The portal home: the same frame as the gallery's, on the back wall. Click it: it flares, a golden flash,
 // and you're back in the gallery ----------
 const portalFrame = makePortalFrame();
-portalFrame.group.position.set(0, 0, HZ - 0.16);
+portalFrame.group.position.set(0, 1.7, HZ - 0.045);   // (hung like a picture, its middle a little over eye height)
 portalFrame.group.rotation.y = Math.PI;   // facing into the room
 scene.add(portalFrame.group);
 const whiteout = document.createElement('div');
@@ -677,7 +709,7 @@ window.addEventListener('pointermove', e => {
   lastX = e.clientX; lastY = e.clientY;
   if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
     const p = pickUnder(e);
-    canvas.style.cursor = p ? 'pointer' : 'grab';
+    canvas.style.cursor = builder.cursor || (p ? 'pointer' : 'grab');
   }
 });
 let lastTap = { t: 0, x: 0, y: 0 };
@@ -740,6 +772,7 @@ renderer.setAnimationLoop(() => {
   } else if (marker.visible) marker.material.opacity = 0.8;
   moveAvatars(dt, t);
   pressFeet();
+  builder.update(dt);
   portalFrame.update(t);
   renderer.render(scene, camera);
 });
