@@ -154,11 +154,13 @@ const game = {
   leave: () => curGame().leave(),
   update: t => { checkersGame.update(t); othelloGame.update(t); }
 };
-onValue(ref(db, 'tables/board'), s => {   // (the board is shared: out for everyone, or away for everyone; 1 was checkers)
-  const v = s.val(), g = v === 1 ? 'checkers' : v;
-  if (g === 'checkers' || g === 'othello') { if (summon.state === 'idle' || summon.state === 'menu') summon.buildNow(g); }
-  else if (summon.state === 'board' && !game.busy()) summon.dismiss();
-});
+function listenBoard() {   // (the board is shared: out for everyone, or away for everyone; 1 was checkers)
+  onValue(ref(db, 'tables/board'), s => {
+    const v = s.val(), g = v === 1 ? 'checkers' : v;
+    if (g === 'checkers' || g === 'othello') { if (summon.state === 'idle' || summon.state === 'menu') summon.buildNow(g); }
+    else if (summon.state === 'board' && !game.busy()) summon.dismiss();
+  });
+}
 // and a white marble throne at each side, facing in (made in the Workshop: pieces/throne.js), pulled back so its base
 // clears the table's legs with a little room. Click one (or Z beside it) to sit in it; Z again to get up.
 const THRONE_AT = 1.08;                       // each throne's middle, out from the table's middle
@@ -179,7 +181,9 @@ for (let k = 0; k < 4; k++) {
 // gallery is gone. For everyone else the gallery stays, and once the curtain is down gold glitter creeps up the black
 // glass and the column dissolves from the top into a rising plume of gold dust (pieces/denvanish.js), leaving a
 // floating portal node (pieces/portalnode.js) at each open throne: click one to port into it. Once nobody is sitting,
-// the curtain lifts again. Shared through the database: tables/den { closed, sky }.
+// the den clears for everyone: the curtain lifts, both games reset, and the board goes away. Arriving to an empty site
+// (nobody else here), whatever was left is cleared before anything shows. Shared through the database: tables/den
+// { closed, sky }.
 let roomOff = [], roomIsOff = false;
 function setRoom(on) {   // (for those in the den with the sky in: the room's own things switched off, not drawn at all)
   if (!on === roomIsOff) return;
@@ -194,11 +198,33 @@ const curtain = makeCurtain({ radius: 1.97, top: HEIGHT - 0.72, ceiling: HEIGHT,
 scene.add(curtain.group);
 const denRef = ref(db, 'tables/den');
 let den = { closed: 0, sky: 0 };
-onValue(denRef, s => {
-  den = s.val() || { closed: 0, sky: 0 };
-  if (den.closed) curtain.close(); else curtain.open();
-  curtain.setSky(den.sky | 0);
+let denFirst = true;
+function clearDen() {   // nobody left in the den: the curtain lifts, both games reset, then the board goes away (for everyone)
+  update(denRef, { closed: 0 }).catch(() => {});
+  Promise.all([checkersGame.reset(), othelloGame.reset()])
+    .then(() => set(ref(db, 'tables/board'), 0)).catch(() => {});
+}
+// Arriving to an empty site: cleared first (the den open, no board, both games fresh), then the den and the board are
+// listened to, so what shows is already clean, with nothing played out.
+get(ref(db, 'room/presence')).then(ps => {
+  if (Object.keys(ps.val() || {}).length) return;
+  return Promise.all([update(denRef, { closed: 0 }), set(ref(db, 'tables/board'), 0), checkersGame.reset(), othelloGame.reset()]);
+}).catch(() => {}).then(() => {
+  listenBoard();
+  onValue(denRef, s => {
+    den = s.val() || { closed: 0, sky: 0 };
+    if (den.closed) curtain.close(); else curtain.open();
+    curtain.setSky(den.sky | 0);
+    if (denFirst) { denFirst = false; curtain.snap(); }   // (on load: the den as it was left, not played out)
+  });
 });
+setTimeout(() => {   // (the curtain's skies and glass, and the games' boards and pieces, ready before they're needed)
+  curtain.warm(renderer, scene, camera);
+  const was = [];
+  summon.group.traverse(o => { was.push([o, o.visible]); o.visible = true; });
+  try { renderer.compile(scene, camera); } catch (e) {}
+  for (const [o, v] of was) o.visible = v;
+}, 600);
 function lampClicked() {
   if (chair == null) { showBanner('Sit at the table first', 2); return; }
   if (!curtain.closed) update(denRef, { closed: 1 }).catch(() => {});
@@ -756,17 +782,25 @@ canvas.addEventListener('wheel', e => {
   setFov(camera.fov + e.deltaY * 0.03);
 }, { passive: false });
 
-// ---------- Porting in: a portal node takes you straight into its throne, in a flash of white ----------
+// ---------- Porting in: click a portal node: it glows golden, the screen flashes gold, and you're in its throne ----------
+// (behind the flash the room gets everything it'll show ready, and the flash only fades once it's drawn smoothly)
 const whiteout = document.createElement('div');
-whiteout.style.cssText = 'position:fixed; inset:0; background:#fff; opacity:0; pointer-events:none; transition:opacity 0.2s; z-index:5;';
+whiteout.style.cssText = 'position:fixed; inset:0; background:radial-gradient(ellipse at center, #fff4d6 0%, #ffd27a 45%, #e6a63c 100%); opacity:0; pointer-events:none; transition:opacity 0.2s; z-index:5;';
 document.body.appendChild(whiteout);
 let porting = false;
 function portIn(k) {
   if (porting || chair != null || anim) return;
   if (throneTaken(k)) { showBanner('Someone just sat there', 2); return; }
   porting = true;
-  whiteout.style.transition = 'opacity 0.22s'; whiteout.style.opacity = '1';
+  const node = nodes[k].n, t0 = performance.now();
+  (function glowUp() {   // (the node glows golden)
+    const e = Math.min((performance.now() - t0) / 380, 1);
+    node.flare(e * e);
+    if (e < 1) requestAnimationFrame(glowUp);
+  })();
+  setTimeout(() => { whiteout.style.transition = 'opacity 0.3s'; whiteout.style.opacity = '1'; }, 300);
   setTimeout(() => {
+    node.flare(0);
     if (throneTaken(k)) { porting = false; whiteout.style.transition = 'opacity 0.6s'; whiteout.style.opacity = '0'; showBanner('Someone just sat there', 2); return; }
     const t = THRONES[k];
     seat.sitting = seat.settling = false; seat.y = CHAIR_EYE;
@@ -777,9 +811,17 @@ function portIn(k) {
     setFov(BASE_FOV);
     camera.position.set(me.x, CHAIR_EYE, me.z); camera.quaternion.copy(viewQuat(yaw, pitch));
     sendSpot(true); game.refresh();
-    whiteout.style.transition = 'opacity 0.8s'; whiteout.style.opacity = '0';
-    porting = false;
-  }, 240);
+    // wait behind the flash: everything ready to draw, then a few smooth frames, then the flash fades
+    try { renderer.compile(scene, camera); } catch (e) {}
+    let good = 0, last = performance.now();
+    (function settle() {
+      const now = performance.now(), smooth = now - last < 40; last = now;
+      good = smooth ? good + 1 : 0;
+      if (good < 6 && now - t0 < 4000) { requestAnimationFrame(settle); return; }
+      whiteout.style.transition = 'opacity 0.9s'; whiteout.style.opacity = '0';
+      porting = false;
+    })();
+  }, 640);
 }
 
 // ---------- Mouse / touch ----------
@@ -995,33 +1037,88 @@ function steerGameCam(dt) {
 }
 // Every frame: who sees what. In the den (sitting at the table): with the sky in, the room is off and only those
 // sitting show; in the game, just the board in the sky. Out in the gallery with the curtain down: the table, the
-// curtain and everyone at it gone (blazing up and breaking into sparkles), a portal node at each open throne.
+// curtain and everyone at it gone (blazing up and breaking into sparkles), and in the middle a gentle pillar of gold
+// light with sparkles drifting up it, the portal nodes (one for each open throne) floating in it one above another,
+// staggered, the column slowly turning. Click one to port into its throne.
+const NODE_H = [2.3, 1.86, 1.42, 0.98];    // (how high each floats)
+const NODE_AT = [-0.08, 0.0, 0.13, 0.0];   // (and how far to the side: a gentle zigzag centered on the pillar's middle)
 const nodes = THRONES.map((t, k) => {
-  const n = makePortalNode({ floorDrop: 1.15 });
-  n.group.position.set(t.x, 1.15, t.z);
+  const n = makePortalNode({ floorDrop: NODE_H[k] });
+  n.group.scale.setScalar(1.15);
+  n.group.position.set(0, NODE_H[k], 0);
   n.group.traverse(o => { o.userData.portal = k; });
   n.group.visible = false;
   nodeGroup.add(n.group);
   return { n, k: 0 };
 });
-let denWasHidden = false, denGone = false, goneFor = 0, emptyFor = 0;
+const pillar = new THREE.Group();   // (the pillar of light the nodes float in)
+pillar.visible = false;
+nodeGroup.add(pillar);
+const PU = { pT: { value: 0 }, pK: { value: 0 } };
+const pillarMat = (inner) => new THREE.ShaderMaterial({
+  uniforms: PU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  vertexShader: 'varying vec2 vU; varying float vF; void main() { vU = uv; vec3 n = normalize(normalMatrix * normal); vec4 mv = modelViewMatrix * vec4(position, 1.0); vF = abs(dot(n, normalize(-mv.xyz))); gl_Position = projectionMatrix * mv; }',
+  fragmentShader: `uniform float pT, pK; varying vec2 vU; varying float vF;
+    void main() {
+      float up = vU.y;
+      float ends = smoothstep(0.0, 0.18, up) * (1.0 - smoothstep(0.7, 1.0, up));
+      float streak = 0.65 + 0.35 * sin(vU.x * 6.2832 * 9.0 + up * 6.0 - pT * 0.8) * sin(vU.x * 6.2832 * 4.0 - pT * 0.5);
+      float rise = 0.8 + 0.2 * sin(up * 14.0 - pT * 1.6);
+      float a = pow(vF, ${inner ? '2.0' : '3.0'}) * ends * streak * rise * pK * ${inner ? '0.35' : '0.16'};
+      gl_FragColor = vec4(vec3(1.0, 0.78, 0.45) * a, 1.0);
+    }`
+});
+pillar.add(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.3, 2.7, 48, 1, true).translate(0, 1.35, 0), pillarMat(false)));
+pillar.add(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.1, 2.7, 32, 1, true).translate(0, 1.35, 0), pillarMat(true)));
+{
+  const N = 360, pos = new Float32Array(N * 3), seed = new Float32Array(N);
+  for (let i = 0; i < N; i++) { const a = Math.random() * 6.2832, r = Math.sqrt(Math.random()) * 0.32; pos.set([Math.cos(a) * r, Math.random() * 2.6, Math.sin(a) * r], i * 3); seed[i] = Math.random(); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setAttribute('seed', new THREE.BufferAttribute(seed, 1));
+  const sp = new THREE.Points(g, new THREE.ShaderMaterial({
+    uniforms: { ...PU, pPx: { value: 400 } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `uniform float pT, pK, pPx; attribute float seed; varying float vA, vS;
+      void main() {
+        vS = seed;
+        vec3 p = position; p.y = mod(p.y + pT * (0.08 + seed * 0.12), 2.6);   // (drifting up the pillar)
+        p.x += sin(pT * 0.6 + seed * 40.0) * 0.03; p.z += cos(pT * 0.5 + seed * 30.0) * 0.03;
+        float tw = 0.5 + 0.5 * sin(pT * (4.0 + seed * 8.0) + seed * 50.0);
+        vA = pK * (0.3 + 0.7 * tw * tw) * smoothstep(0.0, 0.4, p.y) * (1.0 - smoothstep(2.0, 2.6, p.y));
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = pPx * (0.008 + 0.016 * seed * seed) / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `varying float vA, vS;
+      void main() { vec2 q = gl_PointCoord - 0.5; float a = (exp(-dot(q, q) * 60.0) + (exp(-abs(q.x) * 30.0) * exp(-abs(q.y) * 5.0) + exp(-abs(q.y) * 30.0) * exp(-abs(q.x) * 5.0)) * step(0.86, vS)) * vA;
+        gl_FragColor = vec4(mix(vec3(1.0, 0.7, 0.3), vec3(1.0, 0.94, 0.8), step(0.75, vS)) * a * 1.8, a); }`
+  }));
+  sp.frustumCulled = false; sp.userData.px = sp.material.uniforms.pPx;
+  pillar.add(sp); pillar.userData.sparks = sp;
+}
+let denWasHidden = false, denGone = false, goneFor = 0, emptyFor = 0, denLoading = true, hadSitters = false;
 function denFrame(dt) {
   const seatedIds = new Set(Object.entries(S.presence).filter(([id, p]) => id !== myId && Number.isInteger(p.ch)).map(([id]) => id));
   const sitting = chair != null || seatedIds.size > 0;
   curtain.lampDown(sitting);
-  // nobody sitting for a couple of seconds: the curtain lifts (whoever's here sends it; only once the room has loaded)
-  if (den.closed && !sitting && S.myName && S.presence[myId]) {
+  // nobody sitting for a couple of seconds after someone was (or the curtain down with nobody in it): the den clears
+  // for everyone (whoever's here sends it; only once the room has loaded)
+  if (sitting) { hadSitters = true; emptyFor = 0; }
+  else if ((den.closed || hadSitters) && S.myName && S.presence[myId]) {
     emptyFor += dt;
-    if (emptyFor > 2) { emptyFor = -1e9; update(denRef, { closed: 0 }).catch(() => {}); }
-  } else if (!den.closed || sitting) emptyFor = 0;
+    if (emptyFor > 2) { emptyFor = 0; hadSitters = false; clearDen(); }
+  } else emptyFor = 0;
   const inside = chair != null;
   // (out in the gallery, curtain down: the den's gone, until it lifting has pulled the sky back in round the table)
   const hidden = !inside && (curtain.closed ? curtain.down : curtain.spreadOut);
+  if (denLoading) {   // (just arrived: the den as it is, at once: if it's down, only the nodes, nothing played out)
+    if (denFirst) return;   // (until the den's state has come in)
+    denLoading = false; denWasHidden = hidden; denGone = hidden && !inside; goneFor = 1;
+  }
   if (hidden !== denWasHidden) {   // (it blazes up and breaks into sparkles, or gathers back; the den goes or comes at the blaze's height)
     denWasHidden = hidden;
     if (inside) denGone = false;
-    else if (hidden) vanish.out({ onStart: () => { denGone = true; goneFor = -1e9; }, onGone: () => { goneFor = 0; } });
-    else vanish.in({ onDone: () => { denGone = false; } });
+    else if (hidden) { curtain.glowIn(); vanish.out({ onStart: () => { denGone = true; goneFor = -1e9; }, onGone: () => { goneFor = 0; } }); }   // (down: it glitters gold and vanishes into particles)
+    else { denGone = false; curtain.glowIn(); vanish.in({ onDone: () => {} }); }   // (coming back: the den's there at once, its curtain forming glowing out of particles, cooling black, then rolling up)
   }
   if (inside) denGone = false;   // (ported in: it's all there at once)
   goneFor += dt;
@@ -1038,11 +1135,26 @@ function denFrame(dt) {
   }
   const t = clock.elapsedTime;
   nodes.forEach((o, k) => {   // (each swells in a moment after the sparkles break away, and shrinks away when taken or the den comes back)
-    const want = denGone && hidden && !throneTaken(k) && goneFor > 0.3 ? 1 : 0;
+    let want = denGone && hidden && !throneTaken(k) && goneFor > 0.3 && !inside ? 1 : 0;
+    if (inside) o.k = 0;   // (inside the den: none at all, at once)
+    const leaving = !inside && !curtain.closed && o.k > 0.001;   // (the den's coming back: each glows golden, then goes)
+    o.glow = leaving ? Math.min(1, (o.glow || 0) + dt / 0.4) : want ? 0 : (o.glow || 0);
+    if (leaving && o.glow < 1) want = o.k;   // (holding while it glows up)
+    o.n.flare(o.glow * o.glow);
     o.k += Math.sign(want - o.k) * Math.min(Math.abs(want - o.k), dt / (want ? 0.6 : 0.3));
     o.n.group.visible = o.k > 0.001;
-    if (o.n.group.visible) { o.n.appear(o.k); o.n.update(t); }
+    if (o.n.group.visible) {
+      const a = performance.now() * 0.00018;   // (the zigzag, all in one plane, slowly turning)
+      o.n.group.position.set(Math.cos(a) * NODE_AT[k], NODE_H[k] + Math.sin(performance.now() * 0.0009 + k * 1.7) * 0.03, Math.sin(a) * NODE_AT[k]);
+      o.n.appear(o.k); o.n.update(t);
+    }
   });
+  {   // the pillar: there while any node is
+    const pk = Math.max(...nodes.map(o => o.k));
+    pillar.visible = pk > 0.001;
+    PU.pK.value = pk; PU.pT.value = performance.now() / 1000;
+    pillar.userData.sparks.userData.px.value = (window.innerHeight || 800) * Math.min(window.devicePixelRatio || 1, 2) * 0.5;
+  }
   vanish.update(dt);
   leaveBtn.style.display = gameCam || (inside && curtain.closed) ? 'block' : 'none';
   topBtn.style.display = gameCam ? 'block' : 'none';

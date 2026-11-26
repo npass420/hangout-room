@@ -32,7 +32,9 @@ const SKIES = [                       // the backgrounds
   { a: [0.32, 0.12, 0.55], b: [0.08, 0.16, 0.45], c: [0.05, 0.42, 0.3], belt: 'textures/sky_belt.jpg',      // deep space: stars,
     stars: [0.85, 0.95, 1.0], aurora: 1 },                                                                   //   clouds, the star ring, aurora
   { pic: 'textures/sky_island.jpg', picB: 'textures/sky_island_nomoon.jpg', stars: [1.0, 0.95, 0.85],       // your lantern tree lagoon, alive
-    low: 0.94, span: 2.29, horizon: 0.41, top: [0.0052, 0.022, 0.067], water: 1 }
+    low: 0.94, span: 2.29, horizon: 0.41, top: [0.0052, 0.022, 0.067], water: 1 },
+  { pic: 'textures/castle_window.jpg', picB: 'textures/castle_fire.jpg', stars: [1.0, 0.85, 0.8],          // the castle: a real room
+    top: [0.006, 0.004, 0.006], hall: 1 }
 ];
 // The skies:
 //   deep space (aurora): everything in it moves on its own: three layers of twinkling stars each turning its own way,
@@ -41,6 +43,10 @@ const SKIES = [                       // the backgrounds
 //     across from each other, one way is upstream, the other downstream), waving, each brightest along one edge,
 //     their colors shifting through green, teal, violet and rose; mirrored beneath you, flowing back the other way,
 //     so you float between two skies with the star ring where they meet.
+//   hall (the castle): a real eight-sided room round the table, traced from wherever you're looking from, so it stands
+//     true from every seat: flat walls (the window bay picture on six, the fireplace on two facing each other), a dark
+//     carved pillar at each corner covering the joins, a dark vault rising to a gold boss with ribs running up from
+//     the pillars, and a polished black marble floor that reflects it all. Its candles and fires flicker.
 //   water (the lagoon): the picture wraps round you twice (the second copy mirrored, so there's no seam, and with its
 //     moon taken out, so there's one moon), horizon at eye level. low and span: how it runs up the curtain. Its water
 //     ripples, the reflections wobble, the blue glow twinkles and the lanterns flicker; overhead it eases into its own
@@ -62,8 +68,8 @@ function picture(file) {
 }
 
 const SKY_SHADER = `
-  uniform float time, reveal, usePic, aurora, water, picLow, picSpan, horizon, floorR;
-  uniform vec3 colA, colB, colC, starTint, topCol; uniform sampler2D pic, picB, belt;
+  uniform float time, reveal, usePic, aurora, water, hall, picLow, picSpan, horizon, floorR;
+  uniform vec3 colA, colB, colC, starTint, topCol, roomC; uniform sampler2D pic, picB, belt;
   varying vec3 vDir;
   float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
   float noise(vec3 p) {
@@ -98,8 +104,9 @@ const SKY_SHADER = `
       u += (sin(v * 150.0 - time * 1.3 + sin(u * 23.0) * 2.0) * 0.0022 + sin(v * 60.0 - time * 0.7) * 0.0016) * wet;
       v += sin(u * 95.0 + time * 0.9) * 0.0012 * wet;
     }
-    bool second = fract(u * 0.5) > 0.5;   // (the mirrored copy: the one without the moon)
-    vec3 p = second ? texture2D(picB, vec2(u, v)).rgb : texture2D(pic, vec2(u, v)).rgb;
+    // the two copies (the second mirrored, the one without the moon), blended softly where they meet
+    float wB = smoothstep(0.15, -0.15, sin(3.14159265 * fract(u * 0.5) * 2.0));
+    vec3 p = mix(texture2D(pic, vec2(u, v)).rgb, texture2D(picB, vec2(u, v)).rgb, wB);
     float glowBlue = smoothstep(0.12, 0.35, p.b - p.r) * smoothstep(0.55, 0.95, p.g + p.b);   // (the blue glow in the water)
     p += p * glowBlue * (noise(vec3(u * 260.0, v * 260.0, time * 1.6)) - 0.45) * 1.6 * step(0.001, wet);
     float warm = smoothstep(0.2, 0.45, p.r - p.b) * smoothstep(0.55, 0.9, p.r);       // (lantern light, and the tree's glow)
@@ -107,6 +114,100 @@ const SKY_SHADER = `
     p *= 1.0 + warm * (fl - 0.5) * 0.55;
     overhead = smoothstep(0.84, 0.99, rawV);   // (up high, where the picture would pinch to a point: its own sky color)
     return mix(p * 0.95, topCol, overhead);
+  }
+
+  // ---------- the castle: an eight-sided room, traced along each ray from where you're looking ----------
+  // (sizes in meters, from the floor under the table: RA how far each wall is from the middle, RH the walls' height,
+  // RW each wall's width, RS how steeply the vault rises from the walls' tops, PR the corner pillars' radius)
+  const float RA = 6.6, RH = 4.96, RW = 5.467, RS = 0.95, PR = 0.3, P8 = 0.39269908, P4 = 0.78539816;
+  vec3 marble(vec2 q) {   // polished black marble: big slabs, fine pale veins
+    float v1 = abs(fbm(vec3(q * 0.8, 3.1)) - 0.5), v2 = abs(fbm(vec3(q * 2.3 + 9.0, 7.7)) - 0.5);
+    float vein = smoothstep(0.012, 0.0, v1) * 0.11 + smoothstep(0.006, 0.0, v2) * 0.06;
+    vec2 g = abs(fract(q / 1.6) - 0.5);
+    float seam = smoothstep(0.494, 0.5, max(g.x, g.y));
+    return (vec3(0.010, 0.010, 0.014) + vec3(0.5, 0.52, 0.6) * vein) * (1.0 - seam * 0.6);
+  }
+  // what a ray from o (in the room's own space) going d hits first: a wall, the vault, a pillar or the floor
+  vec3 surface(vec3 o, vec3 d, out float onFloor, out vec3 hp) {
+    float tB = 1e9, kind = 0.0; vec2 nB = vec2(0.0, 1.0);
+    for (int k = 0; k < 8; k++) {
+      float a = float(k) * P4;
+      vec2 n = vec2(sin(a), cos(a));
+      float dn = dot(d.xz, n);
+      if (dn > 1e-5) { float t = (RA - dot(o.xz, n)) / dn; if (t < tB) { tB = t; kind = 1.0 + float(k) * 0.01; nB = n; } }
+      float dr = RS * dn + d.y;
+      if (dr > 1e-5) { float t = (RH + RA * RS - RS * dot(o.xz, n) - o.y) / dr; if (t < tB) { tB = t; kind = 2.0; } }
+    }
+    if (d.y < -1e-5) { float t = -o.y / d.y; if (t < tB) { tB = t; kind = 3.0; } }
+    vec2 pc = vec2(0.0);
+    for (int k = 0; k < 8; k++) {   // the pillars, one at each corner
+      float a = float(k) * P4 + P8;
+      vec2 c = vec2(sin(a), cos(a)) * (RA / cos(P8) - 0.06), oc = o.xz - c;
+      float A = dot(d.xz, d.xz), B = dot(oc, d.xz), C = dot(oc, oc) - PR * PR, D = B * B - A * C;
+      if (D > 0.0 && A > 1e-6) {
+        float t = (-B - sqrt(D)) / A;
+        if (t > 0.0 && t < tB && o.y + d.y * t < RH) { tB = t; kind = 4.0; pc = c; }
+      }
+    }
+    hp = o + d * tB;
+    onFloor = step(2.5, kind) * step(kind, 3.5);
+    vec3 col;
+    if (kind < 2.0) {   // a wall: its picture (the fireplace on the two facing walls), candles and fire flickering
+      int k = int(floor((kind - 1.0) * 100.0 + 0.5));
+      vec2 right = vec2(-nB.y, nB.x);
+      vec2 uv = vec2(0.5 + dot(hp.xz, right) / RW, clamp(hp.y / RH, 0.002, 0.998));
+      uv.x = clamp(uv.x, 0.002, 0.998);
+      bool fire = k == 0 || k == 4;
+      col = fire ? texture2D(picB, uv).rgb : texture2D(pic, uv).rgb;
+      float warm = smoothstep(0.2, 0.45, col.r - col.b) * smoothstep(0.5, 0.9, col.r);
+      float fl = noise(vec3(uv * 40.0, time * 3.4)) * 0.7 + noise(vec3(uv * 10.0, time * 1.4)) * 0.3;
+      col *= 1.0 + warm * (fl - 0.5) * (fire ? 0.8 : 0.6);
+      col *= 0.55 + 0.45 * smoothstep(0.0, 0.4, hp.y);                       // (darker down at the floor)
+      col *= 0.7 + 0.3 * smoothstep(0.0, 0.12, min(uv.x, 1.0 - uv.x));        // (and into the corners)
+    } else if (kind < 2.5) {   // the vault: dark, candle warm near the walls, ribs up from the pillars, a gold boss
+      float r = length(hp.xz), phi = atan(hp.x, hp.z);
+      float ca = mod(phi - P8, P4), rd = min(ca, P4 - ca) * r;
+      float rib = smoothstep(0.16, 0.07, rd) * smoothstep(0.3, 0.9, r);
+      float edge = smoothstep(0.03, 0.0, abs(rd - 0.12)) * smoothstep(0.3, 0.9, r);
+      float lit = pow(smoothstep(RA * 0.35, RA, r), 2.5);
+      col = vec3(0.004, 0.003, 0.003) + vec3(0.03, 0.011, 0.005) * lit;
+      col = mix(col, vec3(0.012, 0.008, 0.007) * (1.0 + 2.0 * lit), rib);
+      col += vec3(0.5, 0.33, 0.12) * edge * 0.12 * (0.25 + 0.75 * lit);
+      float boss = smoothstep(0.55, 0.45, r);
+      col = mix(col, vec3(0.16, 0.1, 0.035) * (0.6 + 0.4 * noise(vec3(hp.xz * 30.0, 1.0))), boss);
+      col += vec3(0.5, 0.3, 0.1) * smoothstep(0.06, 0.0, abs(r - 0.6)) * 0.1;   // (a gold ring round the boss)
+    } else if (kind < 3.5) {   // the floor (its marble: the reflection is added by the caller)
+      col = marble(hp.xz);
+      col += vec3(0.09, 0.035, 0.012) * pow(smoothstep(RA * 0.45, RA, length(hp.xz)), 2.0) * 0.6;   // (candlelight pooling by the walls)
+    } else {   // a pillar: carved ebony, fluted, gold bands, lit warm from the room
+      vec2 nr = (hp.xz - pc) / PR;
+      float psi = atan(nr.x, nr.y);
+      vec2 L = normalize(-pc);
+      float lam = max(dot(nr, L), 0.0), y = hp.y;
+      float flute = 0.7 + 0.3 * cos(psi * 18.0);
+      vec3 V = normalize(o - hp);
+      float spec = pow(max(dot(reflect(-V, vec3(nr.x, 0.0, nr.y)), normalize(vec3(L.x, 0.3, L.y))), 0.0), 24.0);
+      col = vec3(0.022, 0.016, 0.014) * flute * (0.35 + 0.9 * lam) + vec3(0.25, 0.13, 0.06) * spec * 0.4;
+      float bands = smoothstep(0.05, 0.0, abs(y - 0.32)) + smoothstep(0.05, 0.0, abs(y - 0.48))
+                  + smoothstep(0.07, 0.0, abs(y - (RH - 0.55))) + smoothstep(0.05, 0.0, abs(y - (RH - 0.3)));
+      col = mix(col, vec3(0.6, 0.4, 0.14) * (0.3 + 0.9 * lam + spec), clamp(bands, 0.0, 1.0));
+      col *= 0.7 + 0.3 * smoothstep(0.0, 0.5, y);
+    }
+    return col;
+  }
+  vec3 castle(vec3 world) {   // the room seen from the camera, through this point
+    vec3 o = cameraPosition - roomC, d = normalize(world - cameraPosition);
+    float onFloor; vec3 hp;
+    vec3 col = surface(o, d, onFloor, hp);
+    if (onFloor > 0.5) {   // polished: the room reflected in it, a little rippled by the marble's unevenness
+      vec2 wob = vec2(noise(vec3(hp.xz * 3.0, 0.0)), noise(vec3(hp.xz * 3.0, 5.0))) - 0.5;
+      vec3 rd = normalize(reflect(d, normalize(vec3(wob.x * 0.012, 1.0, wob.y * 0.012))));
+      float f2; vec3 h2;
+      vec3 refl = surface(hp + vec3(0.0, 0.001, 0.0), rd, f2, h2);
+      float fres = 0.05 + 0.95 * pow(1.0 - max(-d.y, 0.0), 5.0);
+      col = col * (1.0 - fres * 0.5) + refl * (0.22 + 0.7 * fres);
+    }
+    return col;
   }
 
   void main() {
@@ -118,7 +219,10 @@ const SKY_SHADER = `
     float starAmt = 1.0;
     vec3 ds = turned(d);
 
-    if (aurora > 0.5) {   // (deep space: everything moving on its own)
+    if (hall > 0.5) {   // (the castle: the room, floor and all)
+      col = castle(vDir + vec3(0.0, 1.4, 0.0));
+      starAmt = 0.0;
+    } else if (aurora > 0.5) {   // (deep space: everything moving on its own)
       float h = abs(d.y), below = d.y < 0.0 ? -1.0 : 1.0;
       col = vec3(0.003, 0.004, 0.012) + (col - vec3(0.004, 0.004, 0.01)) * 0.75;   // (the light clouds: the nebula, drifting its own way)
       // the stars: three layers, each turning its own way at its own speed, all twinkling
@@ -164,6 +268,27 @@ const SKY_SHADER = `
         float soft = 1.0 - smoothstep(0.03, 0.16, abs(d.y));
         col += bt * 0.62 * soft * breathe * (1.0 + bright * (tw - 0.5) * 1.1);
       }
+      // shooting stars now and then: a bright head with a fading tail streaking down across the sky
+      vec2 spos = vec2(atan(d.x, d.z), asin(clamp(d.y, -1.0, 1.0)));
+      for (int i = 0; i < 3; i++) {
+        float fi = float(i), P = 7.0 + fi * 3.3, tt = (time + fi * 2.7) / P, cyc = floor(tt), ph = fract(tt) / 0.16;
+        if (ph < 1.0) {
+          float h1 = fract(sin(cyc * 12.9898 + fi * 78.233) * 43758.5), h2 = fract(sin(cyc * 39.346 + fi * 11.135) * 24634.6);
+          vec2 a0 = vec2(h1 * 6.2832 - 3.1416, 0.3 + h2 * 0.75);
+          vec2 vel = normalize(vec2(h1 > 0.5 ? 1.0 : -1.0, -0.5 - h2 * 0.5)) * 0.6;
+          vec2 head = a0 + vel * ph, tail = head - vel * 0.4;
+          vec2 pa = spos - tail, ba = head - tail;
+          pa.x = mod(pa.x + 3.1416, 6.2832) - 3.1416;
+          float hh = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+          vec2 df = pa - ba * hh;
+          df.x *= cos(spos.y);
+          float dd = dot(df, df);
+          col += vec3(0.85, 0.92, 1.0) * (exp(-dd / 0.0000045) * hh * hh * 1.8 + exp(-dd / 0.00004) * hh * hh * hh * 0.25) * sin(ph * 3.1416);
+        }
+      }
+      // a few big stars that slowly swell and fade, here and there
+      float big = stars(turned(d) * 1.3 + 7.0, 26.0, 0.975);
+      col += vec3(0.9, 0.95, 1.0) * big * (0.5 + 0.5 * sin(time * 0.6 + d.x * 40.0 + d.z * 31.0)) * 1.4;
       starAmt = 0.0;   // (its own stars, above)
     } else if (water > 0.5) {
       float overhead;
@@ -175,8 +300,21 @@ const SKY_SHADER = `
         float r = length(wp.xz);
         vec2 x = wp.xz * 9.0;
         float t = time;
-        vec2 grad = vec2(cos(x.x * 1.1 + t * 1.3) * 1.1 + cos(x.x * 0.7 + x.y * 0.9 + t * 0.9) * 0.6 + cos(x.x * 2.3 - x.y * 1.7 + t * 2.1) * 0.5,
-                         cos(x.y * 1.3 - t * 1.1) * 1.2 + cos(x.x * 0.7 + x.y * 0.9 + t * 0.9) * 0.8 + cos(x.y * 2.6 + x.x * 1.4 - t * 1.8) * 0.45);
+        // broken up waves: wave trains from many uneven directions, each rising and fading in patches as the water
+        // moves, over a slow swell and a fine chop, so nothing lines up in rows
+        vec2 grad = vec2(0.0);
+        for (int i = 0; i < 7; i++) {
+          float fi = float(i), ang = fi * 2.399 + 0.37, k = 0.8 + fract(fi * 0.618) * 1.9;
+          vec2 dir = vec2(cos(ang), sin(ang));
+          float strong = noise(vec3(x * 0.16 + fi * 3.7, t * 0.07 + fi));   // (where this train is strong, drifting)
+          float amp = smoothstep(0.25, 0.85, strong) * (1.2 - fi * 0.1);
+          grad += dir * cos(dot(x, dir) * k + t * (0.7 + k * 0.45) + fi * 1.7) * k * amp * 0.55;
+        }
+        float e = 0.08;
+        float h0 = noise(vec3(x * 0.9, t * 0.35)), hx = noise(vec3((x + vec2(e, 0.0)) * 0.9, t * 0.35)), hz = noise(vec3((x + vec2(0.0, e)) * 0.9, t * 0.35));
+        grad += vec2(hx - h0, hz - h0) / e * 0.9;   // (the slow swell)
+        float c0 = noise(vec3(x * 3.1, t * 0.9)), cx = noise(vec3((x + vec2(e, 0.0)) * 3.1, t * 0.9)), cz = noise(vec3((x + vec2(0.0, e)) * 3.1, t * 0.9));
+        grad += vec2(cx - c0, cz - c0) / e * 0.35;   // (the fine chop)
         vec3 nrm = normalize(vec3(-grad.x * 0.06, 1.0, -grad.y * 0.06));
         vec3 view = normalize(wp - cameraPosition);
         vec3 rd = reflect(view, nrm);
@@ -188,7 +326,11 @@ const SKY_SHADER = `
         vec3 live = mix(deep, refl, clamp(fres * 1.3, 0.0, 1.0));
         float spark = stars(vec3(wp.x * 2.0, time * 0.02, wp.z * 2.0), 40.0, 0.93) + stars(vec3(wp.x * 2.0 + 5.0, time * 0.015, wp.z * 2.0), 70.0, 0.92) * 0.7;
         live += vec3(0.25, 0.9, 1.0) * spark * 1.4;   // (the blue glow, sparkling in the water)
-        col = mix(live, col, smoothstep(1.25 * floorR, 1.9 * floorR, r));   // (out by the curtain, the picture's own water takes over)
+        // round the table it's live water; going out it takes on the picture's own water colors and ripples, and past
+        // that it's the picture's water itself, its lanterns, shores and islands (one long soft blend, no edge)
+        float out1 = smoothstep(0.6, 2.6, r);
+        live = mix(live, live * 0.55 + col * 0.6, smoothstep(0.3, 1.6, r));
+        col = mix(live, col, out1 * out1 * (3.0 - 2.0 * out1));
         starAmt = 0.0;
       }
       #endif
@@ -215,12 +357,36 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     color: 0x040407, roughness: 0.05, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.03, side: THREE.FrontSide
   }));
   hang.add(outside);
+  // on the glass: gold glitter and a glow as it forms out of particles or vanishes into them (cGlow)
+  const CIRC = { cTime: { value: 0 }, cFall: { value: 0 }, cGlow: { value: 0 } };
+  outside.material.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, CIRC);
+    sh.vertexShader = 'varying vec2 vCirc;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vCirc = uv;');
+    sh.fragmentShader = `uniform float cTime, cFall, cGlow; varying vec2 vCirc;
+      float ch(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float run(float x, float speed, float seed) {   // (a point of light at the head, its trail fading behind it)
+        float ph = fract(x / 14.0 - cTime * speed + seed);
+        return pow(ph, 10.0) * 1.4 + pow(ph, 2.5) * 0.25;
+      }
+` + sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      {
+        vec3 c = vec3(0.0);
+        totalEmissiveRadiance += c * (1.0 + cFall * 0.8);
+        // glowing gold and glittering, as it comes or goes in particles (cGlow 1 .. 0 as it cools to black)
+        if (cGlow > 0.0) {
+          float gl = step(0.965, ch(floor(vCirc * vec2(520.0, 140.0)) + floor(cTime * 12.0) * 0.37));
+          float sheen = 0.6 + 0.4 * sin(vCirc.y * 30.0 - cTime * 3.0 + vCirc.x * 40.0);
+          totalEmissiveRadiance += vec3(1.0, 0.7, 0.3) * cGlow * (0.55 * sheen + gl * 3.0);
+        }
+      }`);
+  };
+  outside.material.customProgramCacheKey = () => 'curtainCircuits';
   // inside: black glass that fades into the sky (and a lid of sky overhead, inside the ring)
   const sky = SKIES[0];
   const uniforms = {
-    time: { value: 0 }, reveal: { value: 0 }, usePic: { value: 0 }, aurora: { value: 0 }, water: { value: 0 },
+    time: { value: 0 }, reveal: { value: 0 }, usePic: { value: 0 }, aurora: { value: 0 }, water: { value: 0 }, hall: { value: 0 },
     picLow: { value: 0 }, picSpan: { value: 1 }, horizon: { value: 0.4 }, pic: { value: null }, picB: { value: null }, floorR: { value: 1 },
-    topCol: { value: new THREE.Vector3() },
+    topCol: { value: new THREE.Vector3() }, roomC: { value: new THREE.Vector3() },
     colA: { value: new THREE.Vector3(...sky.a) }, colB: { value: new THREE.Vector3(...sky.b) }, colC: { value: new THREE.Vector3(...sky.c) },
     starTint: { value: new THREE.Vector3(...sky.stars) }, belt: { value: null }
   };
@@ -265,6 +431,69 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
   const lampTop = 0.0, lampBottom = lampLow - top;   // (where the orb hangs: up in the ring, or low over the table)
   const ceil = ceiling - top;
 
+  // ---------- as it lifts: golden sparkles and glitching gold specks left hanging in the air where it was ----------
+  const SPK = 700;
+  const sGeo = new THREE.BufferGeometry();
+  const sPos = new Float32Array(SPK * 3), sSeed = new Float32Array(SPK);
+  for (let i = 0; i < SPK; i++) {
+    const a = Math.random() * Math.PI * 2, r = radius * (0.92 + Math.random() * 0.16);
+    sPos.set([Math.cos(a) * r, -Math.random() * H, Math.sin(a) * r], i * 3); sSeed[i] = Math.random();
+  }
+  sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+  sGeo.setAttribute('seed', new THREE.BufferAttribute(sSeed, 1));
+  const SU = { sAge: { value: 99 }, sTime: { value: 0 }, sPx: { value: 400 } };
+  const sparkles = new THREE.Points(sGeo, new THREE.ShaderMaterial({
+    uniforms: SU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `uniform float sAge, sTime, sPx; attribute float seed; varying float vA, vS;
+      void main() {
+        vS = seed;
+        float life = 3.0 + seed * 4.0, k = sAge / life;
+        vec3 p = position + vec3(sin(seed * 40.0 + sTime * 0.7) * 0.03, sAge * (0.04 + seed * 0.08), cos(seed * 30.0 + sTime * 0.6) * 0.03);
+        float on = step(sAge, life) * smoothstep(0.0, 0.15, sAge - seed * 1.2);   // (left behind as the glass rises past)
+        float tw = 0.5 + 0.5 * sin(sTime * (5.0 + seed * 9.0) + seed * 60.0);
+        vA = on * (1.0 - smoothstep(0.55, 1.0, k)) * (0.35 + 0.65 * tw * tw);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = sPx * (0.01 + 0.02 * seed * seed) / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `varying float vA, vS;
+      void main() {
+        vec2 q = gl_PointCoord - 0.5;
+        float a = (exp(-dot(q, q) * 60.0) + (exp(-abs(q.x) * 30.0) * exp(-abs(q.y) * 5.0) + exp(-abs(q.y) * 30.0) * exp(-abs(q.x) * 5.0)) * step(0.85, vS)) * vA;
+        gl_FragColor = vec4(mix(vec3(1.0, 0.68, 0.25), vec3(1.0, 0.93, 0.75), step(0.8, vS)) * a * 2.0, a);
+      }`
+  }));
+  sparkles.frustumCulled = false; sparkles.visible = false;
+  group.add(sparkles);
+  const GL = 90;   // (the glitches: little gold squares flickering in and out, jumping about)
+  const glitchMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.72, 0.32).multiplyScalar(1.6), transparent: true, opacity: 0.8,
+    depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+  const glitches = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), glitchMat, GL);
+  glitches.frustumCulled = false; glitches.visible = false;
+  group.add(glitches);
+  const gm = new THREE.Matrix4(), gq = new THREE.Quaternion(), gs = new THREE.Vector3(), gp = new THREE.Vector3(), gUp = new THREE.Vector3(0, 1, 0);
+  const gSeed = Array.from({ length: GL }, () => ({ a: Math.random() * Math.PI * 2, y: -Math.random() * H, w: 0.02 + Math.random() * 0.06, h: 0.01 + Math.random() * 0.03, t: Math.random() }));
+  let sparkAge = 99;
+  function stepSparkles(dt) {
+    sparkAge += dt;
+    const on = sparkAge < 7.5;
+    sparkles.visible = glitches.visible = on;
+    if (!on) return;
+    SU.sAge.value = sparkAge; SU.sTime.value += dt;
+    SU.sPx.value = (window.innerHeight || 800) * Math.min(window.devicePixelRatio || 1, 2) * 0.5;
+    const fadeG = 1 - Math.min(Math.max((sparkAge - 2.5) / 2.5, 0), 1);
+    gSeed.forEach((g, i) => {
+      if (Math.random() < 0.08) { g.a += (Math.random() - 0.5) * 0.15; g.y += (Math.random() - 0.5) * 0.12; }   // (jumping about)
+      const show = Math.random() < 0.45 && sparkAge > g.t * 1.5 ? fadeG : 0;
+      gp.set(Math.cos(g.a) * radius, Math.max(-H, Math.min(0, g.y)), Math.sin(g.a) * radius);
+      gq.setFromAxisAngle(gUp, -g.a + Math.PI / 2);
+      gs.set(g.w * show + 1e-5, g.h * show + 1e-5, 1);
+      gm.compose(gp, gq, gs); glitches.setMatrixAt(i, gm);
+    });
+    glitches.instanceMatrix.needsUpdate = true;
+  }
+
+  let glowAge = 99;
   let drop = 0, fade = 0, spread = 0, closing = false, skyIndex = 0, lampWant = 0, lampK = 0, lastRoom = true;   // (drop: 0 up .. 1 down; fade: 0 glass .. 1 sky; spread: 0 at the table .. 1 the whole room)
   const ease = k => k * k * (3 - 2 * k);
   function show() {
@@ -293,7 +522,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     const s = SKIES[skyIndex], u = uniforms;
       if (s.a) { u.colA.value.set(...s.a); u.colB.value.set(...s.b); u.colC.value.set(...s.c); }
       u.starTint.value.set(...s.stars);
-      u.usePic.value = s.pic ? 1 : 0; u.aurora.value = s.aurora ? 1 : 0; u.water.value = s.water ? 1 : 0;
+      u.usePic.value = s.pic ? 1 : 0; u.aurora.value = s.aurora ? 1 : 0; u.water.value = s.water ? 1 : 0; u.hall.value = s.hall ? 1 : 0;
       if (s.belt) u.belt.value = picture(s.belt);
       if (s.pic) { u.pic.value = picture(s.pic); u.picB.value = picture(s.picB || s.pic); u.topCol.value.set(...s.top); }
       if (s.water) { u.picLow.value = s.low; u.picSpan.value = s.span; u.horizon.value = s.horizon; }
@@ -309,7 +538,17 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     get skyIndex() { return skyIndex; },
     SKY_COUNT: SKIES.length,
     close() { closing = true; },
-    open() { closing = false; },
+    glowIn() { glowAge = 0; },   // (glowing gold and glittering, then cooling to black over a moment)
+    // snap(): straight to where it's going, no animation (on load: the den as it was left, without playing it all out)
+    snap() { drop = fade = spread = closing ? 1 : 0; sparkAge = 99; stepSparkles(0); show(); },
+    // warm(renderer, scene, camera): get every one of its looks ready now, so nothing stalls the first time it's seen
+    warm(renderer, scene, camera) {
+      const was = [];
+      group.traverse(o => { was.push([o, o.visible]); o.visible = true; });
+      try { renderer.compile(scene, camera); } catch (e) {}
+      for (const [o, v] of was) o.visible = v;
+    },
+    open() { if (closing) sparkAge = -(SPREAD + FADE) * (spread > 0 ? 1 : fade > 0 ? 0.5 : 0); closing = false; },   // (the sparkles start as the glass begins to rise)
     toggle() { closing = !closing; },
     setSky(i) {
       i = Number.isInteger(i) ? ((i % SKIES.length) + SKIES.length) % SKIES.length : 0;
@@ -325,6 +564,11 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
     lamp: lampParts,   // (what to click to change the sky)
     update(dt) {
       uniforms.time.value += dt;
+      group.getWorldPosition(uniforms.roomC.value); uniforms.roomC.value.y -= top;   // (the castle stands on the floor under the curtain)
+      CIRC.cTime.value += dt;
+      glowAge += dt; CIRC.cGlow.value = Math.max(0, 1 - glowAge / 1.6);
+      CIRC.cFall.value += ((closing && drop < 1 ? 1 : 0) - CIRC.cFall.value) * Math.min(dt * 2.5, 1);   // (brighter and faster as it comes down)
+      stepSparkles(dt);
       lampK += Math.sign(lampWant - lampK) * Math.min(Math.abs(lampWant - lampK), dt / 2.2);
       if (closing) {   // (down first, then the sky fades in, then it spreads out)
         if (drop < 1) drop = Math.min(1, drop + dt / DROP);

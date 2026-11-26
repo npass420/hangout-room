@@ -11,7 +11,9 @@
 // disc taken (filling it with your energy), to the empty square, where your new disc forms. A side with no move
 // passes; when neither can move, the game's done: every one of the loser's discs is taken over, glitching, and the
 // board's squares all glitch over to the winner's crystal.
-// Rules: classic Othello (Black first). Shared through the database (tables/othello), so everyone sees the same game.
+// Rules: classic Othello (a coin flip for who moves first). Shared through the database (tables/othello), so everyone sees the same game.
+// Who goes first is a coin flip each game. Besides 1 player (against the computer) and 2 players, you can play both
+// sides yourself.
 //   startOthello({ center, top, cell, parent, board, onView, seated, onStart })
 //     board: the Othello board (its flood() and restore()); the rest as in checkers.js
 //   gives back the same as checkers.js: { pick, tap, canTap, deselect, openPanel, show, playing, leave, busy, ... }
@@ -47,7 +49,7 @@ function play(st, c, r) {   // the next state after a legal move (or nothing, if
   }
   return st;
 }
-const fresh = () => ({ board: START, turn: 1, over: 0, winner: 0, passed: 0, last: { c: -1, r: -1, side: 0 } });
+const fresh = () => ({ board: START, turn: Math.random() < 0.5 ? 1 : 2, over: 0, winner: 0, passed: 0, last: { c: -1, r: -1, side: 0 } });   // (who goes first: a coin flip)
 const SIDES = { 1: 'Black', 2: 'White' };
 const MAX_PLAYERS = 2;   // (the player count buttons: 1 up to this)
 
@@ -114,7 +116,8 @@ export function startOthello({ center, top, cell, parent, board, onView = () => 
 
   const tx = f => runTransaction(G.ref, st => f(st || { ...fresh(), moveNo: 0, p1: '', p2: '' })).catch(e => console.warn('othello', e));
   const othersIn = st => (here(st.p1) && st.p1 !== myId) || (here(st.p2) && st.p2 !== myId);
-  function players(n) {   // 1: straight into the game against the computer; 2: you take Black and wait for someone to join
+  function players(n) {   // 1: straight into the game against the computer; 0: playing both sides yourself; 2: you take Black and wait for someone to join
+    if (n === 0) { tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: myId, cpu: 0, go: 1, moveNo: (st.moveNo || 0) + 1 })); release(); onStart(); panelOpen = false; return; }
     if (n === 1) { tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: myId, cpu: 1, go: 1, moveNo: (st.moveNo || 0) + 1 })); release(); onStart(); }
     else tx(st => (othersIn(st) ? undefined : { ...st, ...fresh(), p1: myId, p2: '', cpu: 0, go: 0, moveNo: (st.moveNo || 0) + 1 }));
     panelOpen = false;
@@ -234,7 +237,9 @@ export function startOthello({ center, top, cell, parent, board, onView = () => 
       if (st.over) ending(st, 1.5);
     }
     refreshMarks();
-    if (prev && st.moveNo !== prev.moveNo && !st.over) {
+    if (prev && st.moveNo !== prev.moveNo && !st.over && st.last.c < 0 && (mySide() || watching) && hooks.banner)
+      hooks.banner(`${SIDES[st.turn]} goes first!` + (st.cpu ? (st.turn === 2 ? ' (the computer)' : ' (you)') : solo() ? '' : name(st.turn) ? ` (${name(st.turn)})` : ''), 2.4);
+    else if (prev && st.moveNo !== prev.moveNo && !st.over) {
       if (st.passed && hooks.banner) hooks.banner(`${SIDES[st.passed]} has no move and passes`, 2.2);
       else if (myTurn() && hooks.banner) hooks.banner('Your turn!', 1.8);
     }
@@ -317,7 +322,9 @@ export function startOthello({ center, top, cell, parent, board, onView = () => 
       const open = !st.cpu && (here(st.p1) && !here(st.p2) ? 2 : here(st.p2) && !here(st.p1) ? 1 : 0);
       if (!here(st.p1) && !here(st.p2)) {
         s = 'How many players?';
-        for (let n = 1; n <= MAX_PLAYERS; n++) button(`${n} Player${n > 1 ? 's' : ''}`, () => players(n), true);
+        button('1 Player', () => players(1), true);
+        button('2 Players', () => players(2), true);
+        button('Play both sides', () => players(0), true);
       }
       else if (open) { s = `${name(3 - open)} is waiting for a partner`; button(`Join as ${SIDES[open]}`, join, true); }
       else s = st.cpu ? `${name(1)} is playing the computer` : `${name(1)} and ${name(2)} are playing`;
@@ -331,6 +338,7 @@ export function startOthello({ center, top, cell, parent, board, onView = () => 
     } else {
       if (st.over) s = result();
       else if (st.cpu) s = cpuTurn() ? 'The computer is thinking…' : 'Your move!';
+      else if (alone) s = `${SIDES[st.turn]} to move`;
       else s = myTurn() ? 'Your move!' : `${SIDES[st.turn]}'s turn (${name(st.turn)})`;
       button(hintsOn ? '💡 Hints: on' : '💡 Hints: off', () => {
         hintsOn = !hintsOn; try { localStorage.setItem('tableHints', hintsOn ? 'on' : 'off'); } catch (e) {}
@@ -355,6 +363,9 @@ export function startOthello({ center, top, cell, parent, board, onView = () => 
     watching: () => watching,
     mySide,
     busy: () => !!(G.st && (here(G.st.p1) || here(G.st.p2))),
+    // the den emptied: a fresh game with nobody in it (left alone if it already is one: everyone here sends it)
+    reset: () => tx(st => (!st.p1 && !st.p2 && !st.over && st.board === START ? undefined
+      : { ...st, ...fresh(), p1: '', p2: '', cpu: 0, go: 0, moveNo: (st.moveNo || 0) + 1 })),
     show(on) {
       if (G.shown === on) return;
       G.shown = on; pick.visible = on; playOut.group.visible = on;

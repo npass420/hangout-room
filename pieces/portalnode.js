@@ -9,6 +9,7 @@
 //   makePortalNode({ floorDrop })   floorDrop: how far below the node the floor is (for its glitter pool)
 //     gives back { group, update(t), appear(k) }
 //     appear(k)        0 gone .. 1 there (it swells in with a little overshoot)
+//     flare(k)         clicked: it glows golden (0 .. 1)
 //   build()            the Workshop's look at it: one node, 2.5 times its size, floating
 // =====================================================================================================================
 import * as THREE from 'three';
@@ -138,6 +139,7 @@ export function makePortalNode({ floorDrop = 1.15 } = {}) {
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: 0xffa940, transparent: true, opacity: 0.3,
     depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
   glow.scale.set(0.5, 0.5, 1);
+  const glowSize = 0.5;
   body.add(glow);
   const light = new THREE.PointLight(0xffb052, 0.45, 2.4, 2);
   body.add(light);
@@ -170,9 +172,10 @@ export function makePortalNode({ floorDrop = 1.15 } = {}) {
   poolGlow.position.y = -floorDrop + 0.003;
   group.add(poolGlow);
 
-  let shown = 1;
+  let shown = 1, boost = 0;
   return {
     group,
+    flare(k) { boost = Math.max(0, k); },   // (clicked: it glows golden, 0 .. 1)
     appear(k) {
       k = Math.max(0, Math.min(1, k));
       const c = 1.7, e = k >= 1 ? 1 : 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2);   // (a little overshoot)
@@ -188,8 +191,9 @@ export function makePortalNode({ floorDrop = 1.15 } = {}) {
       bandHolder.rotation.y = t * 0.18 + seed;
       spinBand.rotation.y = t * 0.6;
       const pulse = 0.85 + 0.15 * Math.sin(t * 1.7 + seed);
-      glow.material.opacity = 0.3 * pulse * shown;
-      light.intensity = 0.45 * pulse * shown;
+      glow.material.opacity = Math.min(1, 0.3 * pulse * shown + boost * 0.9);
+      glow.scale.set(glowSize * (1 + boost * 1.6), glowSize * (1 + boost * 1.6), 1);
+      light.intensity = (0.45 * pulse + boost * 4) * shown;
     }
   };
 }

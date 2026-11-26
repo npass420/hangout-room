@@ -137,7 +137,8 @@ function halfMat(white, wave) {
           float blink = step(0.88, dh(floor(rel / 0.007) + floor(uTime * 22.0) * 3.1)) * (1.0 - smoothstep(0.3, 0.75, uForm));
           diffuseColor.rgb *= 1.0 - cover * 0.92;
           vec3 ec = energyOf(sideE, rel * 30.0 + uTime * 0.1);
-          totalEmissiveRadiance += vec3(1.0) * (flash * 2.4 + blink * 1.2) + ec * light * 2.2;
+          vec3 hot = mix(ec * 1.6 + uRimCol * 0.8, vec3(1.0), 0.18);   // (its own energy's color, bright: gold or violet)
+          totalEmissiveRadiance += hot * (flash * 2.2 + blink * 1.5) + ec * light * 2.2 + (ec * 0.5 + uRimCol * 0.4) * cover * 0.8;
         }
         // taken: the new color's energy pouring in from the side the beam hit, flowing across like liquid until the
         // whole disc glows, then fading back to show the stone in its new color
@@ -150,7 +151,7 @@ function halfMat(white, wave) {
           diffuseColor.rgb *= 1.0 - m * 0.9;
           totalEmissiveRadiance += fc * m * 1.7 + fc * lip * 2.8;
         }
-        if (uGlitch > 0.0) totalEmissiveRadiance += vec3(1.0) * step(0.9, dh(floor(rel / 0.007) + floor(uTime * 22.0) * 5.3)) * uGlitch * 1.4;
+        if (uGlitch > 0.0) totalEmissiveRadiance += mix(uRimCol * 2.0, vec3(1.0), 0.2) * step(0.9, dh(floor(rel / 0.007) + floor(uTime * 22.0) * 5.3)) * uGlitch * 1.4;
         // the flip's color wash: a wide wave of the new color sweeping right across, the whole disc tinted while it turns
         if (uWave > 0.0 && uWave < 1.0) {
           float c = mix(-uR * 1.6, uR * 1.6, uWave);
@@ -340,13 +341,32 @@ export function makeOthelloPlay({ cell, top, cellPos }) {
 
   // ---------- sparks: bits of energy flying off as discs form and fill ----------
   const N = 900;
-  const sp = { pos: new Float32Array(N * 3), col: new Float32Array(N * 3), vel: new Float32Array(N * 3), life: new Float32Array(N), max: new Float32Array(N) };
-  for (let i = 0; i < N; i++) sp.pos[i * 3 + 1] = -100;
+  const sp = { pos: new Float32Array(N * 3), col: new Float32Array(N * 3), vel: new Float32Array(N * 3), life: new Float32Array(N), max: new Float32Array(N), seed: new Float32Array(N) };
+  for (let i = 0; i < N; i++) { sp.pos[i * 3 + 1] = -100; sp.seed[i] = Math.random(); }
   const sGeo = new THREE.BufferGeometry();
   sGeo.setAttribute('position', new THREE.BufferAttribute(sp.pos, 3));
   sGeo.setAttribute('color', new THREE.BufferAttribute(sp.col, 3));
-  const sparks = new THREE.Points(sGeo, new THREE.PointsMaterial({ size: 0.006, map: sparkTexture(), vertexColors: true, transparent: true,
-    depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+  sGeo.setAttribute('seed', new THREE.BufferAttribute(sp.seed, 1));
+  // (stardust: mostly fine twinkling glitter, now and then a star flare with little beams)
+  const SD = { sdTime: { value: 0 }, sdPx: { value: 400 } };
+  const sparks = new THREE.Points(sGeo, new THREE.ShaderMaterial({
+    uniforms: SD, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    vertexShader: `uniform float sdTime, sdPx; attribute vec3 color; attribute float seed; varying vec3 vC; varying float vS, vTw;
+      void main() {
+        vC = color; vS = seed; vTw = pow(0.5 + 0.5 * sin(sdTime * (6.0 + seed * 12.0) + seed * 70.0), 2.0);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = sdPx * (0.003 + 0.007 * seed * seed + step(0.92, seed) * 0.018) * (0.5 + 0.7 * vTw) / -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `varying vec3 vC; varying float vS, vTw;
+      void main() {
+        vec2 q = gl_PointCoord - 0.5;
+        float core = exp(-dot(q, q) * 70.0);
+        float beams = exp(-abs(q.x) * 34.0) * exp(-abs(q.y) * 5.0) + exp(-abs(q.y) * 34.0) * exp(-abs(q.x) * 5.0);
+        float a = (core + beams * step(0.85, vS) * vTw) * (0.35 + 0.65 * vTw);
+        gl_FragColor = vec4(mix(vC, vec3(1.0) * max(vC.r, max(vC.g, vC.b)), step(0.9, vS) * 0.4) * a * 2.2, a);
+      }`
+  }));
   sparks.frustumCulled = false; group.add(sparks);
   let nextSpark = 0;
   function burst(x, y, z, color, count, speed, inward) {   // (inward: gathering in to the spot instead of flying out)
@@ -362,7 +382,45 @@ export function makeOthelloPlay({ cell, top, cellPos }) {
       sp.life[i] = life; sp.max[i] = life;
     }
   }
+  // ---------- glitch blocks: little squares of energy flickering and jumping about round a disc as it forms ----------
+  const GB = 160;
+  const gbMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85,
+    depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }), GB);
+  gbMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(GB * 3), 3);
+  gbMesh.frustumCulled = false; group.add(gbMesh);
+  const gb = Array.from({ length: GB }, () => ({ life: 0, max: 1, x: 0, y: 0, z: 0, cx: 0, cz: 0, w: 0.01 }));
+  let nextGb = 0;
+  const gbM = new THREE.Matrix4(), gbQ = new THREE.Quaternion(), gbS = new THREE.Vector3(), gbP = new THREE.Vector3(), gbC = new THREE.Color();
+  function glitchBlocks(x, y, z, color, count) {
+    for (let k = 0; k < count; k++) {
+      const i = nextGb, b = gb[i]; nextGb = (nextGb + 1) % GB;
+      b.cx = x; b.cz = z; b.y0 = y;
+      b.x = x + (Math.random() - 0.5) * cell * 0.9; b.z = z + (Math.random() - 0.5) * cell * 0.9; b.y = y + Math.random() * cell * 0.35;
+      b.w = cell * (0.03 + Math.random() * 0.07); b.h = b.w * (0.3 + Math.random() * 0.9);
+      b.life = b.max = 0.5 + Math.random() * 0.6;
+      gbC.copy(color).lerp(new THREE.Color(1, 1, 1), Math.random() * 0.3).multiplyScalar(1.3);
+      gbMesh.setColorAt(i, gbC);
+    }
+    gbMesh.instanceColor.needsUpdate = true;
+  }
+  function stepGlitch(dt) {
+    for (let i = 0; i < GB; i++) {
+      const b = gb[i];
+      let sx = 1e-5;
+      if (b.life > 0) {
+        b.life -= dt;
+        if (Math.random() < 0.15) { b.x = b.cx + (Math.random() - 0.5) * cell * 0.9; b.z = b.cz + (Math.random() - 0.5) * cell * 0.9; b.y = b.y0 + Math.random() * cell * 0.35; }   // (jumping)
+        if (Math.random() < 0.55) sx = b.w * Math.min(1, b.life / b.max * 2);   // (flickering)
+      }
+      gbP.set(b.x, b.y, b.z); gbS.set(sx, sx > 1e-4 ? b.h * Math.min(1, b.life / b.max * 2) : 1e-5, sx);
+      gbM.compose(gbP, gbQ, gbS); gbMesh.setMatrixAt(i, gbM);
+    }
+    gbMesh.instanceMatrix.needsUpdate = true;
+  }
   function stepSparks(dt) {
+    SD.sdTime.value += dt;
+    SD.sdPx.value = (window.innerHeight || 800) * Math.min(window.devicePixelRatio || 1, 2) * 0.5;
+    stepGlitch(dt);
     for (let i = 0; i < N; i++) {
       if (sp.life[i] <= 0) { sp.pos[i * 3 + 1] = -100; continue; }
       sp.life[i] -= dt;
@@ -418,7 +476,14 @@ export function makeOthelloPlay({ cell, top, cellPos }) {
     d.group.position.set(x, top, z);
     if (envMap) for (const m of d.materials) m.envMap = envMap;
     group.add(d.group); discAt[c + ',' + r] = d;
-    if (form) { d.materialize(now); burst(x, BEAM_Y, z, white ? BEAM_GOLD : BEAM_PURPLE, 30, 0.1, true); }
+    if (form) {   // (a swarm of its energy's sparks streams in and gathers into it, and bursts a little as it settles)
+      const col = white ? BEAM_GOLD : BEAM_PURPLE;
+      d.materialize(now);
+      burst(x, BEAM_Y, z, col, 70, 0.16, true);
+      burst(x, BEAM_Y, z, col.clone().lerp(new THREE.Color(1, 1, 1), 0.35), 30, 0.09, true);
+      glitchBlocks(x, top, z, col, 14);
+      events.push({ at: now + 0.75, fn: () => burst(x, BEAM_Y, z, col, 26, 0.12, false) });
+    }
     return d;
   }
   const worldDir = new THREE.Vector3();
@@ -470,6 +535,7 @@ export function makeOthelloPlay({ cell, top, cellPos }) {
         const [x, z] = pos(...k.split(',').map(Number));
         d.conquer(now, !loserWhite);
         burst(x, BEAM_Y, z, winColor, 20, 0.12, false);
+        glitchBlocks(x, top, z, winColor, 8);
       } });
     });
   }

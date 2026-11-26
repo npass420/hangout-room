@@ -408,7 +408,10 @@ export function startCheckers({ center, top, cell, parent, glowLayer = 1, onView
     playing: () => viewing,
     watching: () => watching,
     mySide,
-    busy: () => !!(G.st && (here(G.st.p1) || here(G.st.p2))),   // (someone's in a game: the board stays out)
+    busy: () => !!(G.st && (here(G.st.p1) || here(G.st.p2))),
+    // the den emptied: a fresh game with nobody in it (left alone if it already is one: everyone here sends it)
+    reset: () => tx(st => (!st.p1 && !st.p2 && !st.over && st.board === START ? undefined
+      : { ...st, ...fresh(), p1: '', p2: '', go: 0, moveNo: (st.moveNo || 0) + 1 })),   // (someone's in a game: the board stays out)
     show(on) {   // the board is out (pieces set out, clicks on) or away
       if (G.shown === on) return;
       G.shown = on; pick.visible = on;
