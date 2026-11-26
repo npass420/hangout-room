@@ -1,0 +1,759 @@
+// =====================================================================
+// games.js — the Game Room: a big neon arcade hall. Neon walls (neonwall.jpg), a floor of
+// puffy midnight blue glitter velvet cushions (cushion.jpg) with glowing seams that squish under your feet, neon tubes
+// along the top of every wall, and a nebula (ceiling.jpg) drifting overhead in shifting layers. The hall stands empty,
+// cleared for what comes next (the Lego room).
+// No door or clock: the way in is the portal on the gallery's back wall, and the same portal on this room's back wall
+// (behind you as you arrive) takes you back to the gallery.
+// It's a bounce house, so here (and only here) you can jump (Space) and sprint (Shift); everyone sees you bounce.
+// Building: the build button (bottom left) puts you in edit mode, floating, to stack soft colored blocks on the
+// cushions with the numpad (game/blocks.js). Everyone sees the same blocks.
+// The neon walls are alive: they breathe gently, slow waves of light run along their lines, and pink and teal slowly
+// trade places (and back again) every couple of minutes.
+// =====================================================================
+import * as THREE from 'three';
+import { ref, set, get, update, remove, push, onValue, onDisconnect,
+         query, orderByChild, startAt, endAt, onChildAdded } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import { db, myId, S, hooks, EYE, renderer, scene, camera, canvas, BASE_FOV,
+         std, goldMat, easeInOut, RAINBOW, RAINBOW_CSS, colorIndex, makeLabel, PHONE } from '../core.js';
+import { sfx, setupMute } from '../sounds.js';
+import { inRoom } from '../world.js';
+import { setupHud } from '../hud.js';
+import { makeBuilder } from './blocks.js';
+import { makePortalFrame } from '../pieces/portalframe.js';
+setupHud();   // (the corner buttons open and close the chat, the menu and who's here; the title fades: see hud.js)
+
+document.querySelector('#ui h1').textContent = 'Game Room';
+document.title = 'Game Room';
+
+// ---------- The size of the hall ----------
+const HX = 9, HZ = 11, RH = 5;          // half its width, half its length, and its height (meters)
+const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+const PINK = new THREE.Color(0xff3fa8), TEAL = new THREE.Color(0x29e6ff);
+
+// ---------- The walls: the neon wall picture, all the way round, glowing in the dark ----------
+function loadTex(file, setup) {   // a promise that's done once the picture is on, or has failed
+  return new Promise(done => {
+    new THREE.TextureLoader().load(new URL(file, import.meta.url).href, t => { t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = MAX_ANISO; setup(t); done(); },
+      undefined, () => { console.warn(file + ' did not load'); done(); });
+  });
+}
+function plane(w, h, mat, x, y, z, rx, ry) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+  m.position.set(x, y, z); m.rotation.set(rx, ry, 0);
+  scene.add(m);
+  return m;
+}
+const wallMats = [];
+for (const [len, x, z, ry] of [[HX * 2, 0, -HZ, 0], [HX * 2, 0, HZ, Math.PI], [HZ * 2, -HX, 0, Math.PI / 2], [HZ * 2, HX, 0, -Math.PI / 2]]) {
+  const mat = new THREE.MeshStandardMaterial({ color: 0x1a1f45, roughness: 0.6, emissive: 0xffffff, emissiveIntensity: 0 });
+  mat.userData.len = len;
+  wallMats.push(mat);
+  plane(len, RH, mat, x, RH / 2, z, 0, ry);
+}
+// The walls come alive (in the shader, so it costs next to nothing): the neon breathes, waves of light run across it,
+// and pink and teal slowly trade places. Only the bright neon changes; the dark blue of the wall stays as it is.
+const wallU = { uTime: { value: 0 } };
+const WALL_GLSL = `uniform float uTime; varying vec3 vWallP;
+  vec3 rgb2hsv(vec3 c) {
+    vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    vec4 p = mix(vec4(c.bg, K.wz), vec4(c.gb, K.xy), step(c.b, c.g));
+    vec4 q = mix(vec4(p.xyw, c.r), vec4(c.r, p.yzx), step(p.x, c.r));
+    float d = q.x - min(q.w, q.y);
+    return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
+  }
+  vec3 hsv2rgb(vec3 c) { vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0); return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y); }
+  vec3 neonSwap(vec3 c) {   // pink and teal trade places: hues mirrored round blue-violet (pink 0.917 <-> teal 0.514), bright neon only
+    vec3 h = rgb2hsv(c);
+    float k = 0.5 - 0.5 * cos(uTime * 6.2832 / 150.0);
+    float w = smoothstep(0.2, 0.55, h.z) * smoothstep(0.3, 0.6, h.y);
+    h.x = fract(mix(h.x, 1.4306 - h.x, k * w));
+    return hsv2rgb(h);
+  }
+`;
+for (const m of wallMats) m.onBeforeCompile = sh => {
+  sh.uniforms.uTime = wallU.uTime;
+  sh.vertexShader = 'varying vec3 vWallP;\n' + sh.vertexShader.replace('#include <begin_vertex>',
+    '#include <begin_vertex>\n  vWallP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = WALL_GLSL + sh.fragmentShader
+    .replace('#include <map_fragment>', '#include <map_fragment>\n  diffuseColor.rgb = neonSwap(diffuseColor.rgb);')
+    .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+  {
+    float s = max(max(emissive.r, emissive.g), emissive.b);
+    vec3 e = neonSwap(totalEmissiveRadiance / max(s, 1e-3)) * s;
+    float lum = max(max(e.r, e.g), e.b) / max(s, 1e-3);
+    float breathe = 0.9 + 0.08 * sin(uTime * 0.8) + 0.03 * sin(uTime * 2.3);
+    float wave = pow(0.5 + 0.5 * sin((vWallP.x + vWallP.z) * 0.7 + vWallP.y * 1.1 - uTime * 1.3), 10.0);
+    totalEmissiveRadiance = e * (breathe + wave * 0.7 * smoothstep(0.2, 0.6, lum));
+  }`);
+};
+const WALL_ASPECT = 1 / 0.785;   // the picture is this many times wider than it is tall
+const wallLoaded = loadTex('neonwall.jpg', t => {
+  for (const m of wallMats) {   // one copy of the picture is a wall's height tall; side by side, every other one flipped
+    const tex = t.clone(); tex.needsUpdate = true;
+    tex.wrapS = THREE.MirroredRepeatWrapping;
+    tex.repeat.set(m.userData.len / (RH * WALL_ASPECT), 1);
+    m.map = tex; m.emissiveMap = tex; m.color.setHex(0xffffff); m.emissiveIntensity = 0.55; m.needsUpdate = true;
+  }
+});
+
+// ---------- The ceiling: a nebula (ceiling.jpg) drifting overhead in layers ----------
+// Three copies of the picture at different sizes turn slowly in different directions and slide over each other, one
+// tinted pink and one teal, so the clouds are always shifting and overlapping. Stars twinkle across the whole ceiling.
+const skyU = { uMap: { value: null }, uTime: { value: 0 } };
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: skyU,
+  vertexShader: `varying vec2 vP;
+    void main() { vec4 w = modelMatrix * vec4(position, 1.0); vP = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `uniform sampler2D uMap; uniform float uTime; varying vec2 vP;
+    float hash2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    vec3 layer(vec2 p, float size, float turn, vec2 drift) {   // one copy of the nebula, turned and slid
+      float c = cos(turn), s = sin(turn);
+      vec2 q = mat2(c, -s, s, c) * (p - drift) / size + 0.5;
+      if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) return vec3(0.0);
+      return texture2D(uMap, q).rgb;
+    }
+    void main() {
+      float t = uTime;
+      vec3 col = layer(vP, 15.0, t * 0.012, vec2(sin(t * 0.021), cos(t * 0.017)) * 1.5);
+      col += layer(vP, 24.0, -t * 0.008 + 2.1, vec2(cos(t * 0.013), sin(t * 0.019)) * 2.5) * vec3(1.0, 0.45, 0.85) * 0.75;
+      col += layer(vP, 11.0, t * 0.006 + 4.0, vec2(sin(t * 0.011 + 1.0), cos(t * 0.015)) * 3.5) * vec3(0.35, 0.95, 1.0) * 0.6;
+      vec2 g = vP * 3.0, id = floor(g);   // the stars
+      float h = hash2(id);
+      if (h > 0.9) {
+        float d = length(fract(g) - 0.5 - (vec2(hash2(id + 3.1), hash2(id + 7.7)) - 0.5) * 0.6);
+        float tw = 0.45 + 0.55 * sin(t * (0.8 + h * 2.5) + h * 60.0);
+        col += vec3(0.85, 0.9, 1.0) * smoothstep(0.06, 0.0, d) * tw * (0.5 + 2.0 * (h - 0.9) * 10.0 * 0.1);
+      }
+      gl_FragColor = vec4(col * 0.9, 1.0);
+    }`
+});
+plane(HX * 2, HZ * 2, skyMat, 0, RH, 0, Math.PI / 2, 0);
+const skyLoaded = loadTex('ceiling.jpg', t => { skyU.uMap.value = t; });
+// The nebula's glow on the room: a soft light under the ceiling that slowly shifts between violet, pink and teal
+const skyGlow = new THREE.PointLight(0x9a6bff, 6, 16, 1.4);
+skyGlow.position.set(0, RH - 0.8, -2);
+scene.add(skyGlow);
+const SKY_HUES = [new THREE.Color(0x8a6bff), PINK, TEAL];
+
+// ---------- Neon tubes along the top of every wall, pink on the long walls and teal on the short ones ----------
+const GLOW = [[1, 1.0], [2.4, 0.4], [5, 0.15], [10, 0.05]];   // [size, opacity]: a bright core with layers of glow around it
+function neonTube(len, col, x, y, z, ry) {
+  const g = new THREE.Group();
+  g.position.set(x, y, z); g.rotation.y = ry;
+  const hot = col.clone().lerp(new THREE.Color(0xffffff), 0.35);
+  for (const [k, op] of GLOW) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.012 * k, 0.012 * k, len, 10),
+      new THREE.MeshBasicMaterial({ color: k === 1 ? hot : col, transparent: true, opacity: op, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    m.rotation.z = Math.PI / 2;
+    g.add(m);
+  }
+  scene.add(g);
+}
+neonTube(HX * 2 - 0.2, PINK, 0, RH - 0.12, -HZ + 0.08, 0);
+neonTube(HX * 2 - 0.2, PINK, 0, RH - 0.12, HZ - 0.08, 0);
+neonTube(HZ * 2 - 0.2, TEAL, -HX + 0.08, RH - 0.12, 0, Math.PI / 2);
+neonTube(HZ * 2 - 0.2, TEAL, HX - 0.08, RH - 0.12, 0, Math.PI / 2);
+
+// ---------- Lights: dim blue all round, and colored lights along the ceiling so the velvet catches pink and teal ----------
+scene.add(new THREE.HemisphereLight(0x5a66ff, 0x120a24, 0.55));
+for (let i = 0; i < 6; i++) {
+  const col = i % 2 ? TEAL : PINK, l = new THREE.PointLight(col, 9, 11, 1.6);
+  l.position.set(i < 3 ? -4.5 : 4.5, RH - 0.6, -7 + (i % 3) * 7);
+  scene.add(l);
+}
+
+// ---------- The floor: puffy velvet cushions with glowing seams ----------
+// Every cushion is a real bump, so the room's lights roll over it. The velvet is your picture (cushion.jpg); the glitter
+// is drawn on top, evenly everywhere and twinkling as you move; the seams between cushions glow; and the floor sinks a
+// little under everyone's feet.
+const TILE = 1.2, PUFF = 0.17;   // a cushion's size, and how high it puffs up
+const floorGeo = (() => {
+  const per = PHONE ? 6 : 12, nx = Math.round(HX * 2 / TILE * per), nz = Math.round(HZ * 2 / TILE * per);
+  const g = new THREE.PlaneGeometry(HX * 2, HZ * 2, nx, nz);
+  g.rotateX(-Math.PI / 2);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const fx = ((p.getX(i) / TILE) % 1 + 1) % 1, fz = ((p.getZ(i) / TILE) % 1 + 1) % 1;
+    const wall = Math.min(1, (HX - Math.abs(p.getX(i))) / 0.15, (HZ - Math.abs(p.getZ(i))) / 0.15);   // flat where it meets the walls
+    p.setY(i, PUFF * wall * Math.pow(Math.sin(Math.PI * fx) * Math.sin(Math.PI * fz), 0.55));   // round and full, pulled down at the seams
+  }
+  g.computeVertexNormals();
+  return g;
+})();
+const floorMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.85, sheen: 1, sheenRoughness: 0.45, sheenColor: 0x8fa2ff });
+const FEET = 8;
+const floorU = { uTime: { value: 0 }, uFeet: { value: Array.from({ length: FEET }, () => new THREE.Vector4(0, 0, 0, 0)) } };
+floorMat.onBeforeCompile = sh => {
+  Object.assign(sh.uniforms, floorU);
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>
+      uniform vec4 uFeet[${FEET}];
+      varying vec3 vWPos;`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      for (int i = 0; i < ${FEET}; i++) {   // sinking in under each pair of feet
+        vec2 d = transformed.xz - uFeet[i].xy;
+        transformed.y -= uFeet[i].z * exp(-dot(d, d) / 0.12);
+      }
+      vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
+      uniform float uTime;
+      varying vec3 vWPos;
+      float hash2(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }`)
+    .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+      {
+        float far = length(cameraPosition - vWPos);
+        // The glitter: a tiny fleck in some of the cells of a very fine grid, each tilted its own way, so it flashes
+        // when it lines up with your eye and the light
+        vec2 g = vWPos.xz * 150.0, id = floor(g);
+        float h = hash2(id), h2 = hash2(id + 17.3);
+        if (h > 0.82) {
+          vec2 at = fract(g) - 0.5 - (vec2(h2, fract(h * 13.7)) - 0.5) * 0.5;
+          float fleck = smoothstep(0.28, 0.0, length(at));
+          vec3 tilt = normalize(vec3(h2 - 0.5, 1.3, fract(h * 7.1) - 0.5));
+          float flash = pow(max(0.0, sin(dot(normalize(cameraPosition - vWPos), tilt) * 46.0 + h * 40.0 + uTime * 0.6)), 14.0);
+          vec3 col = mix(vec3(0.82, 0.88, 1.0), vec3(1.0, 0.86, 0.58), step(0.62, h2));   // silver, some pale gold
+          gl_FragColor.rgb += col * fleck * (0.12 + 1.8 * flash) * smoothstep(10.0, 1.5, far);
+        }
+        // The seams between cushions: thin glowing lines, teal one way and pink the other
+        vec2 c = vWPos.xz / ${TILE.toFixed(2)};
+        vec2 e = abs(fract(c) - 0.5);
+        float w = 0.5 - 0.012 / ${TILE.toFixed(2)} - fwidth(c.x) * 0.5;
+        float seamX = smoothstep(w, 0.5, e.x), seamZ = smoothstep(w, 0.5, e.y);
+        gl_FragColor.rgb += vec3(0.16, 0.9, 1.0) * seamX * 0.65 + vec3(1.0, 0.25, 0.66) * seamZ * 0.65;
+      }`);
+};
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.userData.floor = true;
+scene.add(floor);
+const floorLoaded = loadTex('cushion.jpg', t => {
+  t.wrapS = t.wrapT = THREE.MirroredRepeatWrapping;
+  t.repeat.set(HX * 2 / 2.4, HZ * 2 / 2.4);   // one copy of the velvet covers two cushions each way
+  floorMat.map = t; floorMat.needsUpdate = true;
+});
+function floorHeight(x, z) {   // how high the cushions are at a spot (for standing on them)
+  const fx = ((x / TILE) % 1 + 1) % 1, fz = ((z / TILE) % 1 + 1) % 1;
+  return PUFF * Math.pow(Math.sin(Math.PI * fx) * Math.sin(Math.PI * fz), 0.55);
+}
+
+// ---------- Other people: a standing snowman with a name tag, gliding to wherever they walk ----------
+const WALK = 2.6;     // walking speed, meters a second (a big room)
+const avatars = {};   // id -> { g, name, c }
+const footShadow = (() => {   // a soft dark spot on the floor under each snowman
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(0,0,0,0.6)'); grd.addColorStop(0.6, 'rgba(0,0,0,0.3)'); grd.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+  return new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false });
+})();
+function makeAvatar(name, c) {
+  const g = new THREE.Group();
+  const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 0.85), footShadow);
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01;
+  g.add(shadow);
+  const mat = std(new THREE.Color(RAINBOW[c]), 0.75);
+  for (const [r, y] of [[0.28, 0.28], [0.21, 0.74], [0.15, 1.1]]) {   // three stacked snowballs: big bottom, middle, small head
+    const b = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 18), mat);
+    b.position.y = y;
+    g.add(b);
+  }
+  const label = makeLabel(name, RAINBOW_CSS[c]);
+  label.position.y = 1.47;
+  g.add(label);
+  g.traverse(o => { o.userData.avatar = true; });
+  scene.add(g);
+  return { g, name, c };
+}
+const LIM_X = HX - 0.5, LIM_Z = HZ - 0.5;   // how close to the walls anyone can walk
+function clampSpot(x, z) { return [Math.max(-LIM_X, Math.min(LIM_X, x)), Math.max(-LIM_Z, Math.min(LIM_Z, z))]; }
+function spotOf(p) {   // where someone is standing (kept inside the room)
+  const x = Number.isFinite(p.x) ? p.x : 0, z = Number.isFinite(p.z) ? p.z : HZ - 1.6;
+  const [cx, cz] = clampSpot(x, z);
+  return { x: cx, z: cz };
+}
+function refreshAvatars() {
+  for (const id of Object.keys(avatars)) {
+    const p = S.presence[id];
+    if (!p || id === myId || p.name !== avatars[id].name || colorIndex(p) !== avatars[id].c) {
+      scene.remove(avatars[id].g);
+      delete avatars[id];
+    }
+  }
+  for (const [id, p] of Object.entries(S.presence)) {
+    if (id === myId) continue;
+    const fresh = !avatars[id];
+    if (fresh) avatars[id] = makeAvatar(p.name, colorIndex(p));
+    const a = avatars[id], to = spotOf(p);
+    a.tx = to.x; a.tz = to.z;
+    if (!fresh && p.j && p.j !== a.j) a.jumpT = performance.now();   // they just jumped
+    a.j = p.j;
+    if (fresh) a.g.position.set(to.x, 0, to.z);   // someone new just appears where they are
+    a.g.visible = !p.e;   // (building, floating about: their snowman's gone till they land)
+  }
+}
+function moveAvatars(dt, t) {   // everyone else bounces along toward where they're walking
+  for (const a of Object.values(avatars)) {
+    const p = a.g.position, dx = a.tx - p.x, dz = a.tz - p.z, d = Math.hypot(dx, dz);
+    if (d > 0.001) {
+      const step = Math.min(d, WALK * (d > 1 ? 2 : 1) * dt);   // keeping up when they sprint
+      p.x += dx / d * step; p.z += dz / d * step;
+      a.phase = (a.phase || 0) + step * 5;
+    }
+    a.air = jumpHeight((performance.now() - (a.jumpT || 0)) / 1000);
+    p.y = floorHeight(p.x, p.z) - 0.04 + (d > 0.001 ? Math.abs(Math.sin(a.phase)) * 0.12 : 0) + a.air;   // a little hop as they go
+  }
+}
+function jumpHeight(t) {   // how high a jump is, t seconds after leaving the floor (the same arc as your own)
+  return t > 0 && t < JUMP_TIME ? JUMP_UP * t - GRAVITY / 2 * t * t : 0;
+}
+function pressFeet() {   // where the floor sinks in: under you and under everyone else (deeper just after landing, none in the air)
+  const feet = floorU.uFeet.value;
+  let i = 0;
+  feet[i++].set(me.x, me.z, me.air > 0.02 ? 0 : 0.05 + me.land * 0.12, 0);
+  for (const a of Object.values(avatars)) {
+    if (i >= FEET) break;
+    const since = (performance.now() - (a.jumpT || 0)) / 1000 - JUMP_TIME;   // seconds since they landed
+    feet[i++].set(a.g.position.x, a.g.position.z, a.air > 0.02 ? 0 : 0.06 + (since > 0 && since < 0.4 ? (0.4 - since) * 0.3 : 0), 0);
+  }
+  for (; i < FEET; i++) feet[i].z = 0;
+}
+
+// ---------- Who's online: everyone, in every room, each with an icon for where they are (world.js) ----------
+const connEl = document.getElementById('conn');
+const whoBtn = document.getElementById('whoBtn');
+inRoom('game');
+
+function refreshAll() {
+  refreshAvatars();
+}
+hooks.refreshAll = refreshAll;
+
+// ---------- Chat ----------
+const msgs = document.getElementById('msgs');
+const chatInput = document.getElementById('chatInput');
+const newDot = document.getElementById('newDot');
+
+// Two tabs on the chat box: 💬 Chat is only what people type, 🔔 Room is joins, leaves and gallery news
+const tabStyle = document.createElement('style');
+tabStyle.textContent = `#chatTabs { display: flex; gap: 6px; margin-bottom: 6px; }
+  #chatTabs button { position: relative; margin: 0; font-size: 13px; padding: 4px 12px; background: rgba(233,201,143,0.25); color: #f3e6cf; }
+  #chatTabs button.on { background: #e9c98f; color: #2a1c10; }
+  #roomDot { display: none; position: absolute; top: 1px; right: 1px; width: 8px; height: 8px; border-radius: 50%; background: #ff3b2f; }
+  #roomLog { display: none; height: 150px; overflow-y: auto; font-size: 14px; margin-bottom: 8px; word-wrap: break-word; }
+  #roomLog .sys { font-style: italic; opacity: 0.75; font-size: 13px; }
+  body.roomTab #msgs { display: none; }
+  body.roomTab #roomLog { display: block; }
+  @media (max-width: 700px) { #roomLog { height: 110px; } }`;
+document.head.appendChild(tabStyle);
+const chatTabs = document.createElement('div');
+chatTabs.id = 'chatTabs';
+const chatTabBtn = document.createElement('button');
+chatTabBtn.textContent = '💬 Chat';
+const roomTabBtn = document.createElement('button');
+roomTabBtn.textContent = '🔔 Room';
+const roomDot = document.createElement('span');
+roomDot.id = 'roomDot';
+roomTabBtn.appendChild(roomDot);
+chatTabs.append(chatTabBtn, roomTabBtn);
+const roomLog = document.createElement('div');
+roomLog.id = 'roomLog';
+msgs.parentNode.insertBefore(chatTabs, msgs);
+msgs.parentNode.insertBefore(roomLog, msgs.nextSibling);
+function showTab(room) {
+  document.body.classList.toggle('roomTab', room);
+  chatTabBtn.classList.toggle('on', !room);
+  roomTabBtn.classList.toggle('on', room);
+  if (room) { roomDot.style.display = 'none'; roomLog.scrollTop = roomLog.scrollHeight; }
+  else msgs.scrollTop = msgs.scrollHeight;
+}
+chatTabBtn.addEventListener('click', () => showTab(false));
+roomTabBtn.addEventListener('click', () => showTab(true));
+showTab(false);
+function addMsg(name, text, mine, c) {
+  const div = document.createElement('div');
+  const b = document.createElement('b');
+  b.textContent = (mine ? 'You' : name) + ': ';
+  if (Number.isInteger(c) && c >= 0 && c < 7) b.style.color = RAINBOW_CSS[c];   // name in their rainbow color
+  div.appendChild(b);
+  div.appendChild(document.createTextNode(text));
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  if (!mine) {
+    sfx.ping();
+    if (!document.body.classList.contains('chatOpen')) newDot.style.display = 'block';
+  }
+}
+function addSys(text, c) {   // grey line in the Room tab, like "Sam joined the room"
+  const div = document.createElement('div');
+  div.className = 'sys';
+  const dot = document.createElement('span');
+  dot.textContent = '● ';
+  if (Number.isInteger(c) && c >= 0 && c < 7) dot.style.color = RAINBOW_CSS[c];
+  div.appendChild(dot);
+  div.appendChild(document.createTextNode(text));
+  roomLog.appendChild(div);
+  while (roomLog.children.length > 100) roomLog.removeChild(roomLog.firstChild);   // keep only the latest 100
+  roomLog.scrollTop = roomLog.scrollHeight;
+  if (!document.body.classList.contains('roomTab')) roomDot.style.display = 'block';
+}
+hooks.addSys = addSys;
+
+// ---------- Big on-screen messages ----------
+const banner = document.getElementById('banner');
+let bannerTimer = 0;
+function showBanner(text, secs = 3) {
+  banner.textContent = text;
+  banner.classList.remove('show');
+  void banner.offsetWidth;   // restart the pop-in animation
+  banner.classList.add('show');
+  clearTimeout(bannerTimer);
+  bannerTimer = setTimeout(() => banner.classList.remove('show'), secs * 1000);
+}
+hooks.banner = showBanner;
+function logJoinsLeaves(before, after) {
+  for (const [id, p] of Object.entries(after)) {
+    if (id !== myId && !before[id]) { addSys(`${p.name} joined the room`, colorIndex(p)); sfx.join(); }
+  }
+  for (const [id, p] of Object.entries(before)) {
+    if (id !== myId && !after[id]) { addSys(`${p.name} left the room`, colorIndex(p)); sfx.leave(); }
+  }
+}
+function sendChat() {
+  const text = chatInput.value.trim();
+  if (!text || !S.myName) return;
+  push(ref(db, 'room/chat'), { name: S.myName, text: text.slice(0, 200), t: Date.now(), id: myId, c: S.myHue });
+  chatInput.value = '';
+  showTab(false);   // back to the chat to see your message
+}
+document.getElementById('send').addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+setupMute(document.getElementById('mute'));
+
+// ---------- Entering the room ----------
+const nameBox = document.getElementById('nameBox');
+const nameInput = document.getElementById('nameInput');
+try { nameInput.value = localStorage.getItem('hangoutName') || ''; } catch (e) {}
+
+function enterRoom() {
+  if (S.myName) return;   // already in
+  const name = nameInput.value.trim().slice(0, 20);
+  if (!name) { nameInput.focus(); return; }
+  S.myName = name;
+  try { localStorage.setItem('hangoutName', name); } catch (e) {}
+  builder.start();
+  nameBox.style.display = 'none';
+
+  // Say we're here, and have the room remove us automatically if we close the tab or lose connection
+  const meRef = ref(db, 'game/presence/' + myId);
+  onValue(ref(db, '.info/connected'), s => {
+    if (s.val() === true) {
+      onDisconnect(meRef).remove();
+      get(ref(db, 'game/presence')).then(ps => {
+        if (S.myHue < 0) {
+          const used = new Set(Object.entries(ps.val() || {}).filter(([id]) => id !== myId).map(([, p]) => colorIndex(p)));
+          let hue = 0;
+          while (hue < 7 && used.has(hue)) hue++;
+          if (hue >= 7) hue = Object.keys(ps.val() || {}).length % 7;   // more than 7 people: colors repeat
+          S.myHue = hue;
+        }
+        set(meRef, { name: S.myName, c: S.myHue, t: Date.now(), ...mySpot() });
+      });
+      connEl.textContent = 'Online';
+    } else {
+      connEl.textContent = 'Reconnecting…';
+    }
+  });
+  let firstPresence = true;
+  onValue(ref(db, 'game/presence'), s => {
+    const next = s.val() || {};
+    if (!firstPresence) logJoinsLeaves(S.presence, next);   // the first list is just who's already here
+    firstPresence = false;
+    S.presence = next;
+    refreshAll();
+  });
+
+  // Chat: show messages from about now on, and tidy away anything older than an hour
+  const joinTime = Date.now() - 60000;
+  onChildAdded(query(ref(db, 'room/chat'), orderByChild('t'), startAt(joinTime)), s => {
+    const m = s.val();
+    if (m && m.name && m.text) addMsg(m.name, m.text, m.id === myId, m.c);
+  });
+  get(query(ref(db, 'room/chat'), orderByChild('t'), endAt(Date.now() - 3600000))).then(s => {
+    s.forEach(ch => { remove(ch.ref); });
+  });
+}
+document.getElementById('enter').addEventListener('click', enterRoom);
+nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') enterRoom(); });
+
+// ---------- Walking around: drag to look, click the floor to walk there (or W A S D / arrow keys) ----------
+const hint = document.getElementById('hint');
+const HINT_WALK = PHONE ? 'Drag to look · tap the floor to walk, double tap to run · ⤒ to jump'
+                        : 'Drag to look · click the floor to walk, double click to run (or W A S D) · Space to jump · Shift to sprint';
+hint.textContent = HINT_WALK;
+const me = { x: (Math.random() - 0.5) * 2.4, z: HZ - 1.6, tx: null, tz: null, phase: 0, moving: 0,   // you start a step out from the back wall
+  run: false, air: 0, vy: 0, land: 0 };
+// Jumping: a big floaty bounce off the cushions
+const JUMP_UP = 4.2, GRAVITY = 7, JUMP_TIME = 2 * JUMP_UP / GRAVITY;   // how fast you leave the floor, how hard you fall, how long you're up
+function jump() {
+  if (!S.myName || me.air > 0 || me.vy) return;
+  me.vy = JUMP_UP;
+  sfx.bounce();
+  if (S.myName) update(ref(db, 'game/presence/' + myId), { j: Date.now() }).catch(() => {});   // so everyone sees you hop
+}
+function fall(dt) {   // up, over and back down onto the cushions
+  if (me.vy || me.air > 0) {
+    me.vy -= GRAVITY * dt; me.air += me.vy * dt;
+    if (me.air <= 0) { me.air = 0; me.vy = 0; me.land = 1; sfx.land(); }
+  }
+  me.land = Math.max(0, me.land - dt * 3);
+}
+if (PHONE) {   // a jump button for phones, bottom left
+  const b = document.createElement('button');
+  b.textContent = '⤒';
+  b.style.cssText = 'position:fixed;left:14px;bottom:84px;width:58px;height:58px;border-radius:50%;font-size:26px;z-index:20;' +
+    'background:rgba(41,230,255,0.25);color:#e8fbff;border:2px solid rgba(41,230,255,0.7);box-shadow:0 0 14px rgba(41,230,255,0.5)';
+  b.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+  document.body.appendChild(b);
+}
+let yaw = 0, pitch = -0.08;                   // facing down the hall
+function mySpot() {   // what everyone else sees: where you're standing (or walking to)
+  const x = me.tx != null ? me.tx : me.x, z = me.tz != null ? me.tz : me.z;
+  return { x: +x.toFixed(2), z: +z.toFixed(2) };
+}
+let sentAt = 0, sendTimer = 0;
+function sendSpot(now) {   // tell everyone where you're going (a few times a second at most)
+  if (!S.myName) return;
+  clearTimeout(sendTimer); sendTimer = 0;
+  if (!now && performance.now() - sentAt < 250) { sendTimer = setTimeout(() => sendSpot(true), 250); return; }
+  sentAt = performance.now();
+  update(ref(db, 'game/presence/' + myId), mySpot()).catch(() => {});
+}
+function walkTo(x, z, run) {
+  me.run = !!run;
+  [me.tx, me.tz] = clampSpot(x, z);
+  marker.position.set(me.tx, floorHeight(me.tx, me.tz) + 0.02, me.tz);
+  marker.visible = true; markerFade = 1;
+  sendSpot(true);
+}
+function setFov(f) {
+  camera.fov = Math.max(20, Math.min(BASE_FOV, f));
+  camera.updateProjectionMatrix();
+}
+function eyeHeight() {   // standing on the cushions, with a little bounce in your step while you walk (more when running)
+  const fast = me.run || keys.has('shift') ? 2 : 1;
+  return EYE + floorHeight(me.x, me.z) * 0.5 + Math.abs(Math.sin(me.phase)) * 0.05 * fast * me.moving + me.air - me.land * 0.06;
+}
+camera.position.set(me.x, EYE, me.z);
+camera.rotation.set(pitch, yaw, 0);
+
+// A soft gold ring on the floor showing where you'll walk
+const marker = new THREE.Mesh(new THREE.RingGeometry(0.17, 0.22, 40),
+  new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+marker.rotation.x = -Math.PI / 2;
+marker.visible = false;
+scene.add(marker);
+let markerFade = 0;
+
+// ---------- Building (game/blocks.js): edit mode floats you; landing puts you back on your feet where you are ----------
+const builder = makeBuilder({ scene, camera, canvas, TILE, HX, HZ, RH, onEdit(on, at) {
+  if (S.myName) update(ref(db, 'game/presence/' + myId), { e: on ? 1 : null }).catch(() => {});
+  hint.textContent = on ? 'Building · W A S D move, Space up, C down · click a cushion to pick it · Numpad 1 to 9 builds (hold Numpad 0 to take off, on Auto)'
+                        : HINT_WALK;
+  if (!on) {   // (landing: on your feet right under where you floated)
+    [me.x, me.z] = clampSpot(at.x, at.z);
+    me.tx = me.tz = null; me.vy = 0; me.air = 0;
+    sendSpot(true);
+  }
+} });
+
+// ---------- Keys ----------
+const keys = new Set();
+function typing() { const a = document.activeElement; return !!(a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')); }
+window.addEventListener('keydown', e => {
+  if (typing() || !S.myName) return;
+  if (builder.onKey(e)) return;   // (the numpad, while building)
+  const k = e.key.toLowerCase();
+  if (k === 'r') { setFov(BASE_FOV); pitch = -0.08; return; }   // R: look straight ahead again, zoomed back out
+  if (['w', 'a', 's', 'd', 'c', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'shift'].includes(k)) {
+    keys.add(k);
+    if (k.startsWith('arrow') || k === ' ') e.preventDefault();   // don't scroll the page
+  }
+});
+window.addEventListener('keyup', e => { builder.onKey(e); keys.delete(e.key.toLowerCase()); });
+window.addEventListener('blur', () => keys.clear());
+function keyWalk(dt) {   // W/S or up/down walk, A/D step sideways, left/right turn; returns how far you went
+  if (!keys.size || typing()) return 0;
+  const speed = WALK * (keys.has('shift') ? 2 : 1);   // Shift: sprint
+  if (keys.has('arrowleft')) yaw += 1.8 * dt;
+  if (keys.has('arrowright')) yaw -= 1.8 * dt;
+  const f = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+  const sdir = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
+  if (!f && !sdir) return 0;
+  const fx = -Math.sin(yaw), fz = -Math.cos(yaw);   // the way you're facing, flat on the floor
+  const rx = Math.cos(yaw), rz = -Math.sin(yaw);    // to your right
+  let mx = fx * f + rx * sdir, mz = fz * f + rz * sdir;
+  const len = Math.hypot(mx, mz);
+  mx /= len; mz /= len;
+  me.tx = me.tz = null; marker.visible = false;
+  [me.x, me.z] = clampSpot(me.x + mx * speed * dt, me.z + mz * speed * dt);
+  sendSpot(false);
+  return speed * dt;
+}
+
+// Scroll to zoom
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  setFov(camera.fov + e.deltaY * 0.03);
+}, { passive: false });
+
+// ---------- Mouse / touch ----------
+// ---------- The portal home: the same frame as the gallery's, on the back wall. Click it: it flares, a golden flash,
+// and you're back in the gallery ----------
+const portalFrame = makePortalFrame();
+portalFrame.group.position.set(0, 0, HZ - 0.16);
+portalFrame.group.rotation.y = Math.PI;   // facing into the room
+scene.add(portalFrame.group);
+const whiteout = document.createElement('div');
+whiteout.style.cssText = 'position:fixed; inset:0; background:radial-gradient(ellipse at center, #fff4d6 0%, #ffd27a 45%, #e6a63c 100%); opacity:0; pointer-events:none; transition:opacity 0.35s; z-index:5;';
+document.body.appendChild(whiteout);
+let leaving = false;
+function goGallery() {
+  if (leaving) return;
+  leaving = true;
+  me.tx = me.tz = null; marker.visible = false;
+  const t0 = performance.now();
+  (function glowUp() {
+    const e = Math.min((performance.now() - t0) / 450, 1);
+    portalFrame.flare(e * e);
+    if (e < 1) requestAnimationFrame(glowUp);
+  })();
+  setTimeout(() => { whiteout.style.opacity = '1'; }, 300);
+  setTimeout(() => { location.href = location.pathname; }, 700);
+}
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let down = null;
+let lastX = 0, lastY = 0;
+function shown(o) { for (; o; o = o.parent) if (!o.visible) return false; return true; }
+function pickUnder(e) {   // the first real thing under the pointer (not the neon glow, the marker or other people)
+  pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObjects(scene.children, true).find(h => shown(h.object) && !h.object.userData.avatar
+    && h.object !== marker && !(h.object.material && h.object.material.blending === THREE.AdditiveBlending) && !h.object.isSprite);
+  if (!hit) return null;
+  const u = hit.object.userData;
+  if (u.portalFrame) return { portalFrame: true };
+  if (u.floor) return { floor: hit.point };
+  return null;
+}
+// Two-finger pinch zooms (phones)
+const touchPts = new Map();
+let pinchDist = 0;
+function pinchSpread() { const [a, b] = [...touchPts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); }
+canvas.addEventListener('pointerdown', e => {
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') document.activeElement.blur();
+  touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touchPts.size === 2) { pinchDist = pinchSpread(); down = null; return; }   // a pinch, not a tap
+  down = { x: e.clientX, y: e.clientY };
+  lastX = e.clientX; lastY = e.clientY;
+});
+function endTouch(e) { touchPts.delete(e.pointerId); if (touchPts.size < 2) pinchDist = 0; }
+window.addEventListener('pointercancel', e => { down = null; endTouch(e); });
+window.addEventListener('pointermove', e => {
+  if (touchPts.has(e.pointerId)) touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (touchPts.size === 2 && pinchDist > 0) {
+    const d = pinchSpread();
+    if (d > 0) setFov(camera.fov * pinchDist / d);
+    pinchDist = d;
+    return;
+  }
+  if (down) {   // drag to look around: the view follows the mouse (drag right to turn right, up to look up)
+    const k = 0.004 * (camera.fov / BASE_FOV);   // slower when zoomed in
+    yaw -= (e.clientX - lastX) * k;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch - (e.clientY - lastY) * k));
+  }
+  lastX = e.clientX; lastY = e.clientY;
+  if (!down && e.target === canvas && !PHONE) {   // show where a click would take you
+    const p = pickUnder(e);
+    canvas.style.cursor = p ? 'pointer' : 'grab';
+  }
+});
+let lastTap = { t: 0, x: 0, y: 0 };
+window.addEventListener('pointerup', e => {
+  const wasTap = down && e.target === canvas && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 6;
+  down = null;
+  endTouch(e);
+  if (!wasTap || !S.myName) return;
+  if (builder.editing) {   // (building: a click picks the square under the pointer)
+    pointer.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(pointer, camera);
+    builder.pick(raycaster.intersectObjects(scene.children, true).filter(h => shown(h.object) && !h.object.userData.avatar));
+    return;
+  }
+  const p = pickUnder(e);
+  if (!p) return;
+  if (p.portalFrame) { goGallery(); return; }
+  if (p.floor) {   // a second tap close by and soon after: run there instead
+    const again = performance.now() - lastTap.t < 400 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40;
+    walkTo(p.floor.x, p.floor.z, again);
+    lastTap = { t: again ? 0 : performance.now(), x: e.clientX, y: e.clientY };
+  }
+});
+
+// ---------- Window resize ----------
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- Main loop ----------
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1), t = clock.elapsedTime;
+  floorU.uTime.value = t; skyU.uTime.value = t; wallU.uTime.value = t;
+  { const k = (t * 0.05) % 3, i = Math.floor(k); skyGlow.color.copy(SKY_HUES[i]).lerp(SKY_HUES[(i + 1) % 3], k - i); }
+  if (builder.editing) builder.fly(dt, keys, yaw, pitch);   // (building: floating about)
+  else {
+    if (keys.has(' ')) jump();   // hold Space to keep bouncing
+    fall(dt);
+    let went = keyWalk(dt);
+    if (me.tx != null) {   // walking (or running) to where you clicked
+      const dx = me.tx - me.x, dz = me.tz - me.z, d = Math.hypot(dx, dz);
+      const step = Math.min(d, WALK * (me.run ? 2 : 1) * dt);
+      if (d > 0.001) { me.x += dx / d * step; me.z += dz / d * step; went += step; }
+      if (d - step < 0.001) { me.x = me.tx; me.z = me.tz; me.tx = me.tz = null; me.run = false; }
+    }
+    const step0 = Math.floor(me.phase / Math.PI);
+    me.phase += went * 4.2;
+    if (Math.floor(me.phase / Math.PI) !== step0 && me.air <= 0) sfx.pat();   // a tiny pat on the cushions with each step
+    me.moving += ((went > 0 ? 1 : 0) - me.moving) * Math.min(1, dt * 8);   // the bounce eases in and out
+    camera.position.set(me.x, eyeHeight(), me.z);
+    camera.rotation.set(pitch, yaw, 0);
+  }
+  if (marker.visible && me.tx == null) {   // the ring fades once you get there
+    markerFade -= dt * 2.5;
+    marker.material.opacity = Math.max(0, markerFade) * 0.8;
+    if (markerFade <= 0) marker.visible = false;
+  } else if (marker.visible) marker.material.opacity = 0.8;
+  moveAvatars(dt, t);
+  pressFeet();
+  portalFrame.update(t);
+  renderer.render(scene, camera);
+});
+
+// ---------- Coming in: the room gets ready behind start.js's cover, then the cover fades away ----------
+// The pictures and the first data load and everything is drawn once, all while the cover is up, so any stutter
+// happens where nobody can see it. Then the cover fades and you're standing inside.
+const wait = ms => new Promise(r => setTimeout(r, ms));
+const frames = n => new Promise(r => { const f = () => (--n <= 0 ? r() : window.requestAnimationFrame(f)); window.requestAnimationFrame(f); });
+camera.position.set(me.x, eyeHeight(), me.z); camera.rotation.set(pitch, yaw, 0);
+(async () => {
+  await Promise.race([Promise.all([wallLoaded, floorLoaded, skyLoaded]), wait(8000)]);   // a slow connection doesn't keep you out forever
+  renderer.compile(scene, camera);
+  renderer.render(scene, camera);
+  await frames(3);
+  window.dispatchEvent(new Event('room-ready'));
+})();

@@ -3,14 +3,13 @@
 // A cover of falling snow (shaded flakes at every depth, drifting on a gentle wind over a deep night sky) hides the
 // room while it loads; then the cover fades and the gallery shows,
 // with the name box over it. Type your name (or keep the saved one) and press Enter or ✓ to step in.
-// Testing on this PC: localhost:8080/HangoutRoom/?room=game opens the Game Room instead, until the portals exist.
+// ?room=game opens the Game Room instead (that's where the gallery's portal takes you, and its portal brings you back).
 // =====================================================================
 const ROOMS = {
   gallery: { name: 'Doodle Gallery', file: './studio/studio.js' },
   game:    { name: 'Game Room', file: './game/games.js' }
 };
-const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const asked = LOCAL ? new URLSearchParams(location.search).get('room') : null;
+const asked = new URLSearchParams(location.search).get('room');
 const room = ROOMS[asked] ? asked : 'gallery';
 
 const cover = document.getElementById('cover');
