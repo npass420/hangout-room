@@ -27,7 +27,7 @@ document.querySelector('#ui h1').textContent = 'Game Room';
 document.title = 'Game Room';
 
 // ---------- The size of the hall ----------
-const HX = 9, HZ = 11, RH = 5;          // half its width, half its length, and its height (meters)
+const HX = 9, HZ = 11, RH = 7;          // half its width, half its length, and its height (meters)
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 const PINK = new THREE.Color(0xff3fa8), TEAL = new THREE.Color(0x29e6ff);
 
@@ -587,9 +587,9 @@ const KEYS = [
     ['Drag', 'Look around'], ['Space', 'Jump'], ['Shift', 'Sprint'], ['R', 'Look straight ahead again'], ['Scroll', 'Zoom']]],
   ['Building (🧱 button)', [['W A S D', 'Float about'], ['Space / C', 'Float up / down'], ['Shift', 'Faster'],
     ['Click a cushion', 'Pick that square'], ['Numpad 1 to 9', 'Build on the square\'s nine spots (8 is always the far middle)'],
-    ['Numpad 0 + number', 'Take the top block off (Auto height)'], ['Numpad * and /', 'Next and last color'],
-    ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'], ['Page Up / Down', 'Height up and down (Auto, 1 to 9)'],
-    ['H', 'The hammer: click a block to smash it'], ['T', 'Test wall on the picked square (every color and shade)'],
+    ['Numpad * and /', 'Next and last color'],
+    ['Numpad + and -', 'Brighter and darker (Dark, Normal, Bright, Glow, Glowing)'], ['Page Up / Down', 'Height up and down (Auto, 1 to 15; a taken spot stacks above it)'],
+    ['H', 'The hammer: click a block to smash it'], ['X', 'X-ray: the blueprint, orbs on a laser lattice'], ['T', 'Test wall on the picked square (every color and shade)'],
     ['R', 'Clear the whole room (asks first)']]]
 ];
 const keysBtn = document.createElement('button');
@@ -644,7 +644,7 @@ canvas.addEventListener('wheel', e => {
 // ---------- The portal home: the same frame as the gallery's, on the back wall. Click it: it flares, a golden flash,
 // and you're back in the gallery ----------
 const portalFrame = makePortalFrame();
-portalFrame.group.position.set(0, 1.7, HZ - 0.045);   // (hung like a picture, its middle a little over eye height)
+portalFrame.group.position.set(0, 1.75, HZ - 0.045);   // (hung like a picture, its middle a little over eye height)
 portalFrame.group.rotation.y = Math.PI;   // facing into the room
 scene.add(portalFrame.group);
 const whiteout = document.createElement('div');
@@ -662,7 +662,13 @@ function goGallery() {
     if (e < 1) requestAnimationFrame(glowUp);
   })();
   setTimeout(() => { whiteout.style.opacity = '1'; }, 300);
-  setTimeout(() => { location.href = location.pathname; }, 700);
+  // (take yourself off this room's list first, so you don't show in both rooms while the server notices you left)
+  setTimeout(() => {
+    let gone = false;
+    const go = () => { if (!gone) { gone = true; location.href = location.pathname; } };
+    remove(ref(db, 'game/presence/' + myId)).catch(() => {}).then(go);
+    setTimeout(go, 1200);   // (if the network's slow, go anyway)
+  }, 700);
 }
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();

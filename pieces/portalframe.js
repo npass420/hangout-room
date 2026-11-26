@@ -6,9 +6,10 @@
 // with a soft glow over it. Inside, the portal: neon rings of hot pink, teal and violet spiraling slowly inward to a
 // bright white core, stardust twinkling through it, the whole thing gently breathing. Its light spills pink onto the
 // gold and the black gloss.
-//   makePortalFrame()   { group (its middle at 0, facing +z, SIZE of the built size), update(t), flare(k): 0 .. 1 brighter }
+//   makePortalFrame()   { group (its middle at 0, facing +z, SIZE of the built size, with its picture lamp; hang it with
+//                       its middle WALL out from the wall), update(t), flare(k): 0 .. 1 brighter }
 //     everything in it is marked userData.portalFrame, for clicking
-//   build()             the Workshop's look at it, 4x close-up, standing on y = 0 (it runs itself)
+//   build()             the Workshop's look at it, 3x close-up, standing on y = 0 (it runs itself)
 // =====================================================================================================================
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
@@ -16,7 +17,8 @@ import { GOLD as GOLD_SHARED } from './goldjewel.js';
 import { softEnv } from '../checkers/pieceenv.js';
 
 const W = 1.8, H = 2.7, D = 0.3, OW = 1.04, OH = 1.94;   // outside size, depth, the opening (built big, then shrunk)
-export const SIZE = 0.2;   // how big it hangs: a fifth of the built size, about 36 x 54 cm, a picture on the wall
+export const SIZE = 0.3;   // how big it hangs: 0.3 of the built size, about 54 x 81 cm, a picture on the wall
+const WALL = 0.045;        // how far its middle stands out from the wall it hangs on
 const STONE = new THREE.MeshPhysicalMaterial({ color: 0x0b0b0e, roughness: 0.2, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08 });
 const GOLD = GOLD_SHARED.clone();   // (its own copy: the reflections set on it below stay on this frame)
 const GOLD_DARK = new THREE.MeshPhysicalMaterial({ color: 0x8a5e1c, metalness: 1, roughness: 0.35 });
@@ -195,6 +197,33 @@ export function makePortalFrame() {
   group.position.y = -H * SIZE / 2;   // (centered on its own middle: set the outer group's height where it hangs)
   const outer = new THREE.Group();
   outer.add(group);
+
+  // the picture lamp over it, like the gallery's frames have: a brass bar on a little arm, glowing underneath, a soft
+  // pool of light down the wall behind, and a warm spot on the frame so the black gloss and the gold show
+  {
+    const fw = W * SIZE, fh = H * SIZE, ly = fh / 2 + 0.16, lz = 0.13 - WALL;
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, fw * 0.95, 16), GOLD);
+    bar.rotation.z = Math.PI / 2; bar.position.set(0, ly, lz);
+    const bulb = new THREE.Mesh(new THREE.BoxGeometry(fw * 0.9, 0.006, 0.02), new THREE.MeshBasicMaterial({ color: 0xfff1d6, toneMapped: false }));
+    bulb.position.set(0, ly - 0.02, lz);
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.13, 8), GOLD);
+    arm.rotation.x = Math.PI / 2; arm.position.set(0, ly, lz - 0.065);
+    const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+    const g = cv.getContext('2d');
+    g.save(); g.scale(0.5, 1);   // (an oval pool, brightest just under the lamp)
+    const grd = g.createRadialGradient(256, 0, 0, 256, 0, 256);
+    grd.addColorStop(0, 'rgb(255,236,200)'); grd.addColorStop(0.35, 'rgb(130,112,85)'); grd.addColorStop(1, 'rgb(0,0,0)');
+    g.fillStyle = grd; g.fillRect(0, 0, 512, 256); g.restore();
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    const ph = ly + fh / 2 + 0.35;
+    const pool = new THREE.Mesh(new THREE.PlaneGeometry(fw * 2.1, ph), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.38,
+      depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
+    pool.position.set(0, ly - ph / 2, -WALL + 0.004);
+    const spot = new THREE.SpotLight(0xffe2b8, 2.2, 2.2, 0.75, 0.8, 1.2);
+    spot.position.set(0, ly - 0.03, lz + 0.05);
+    spot.target.position.set(0, -fh * 0.15, 0);
+    outer.add(bar, bulb, arm, pool, spot, spot.target);
+  }
   outer.traverse(o => { o.userData.portalFrame = true; });
   return {
     group: outer,
@@ -206,7 +235,7 @@ export function makePortalFrame() {
 // ---------- The Workshop's look at it: the portal turning on its own ----------
 export function build() {
   const f = makePortalFrame();
-  f.group.scale.setScalar(4); f.group.position.y = H * SIZE / 2 * 4 + 0.1;
+  f.group.scale.setScalar(3); f.group.position.y = H * SIZE / 2 * 3 + 0.1;
   const ticker = new THREE.Mesh(new THREE.PlaneGeometry(0.001, 0.001), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
   ticker.frustumCulled = false;
   const t0 = performance.now();

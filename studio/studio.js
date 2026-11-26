@@ -343,7 +343,7 @@ const switchGlow = new THREE.MeshBasicMaterial({ color: 0xffe8c4, toneMapped: fa
 // along the wall (centers about x = -4.6, -2.3, 0, 2.3, 4.6); this one has the center spot. Click it: it flares, a golden flash, and
 // you're in the Game Room.
 const portalFrame = makePortalFrame();
-portalFrame.group.position.set(0, 1.7, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
+portalFrame.group.position.set(0, 1.75, R2 - 0.045);   // (hung like a picture, its middle a little over eye height)
 portalFrame.group.rotation.y = Math.PI;   // facing into the room
 scene.add(portalFrame.group);
 let leaving = false;
@@ -358,7 +358,13 @@ function goGameRoom() {
     if (e < 1) requestAnimationFrame(glowUp);
   })();
   setTimeout(() => { whiteout.style.transition = 'opacity 0.35s'; whiteout.style.opacity = '1'; }, 300);
-  setTimeout(() => { location.href = location.pathname + '?room=game'; }, 700);
+  // (take yourself off this room's list first, so you don't show in both rooms while the server notices you left)
+  setTimeout(() => {
+    let gone = false;
+    const go = () => { if (!gone) { gone = true; location.href = location.pathname + '?room=game'; } };
+    remove(ref(db, 'room/presence/' + myId)).catch(() => {}).then(go);
+    setTimeout(go, 1200);   // (if the network's slow, go anyway)
+  }, 700);
 }
 setNeon(0);
 onValue(ref(db, 'room/decor/neon'), s => setNeon(s.val()));
