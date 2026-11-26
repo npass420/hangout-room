@@ -34,7 +34,7 @@ const SKIES = [                       // the backgrounds
   { a: [0.32, 0.12, 0.55], b: [0.08, 0.16, 0.45], c: [0.05, 0.42, 0.3], belt: 'textures/sky_belt.jpg',      // deep space: stars,
     stars: [0.85, 0.95, 1.0], aurora: 1 },                                                                   //   clouds, the star ring, aurora
   { pic: 'textures/sky_island.jpg', picB: 'textures/sky_island_nomoon.jpg', stars: [1.0, 0.95, 0.85],       // your lantern tree lagoon, alive
-    low: 0.94, span: 2.29, horizon: 0.41, top: [0.0052, 0.022, 0.067], water: 1 },
+    low: 0.94, span: 2.29, horizon: 0.41, top: [0.0052, 0.022, 0.067], water: 1, stay: 1 },   // (stay: it keeps to the curtain's own size, no spreading out)
   { pic: 'textures/castle_window.jpg', picB: 'textures/castle_fire.jpg', vault: 'textures/castle_vault.jpg',   // the castle: a real room
     stars: [1.0, 0.85, 0.8], top: [0.006, 0.004, 0.006], hall: 1 }
 ];
@@ -583,6 +583,7 @@ export function makeCurtain({ radius = 2.0, top = 3.3, ceiling = top + 0.7, lamp
       if (closing) {   // (down first, then the sky fades in, then it spreads out)
         if (drop < 1) drop = Math.min(1, drop + dt / DROP);
         else if (fade < 1) fade = Math.min(1, fade + dt / FADE);
+        else if (SKIES[skyIndex].stay) spread = Math.max(0, spread - dt / SPREAD);   // (a sky that stays at the curtain: pulled back in if it was out)
         else spread = Math.min(1, spread + dt / SPREAD);
       } else {         // (it pulls back in first, then the sky fades out, then up)
         if (hold > 0) hold = Math.max(0, hold - dt);   // (holding, down, before it lifts)
